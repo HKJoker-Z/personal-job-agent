@@ -65,12 +65,18 @@ uvicorn main:app --reload --host 0.0.0.0 --port 8000
 http://localhost:8000
 ```
 
+公网开发访问地址：
+
+```text
+http://101.34.61.52:8000
+```
+
 ## 前端启动命令
 
 ```bash
 cd frontend
 npm install
-npm run dev
+npm run dev -- --host 0.0.0.0 --port 5173
 ```
 
 前端默认地址：
@@ -79,11 +85,70 @@ npm run dev
 http://localhost:5173
 ```
 
+iPad 或其他设备访问：
+
+```text
+http://101.34.61.52:5173
+```
+
 如需配置 API 地址，可在 `frontend/.env` 中设置：
 
 ```bash
-VITE_API_BASE_URL=http://localhost:8000
+VITE_API_BASE_URL=http://101.34.61.52:8000
 ```
+
+也可以参考 `frontend/.env.example`。
+
+## 从局域网/公网访问开发服务器
+
+前端 Vite dev server 已配置为监听 `0.0.0.0:5173`，并允许通过 `101.34.61.52` 访问。后端 FastAPI 需要监听 `0.0.0.0:8000`。
+
+Backend:
+
+```bash
+cd backend
+source .venv/bin/activate
+uvicorn main:app --host 0.0.0.0 --port 8000
+```
+
+如果还没有虚拟环境，先执行：
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+Frontend:
+
+```bash
+cd frontend
+npm install
+npm run dev -- --host 0.0.0.0 --port 5173
+```
+
+iPad 浏览器访问：
+
+```text
+http://101.34.61.52:5173
+```
+
+如果无法从 iPad 访问，需要检查云服务器安全组或系统防火墙是否开放 TCP 端口 `5173` 和 `8000`。不要随意修改云服务器安全组；确认规则后再调整。
+
+如果系统启用了 `ufw`，可以按需执行：
+
+```bash
+sudo ufw allow 5173/tcp
+sudo ufw allow 8000/tcp
+sudo ufw status
+```
+
+安全提醒：
+
+- 当前配置只是开发环境公网访问，不要作为正式生产部署。
+- 不要暴露 `.env`，不要提交真实 API Key。
+- 不要在日志或前端页面中打印 DeepSeek API Key。
+- 正式部署建议使用 Nginx + HTTPS + 后端反向代理。
 
 ## .env 配置说明
 
