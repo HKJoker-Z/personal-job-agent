@@ -1,0 +1,165 @@
+:root {
+  color: #1f2937;
+  background: #f4f7fb;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+}
+
+button,
+input,
+textarea {
+  font: inherit;
+}
+
+.app-shell {
+  width: min(1120px, calc(100% - 32px));
+  margin: 0 auto;
+  padding: 40px 0;
+}
+
+.page-header {
+  margin-bottom: 24px;
+}
+
+.page-header h1 {
+  margin: 0 0 10px;
+  font-size: 32px;
+}
+
+.page-header p {
+  max-width: 760px;
+  margin: 0;
+  color: #526071;
+  line-height: 1.6;
+}
+
+.panel {
+  background: #ffffff;
+  border: 1px solid #d8e0ea;
+  border-radius: 8px;
+  box-shadow: 0 12px 32px rgba(31, 41, 55, 0.08);
+}
+
+.form-panel {
+  display: grid;
+  gap: 18px;
+  padding: 22px;
+}
+
+label {
+  display: grid;
+  gap: 8px;
+  font-weight: 700;
+}
+
+input,
+textarea {
+  width: 100%;
+  border: 1px solid #bfccd9;
+  border-radius: 6px;
+  padding: 12px;
+  color: #1f2937;
+  background: #ffffff;
+}
+
+textarea {
+  resize: vertical;
+  line-height: 1.5;
+}
+
+button {
+  justify-self: start;
+  border: 0;
+  border-radius: 6px;
+  padding: 12px 22px;
+  color: #ffffff;
+  background: #166b5f;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.65;
+}
+
+.error {
+  border: 1px solid #f2b8b5;
+  border-radius: 6px;
+  padding: 12px;
+  color: #8f1d18;
+  background: #fff2f1;
+}
+
+.results-panel {
+  display: grid;
+  gap: 18px;
+  margin-top: 24px;
+  padding: 22px;
+}
+
+.score-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid #e5ebf2;
+  padding-bottom: 16px;
+}
+
+.score-row strong {
+  display: block;
+  margin-top: 4px;
+  font-size: 34px;
+  color: #166b5f;
+}
+
+.label,
+.muted {
+  color: #66758a;
+}
+
+.result-section h3 {
+  margin: 0 0 8px;
+  font-size: 18px;
+}
+
+.result-section p {
+  margin: 0;
+  line-height: 1.65;
+}
+
+ul {
+  margin: 0;
+  padding-left: 22px;
+  line-height: 1.7;
+}
+
+pre {
+  margin: 0;
+  white-space: pre-wrap;
+  line-height: 1.65;
+  font-family: inherit;
+}
+
+@media (max-width: 640px) {
+  .app-shell {
+    width: min(100% - 20px, 1120px);
+    padding: 24px 0;
+  }
+
+  .page-header h1 {
+    font-size: 26px;
+  }
+
+  .form-panel,
+  .results-panel {
+    padding: 16px;
+  }
+}
