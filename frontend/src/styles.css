@@ -98,6 +98,27 @@ button:disabled {
   background: #fff2f1;
 }
 
+.state-panel {
+  margin-top: 18px;
+  padding: 18px 22px;
+}
+
+.state-panel strong {
+  display: block;
+  margin-bottom: 6px;
+}
+
+.state-panel p {
+  margin: 0;
+  line-height: 1.6;
+}
+
+.error-panel {
+  border-color: #f2b8b5;
+  color: #8f1d18;
+  background: #fff7f6;
+}
+
 .results-panel {
   display: grid;
   gap: 18px;
@@ -148,6 +169,17 @@ pre {
   font-family: inherit;
 }
 
+.cover-letter-section {
+  border-top: 1px solid #e5ebf2;
+  padding-top: 18px;
+}
+
+.app-footer {
+  margin-top: 18px;
+  color: #66758a;
+  font-size: 13px;
+}
+
 @media (max-width: 640px) {
   .app-shell {
     width: min(100% - 20px, 1120px);
@@ -159,7 +191,8 @@ pre {
   }
 
   .form-panel,
-  .results-panel {
+  .results-panel,
+  .state-panel {
     padding: 16px;
   }
 }

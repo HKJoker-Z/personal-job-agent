@@ -1,27 +1,45 @@
 # Personal Job Application Agent
 
-本项目是一个本地运行的求职申请助手 MVP。用户可以上传 PDF 或 DOCX 简历，并粘贴岗位 JD 文本或输入单个岗位网页 URL。系统会解析岗位信息，分析简历与岗位的匹配度，生成简历优化建议和英文 Cover Letter。
+Version 1.1
 
-## 功能列表
+Personal Job Application Agent is a local-first MVP for job application preparation. It parses a PDF or DOCX resume, accepts either pasted job description text or one job URL, then uses the DeepSeek API to generate a fit analysis, resume suggestions, and an English cover letter.
 
-- 上传 PDF 或 DOCX 简历
-- 粘贴岗位 JD 文本
-- 输入单个岗位网页 URL 并提取正文
-- 使用 DeepSeek API 分析岗位匹配度
-- 输出岗位摘要、匹配分数、匹配原因、匹配技能、缺失技能
-- 生成中文简历优化建议
-- 生成英文 Cover Letter
+## Current Features
 
-## 技术栈
+- Upload a PDF or DOCX resume
+- Paste a job description
+- Provide one job posting URL and extract readable page text
+- Analyze resume and JD fit with DeepSeek
+- Return a job summary, match score, match reason, matched skills, and missing skills
+- Generate Chinese resume improvement suggestions
+- Generate an English cover letter
+- Process files in memory without a database
+
+## Version 1.1 Stability Updates
+
+- `GET /api/health` health check with service name and version
+- Root API response at `GET /`
+- More robust AI JSON parsing
+- Safe defaults for missing AI response fields
+- Match score normalization to a 0-100 integer
+- Better backend validation and user-facing error messages
+- Request timeouts for job URL fetching and DeepSeek calls
+- Resume and JD length limits before sending content to the LLM
+- Safer backend logging without resume text, full JD text, or API keys
+- Frontend validation for resume and job input
+- Frontend loading, error, and empty states
+- Stable result rendering when optional fields are empty
+
+## Tech Stack
 
 - Frontend: React + Vite
 - Backend: Python FastAPI
 - LLM Provider: DeepSeek API
-- Resume parsing: pypdf, python-docx
-- URL extraction: requests, beautifulsoup4
-- Storage: 本地临时处理，无数据库
+- Resume parsing: `pypdf`, `python-docx`
+- URL extraction: `requests`, `beautifulsoup4`
+- Storage: no database
 
-## 项目结构
+## Project Structure
 
 ```text
 .
@@ -39,87 +57,34 @@
 └── README.md
 ```
 
-## 本地运行步骤
+## Environment Variables
 
-确保项目根目录存在 `.env`，并配置 DeepSeek API Key：
+Create a `.env` file in the project root:
 
 ```bash
 DEEPSEEK_API_KEY=your_deepseek_api_key_here
 ```
 
-安装并启动后端，再安装并启动前端。
-
-## 后端启动命令
-
-```bash
-cd backend
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-uvicorn main:app --reload --host 0.0.0.0 --port 8000
-```
-
-后端默认地址：
-
-```text
-http://localhost:8000
-```
-
-公网开发访问地址：
-
-```text
-http://101.34.61.52:8000
-```
-
-## 前端启动命令
+Optional frontend API base URL:
 
 ```bash
 cd frontend
-npm install
-npm run dev -- --host 0.0.0.0 --port 5173
+printf 'VITE_API_BASE_URL=http://127.0.0.1:8000\n' > .env.local
 ```
 
-前端默认地址：
+Do not commit `.env`, `.env.local`, or any `*.env` file.
 
-```text
-http://localhost:5173
-```
-
-iPad 或其他设备访问：
-
-```text
-http://101.34.61.52:5173
-```
-
-如需配置 API 地址，可在 `frontend/.env.local` 中设置：
-
-```bash
-VITE_API_BASE_URL=http://101.34.61.52:8000
-```
-
-也可以参考 `frontend/.env.example`。`frontend/.env.local` 不要提交到 git。
-
-## 从局域网/公网访问开发服务器
-
-前端 Vite dev server 已配置为监听 `0.0.0.0:5173`，并允许通过 `101.34.61.52` 访问。后端 FastAPI 需要监听 `0.0.0.0:8000`。
+## Local Run
 
 Backend:
 
 ```bash
 cd backend
-source .venv/bin/activate  # 如果 .venv/bin/activate 存在
-uvicorn main:app --host 0.0.0.0 --port 8000 --reload
-```
-
-如果还没有虚拟环境，先执行：
-
-```bash
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
+uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 ```
-
-如果创建虚拟环境时提示 `ensurepip is not available`，先在 Ubuntu 上安装 `python3.12-venv`，然后重建虚拟环境。也可以在系统 Python 已安装依赖的情况下直接运行同一个 `uvicorn` 命令。
 
 Frontend:
 
@@ -129,89 +94,87 @@ npm install
 npm run dev -- --host 0.0.0.0 --port 5173
 ```
 
-iPad 浏览器访问：
+Local URLs:
 
 ```text
-http://101.34.61.52:5173
+Frontend: http://localhost:5173
+Backend:  http://localhost:8000
+Docs:     http://localhost:8000/docs
+Health:   http://localhost:8000/api/health
 ```
 
-如果 iPad 打开后是空白页或提示下载文本文件，先确认前端服务确实由 Vite 在 `frontend/` 目录启动，并检查首页响应是否为 HTML：
+Health check:
 
 ```bash
-curl -I http://101.34.61.52:5173
-curl http://101.34.61.52:5173 | head -50
-curl -I http://101.34.61.52:5173/src/main.jsx
+curl http://localhost:8000/api/health
 ```
 
-正常情况下首页应该返回 `Content-Type: text/html`，`/src/main.jsx` 应该返回 JavaScript 模块内容。如果返回空响应、文本错误或其他服务内容，通常说明 Vite dev server 没有运行、不是从 `frontend/` 目录启动，或 5173 端口被其他服务占用。
+Expected response:
 
-后端健康检查：
+```json
+{
+  "status": "ok",
+  "service": "personal-job-agent",
+  "version": "1.1"
+}
+```
+
+## Public Development Access
+
+The backend CORS allowlist includes:
+
+- `http://localhost:5173`
+- `http://127.0.0.1:5173`
+- `http://101.34.61.52:5173`
+
+Backend:
 
 ```bash
-curl http://127.0.0.1:8000/api/health
-curl http://101.34.61.52:8000/api/health
+cd backend
+source .venv/bin/activate
+uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-CORS 预检检查：
+Frontend:
 
 ```bash
-curl -i -X OPTIONS "http://101.34.61.52:8000/api/analyze" \
-  -H "Origin: http://101.34.61.52:5173" \
-  -H "Access-Control-Request-Method: POST"
+cd frontend
+npm run dev -- --host 0.0.0.0 --port 5173
 ```
 
-正常情况下响应头应包含：
+Public development URLs:
 
 ```text
-access-control-allow-origin: http://101.34.61.52:5173
+Frontend: http://101.34.61.52:5173
+Backend:  http://101.34.61.52:8000
+Health:   http://101.34.61.52:8000/api/health
 ```
 
-如果直接访问 `http://101.34.61.52:8000` 返回 502，先确认是否存在 Nginx、网关或其他代理；本项目默认不需要 Nginx，优先保证 FastAPI 直接监听 `0.0.0.0:8000` 且公网端口开放。
+If another device cannot connect, check that the cloud security group or firewall allows TCP ports `5173` and `8000`.
 
-如果无法从 iPad 访问，需要检查云服务器安全组或系统防火墙是否开放 TCP 端口 `5173` 和 `8000`。不要随意修改云服务器安全组；确认规则后再调整。
+## API
 
-如果系统启用了 `ufw`，可以按需执行：
+API documentation:
 
-```bash
-sudo ufw allow 5173/tcp
-sudo ufw allow 8000/tcp
-sudo ufw status
+```text
+http://localhost:8000/docs
 ```
 
-安全提醒：
-
-- 当前配置只是开发环境公网访问，不要作为正式生产部署。
-- 不要暴露 `.env`，不要提交真实 API Key。
-- 不要在日志或前端页面中打印 DeepSeek API Key。
-- 正式部署建议使用 Nginx + HTTPS + 后端反向代理。
-
-## .env 配置说明
-
-项目根目录 `.env` 需要包含：
-
-```bash
-DEEPSEEK_API_KEY=your_deepseek_api_key_here
-```
-
-不要把真实 API Key 写入代码，不要提交 `.env`。
-
-## API 示例
-
-接口：
+Analyze endpoint:
 
 ```text
 POST /api/analyze
 ```
 
-请求参数使用 `multipart/form-data`：
+Request type: `multipart/form-data`
 
-- `resume`: 必填，PDF 或 DOCX 文件
-- `job_text`: 可选，岗位描述文本
-- `job_url`: 可选，单个岗位网页 URL
+- `resume`: required, PDF or DOCX
+- `job_text`: optional job description text
+- `job_url`: optional single job posting URL
 
-如果同时提供 `job_text` 和 `job_url`，系统优先使用 `job_text`。
+If both `job_text` and `job_url` are provided, `job_text` is used first.
 
-示例：
+Example:
 
 ```bash
 curl -X POST http://localhost:8000/api/analyze \
@@ -219,7 +182,7 @@ curl -X POST http://localhost:8000/api/analyze \
   -F "job_text=We are hiring a full-stack engineer..."
 ```
 
-返回格式：
+Response shape:
 
 ```json
 {
@@ -233,21 +196,18 @@ curl -X POST http://localhost:8000/api/analyze \
 }
 ```
 
-## 注意事项
+## Safety Notes
 
-- 上传文件仅用于当前分析，不保存到长期数据库。
-- 不自动批量爬取 JobsDB 或任何求职网站。
-- 只处理用户提供的单个 URL 或用户粘贴的 JD 文本。
-- 不要提交真实 API Key。
-- `.env` 已加入 `.gitignore`。
-- 本项目只初始化本地 git 仓库，不创建 GitHub 仓库，不执行 `git push`。
+- Do not commit `.env`, `.env.local`, or `*.env` files.
+- Do not put real API keys in source code, README examples, screenshots, logs, or frontend output.
+- Backend logs record steps and error types, not full resume content or full JD content.
+- Uploaded resumes are processed in memory and are not saved to a database.
+- This project does not bulk crawl job boards.
+- Only analyze user-provided text or a single user-provided job URL.
+- Public dev access is for testing only; production should use HTTPS and a proper deployment setup.
 
 ## Roadmap
 
-- 增加用户登录
-- 增加历史分析记录
-- 增加岗位收藏
-- 增加多语言 Cover Letter
-- 增加更准确的评分规则
-- 增加简历关键词优化
-- 增加导出 PDF/DOCX 功能
+- Version 1.2: SQLite application tracking
+- Version 1.3: explainable scoring breakdown and ATS keyword analysis
+- Version 1.4: DOCX/PDF export and deployment polish

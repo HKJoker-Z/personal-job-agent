@@ -4,18 +4,44 @@ import "./styles.css";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://101.34.61.52:8000";
 
+function asArray(value) {
+  return Array.isArray(value) ? value : [];
+}
+
+function clampScore(value) {
+  const score = Number.parseInt(value, 10);
+  if (Number.isNaN(score)) {
+    return 0;
+  }
+  return Math.max(0, Math.min(100, score));
+}
+
+function getBackendErrorMessage(data) {
+  if (!data?.detail) {
+    return "Analyze request failed.";
+  }
+
+  if (typeof data.detail === "string") {
+    return data.detail;
+  }
+
+  return "Analyze request failed. Please check the form and try again.";
+}
+
 function ResultList({ title, items }) {
+  const safeItems = asArray(items);
+
   return (
     <section className="result-section">
       <h3>{title}</h3>
-      {items?.length ? (
+      {safeItems.length ? (
         <ul>
-          {items.map((item, index) => (
+          {safeItems.map((item, index) => (
             <li key={`${title}-${index}`}>{item}</li>
           ))}
         </ul>
       ) : (
-        <p className="muted">No items returned.</p>
+        <p className="muted">No items found.</p>
       )}
     </section>
   );
@@ -55,8 +81,20 @@ function App() {
   const [error, setError] = useState("");
   const [result, setResult] = useState(null);
 
+  function handleResumeChange(event) {
+    const file = event.target.files?.[0] || null;
+    setResume(file);
+    if (file) {
+      setError("");
+    }
+  }
+
   async function handleAnalyze(event) {
     event.preventDefault();
+    if (loading) {
+      return;
+    }
+
     setError("");
     setResult(null);
 
@@ -65,8 +103,14 @@ function App() {
       return;
     }
 
+    const fileName = resume.name.toLowerCase();
+    if (!fileName.endsWith(".pdf") && !fileName.endsWith(".docx")) {
+      setError("Please upload a PDF or DOCX resume.");
+      return;
+    }
+
     if (!jobText.trim() && !jobUrl.trim()) {
-      setError("Please paste a job description or enter a single job URL.");
+      setError("Please provide at least one job description or job URL.");
       return;
     }
 
@@ -84,16 +128,23 @@ function App() {
 
       const data = await response.json().catch(() => null);
       if (!response.ok) {
-        throw new Error(data?.detail || "Analyze request failed.");
+        throw new Error(getBackendErrorMessage(data));
       }
 
       setResult(data);
     } catch (err) {
-      setError(err.message || "Analyze request failed.");
+      if (err instanceof TypeError) {
+        setError("Cannot connect to backend. Please check if FastAPI server is running.");
+      } else {
+        setError(err.message || "Analyze request failed.");
+      }
     } finally {
       setLoading(false);
     }
   }
+
+  const hasResult = Boolean(result);
+  const score = clampScore(result?.match_score);
 
   return (
     <main className="app-shell">
@@ -108,7 +159,7 @@ function App() {
           <input
             type="file"
             accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-            onChange={(event) => setResume(event.target.files?.[0] || null)}
+            onChange={handleResumeChange}
           />
         </label>
 
@@ -132,42 +183,62 @@ function App() {
           />
         </label>
 
-        {error && <div className="error">{error}</div>}
-
         <button type="submit" disabled={loading}>
           {loading ? "Analyzing..." : "Analyze"}
         </button>
       </form>
 
-      {result && (
+      {error && (
+        <section className="panel state-panel error-panel" role="alert">
+          <strong>Analysis failed</strong>
+          <p>{error}</p>
+        </section>
+      )}
+
+      {loading && (
+        <section className="panel state-panel">
+          <strong>Analyzing...</strong>
+          <p className="muted">Parsing resume, reading job content, and calling the AI service.</p>
+        </section>
+      )}
+
+      {!hasResult && !loading && !error && (
+        <section className="panel state-panel">
+          <p className="muted">Upload your resume and provide a job description or URL to start analysis.</p>
+        </section>
+      )}
+
+      {hasResult && (
         <section className="panel results-panel">
           <div className="score-row">
             <div>
               <span className="label">Match Score</span>
-              <strong>{result.match_score}/100</strong>
+              <strong>{score}/100</strong>
             </div>
           </div>
 
           <section className="result-section">
             <h3>岗位摘要</h3>
-            <p>{result.job_summary}</p>
+            <p>{result.job_summary || "No summary generated."}</p>
           </section>
 
           <section className="result-section">
             <h3>匹配原因</h3>
-            <p>{result.match_reason}</p>
+            <p>{result.match_reason || "No match reason generated."}</p>
           </section>
 
           <ResultList title="匹配技能" items={result.matched_skills} />
           <ResultList title="缺失技能" items={result.missing_skills} />
           <ResultList title="简历优化建议" items={result.resume_suggestions} />
 
-          <section className="result-section">
+          <section className="result-section cover-letter-section">
             <h3>English Cover Letter</h3>
-            <pre>{result.cover_letter}</pre>
+            <pre>{result.cover_letter || "No cover letter generated."}</pre>
           </section>
         </section>
       )}
+
+      <footer className="app-footer">API Base URL: {API_BASE_URL}</footer>
     </main>
   );
 }
