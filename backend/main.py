@@ -23,15 +23,15 @@ MAX_TEXT_CHARS = 18000
 
 app = FastAPI(title="Personal Job Application Agent API")
 
+allowed_origins = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://101.34.61.52:5173",
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-        "http://101.34.61.52:5173",
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-    ],
+    allow_origins=allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -196,7 +196,7 @@ def analyze_with_deepseek(resume_text: str, job_description: str) -> dict[str, A
 
 
 @app.get("/api/health")
-def health() -> dict[str, str]:
+def health_check() -> dict[str, str]:
     return {"status": "ok"}
 
 

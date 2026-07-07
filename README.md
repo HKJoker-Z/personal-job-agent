@@ -91,13 +91,13 @@ iPad 或其他设备访问：
 http://101.34.61.52:5173
 ```
 
-如需配置 API 地址，可在 `frontend/.env` 中设置：
+如需配置 API 地址，可在 `frontend/.env.local` 中设置：
 
 ```bash
 VITE_API_BASE_URL=http://101.34.61.52:8000
 ```
 
-也可以参考 `frontend/.env.example`。
+也可以参考 `frontend/.env.example`。`frontend/.env.local` 不要提交到 git。
 
 ## 从局域网/公网访问开发服务器
 
@@ -107,8 +107,8 @@ Backend:
 
 ```bash
 cd backend
-source .venv/bin/activate
-uvicorn main:app --host 0.0.0.0 --port 8000
+source .venv/bin/activate  # 如果 .venv/bin/activate 存在
+uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
 如果还没有虚拟环境，先执行：
@@ -118,6 +118,8 @@ python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 ```
+
+如果创建虚拟环境时提示 `ensurepip is not available`，先在 Ubuntu 上安装 `python3.12-venv`，然后重建虚拟环境。也可以在系统 Python 已安装依赖的情况下直接运行同一个 `uvicorn` 命令。
 
 Frontend:
 
@@ -142,6 +144,29 @@ curl -I http://101.34.61.52:5173/src/main.jsx
 ```
 
 正常情况下首页应该返回 `Content-Type: text/html`，`/src/main.jsx` 应该返回 JavaScript 模块内容。如果返回空响应、文本错误或其他服务内容，通常说明 Vite dev server 没有运行、不是从 `frontend/` 目录启动，或 5173 端口被其他服务占用。
+
+后端健康检查：
+
+```bash
+curl http://127.0.0.1:8000/api/health
+curl http://101.34.61.52:8000/api/health
+```
+
+CORS 预检检查：
+
+```bash
+curl -i -X OPTIONS "http://101.34.61.52:8000/api/analyze" \
+  -H "Origin: http://101.34.61.52:5173" \
+  -H "Access-Control-Request-Method: POST"
+```
+
+正常情况下响应头应包含：
+
+```text
+access-control-allow-origin: http://101.34.61.52:5173
+```
+
+如果直接访问 `http://101.34.61.52:8000` 返回 502，先确认是否存在 Nginx、网关或其他代理；本项目默认不需要 Nginx，优先保证 FastAPI 直接监听 `0.0.0.0:8000` 且公网端口开放。
 
 如果无法从 iPad 访问，需要检查云服务器安全组或系统防火墙是否开放 TCP 端口 `5173` 和 `8000`。不要随意修改云服务器安全组；确认规则后再调整。
 
