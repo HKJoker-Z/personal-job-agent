@@ -1,8 +1,8 @@
 # Personal Job Application Agent
 
-Version 1.2
+Version 1.3
 
-Personal Job Application Agent is a local-first MVP for job application preparation and tracking. It parses a PDF or DOCX resume, accepts either pasted job description text or one job URL, uses the DeepSeek API to generate a fit analysis and English cover letter, then can save successful analysis results to a local SQLite application history.
+Personal Job Application Agent is a local-first Resume-JD Matching Agent for job application preparation and tracking. It parses a PDF or DOCX resume, accepts either pasted job description text or one job URL, uses the DeepSeek API to generate an explainable fit analysis, ATS keyword analysis, resume bullet optimization suggestions, and an English cover letter, then can save successful analysis results to a local SQLite application history.
 
 ## Current Features
 
@@ -11,6 +11,10 @@ Personal Job Application Agent is a local-first MVP for job application preparat
 - Provide one job posting URL and extract readable page text
 - Analyze resume and JD fit with DeepSeek
 - Return company name, job title, job summary, match score, match reason, matched skills, and missing skills
+- Explain match score through five scoring dimensions
+- Calculate final match score with backend-controlled weighted scoring
+- Analyze ATS keywords from the JD against resume coverage
+- Suggest safer resume bullet point rewrites based only on existing resume content
 - Generate Chinese resume improvement suggestions
 - Generate an English cover letter
 - Save successful analysis results to local SQLite history
@@ -19,15 +23,25 @@ Personal Job Application Agent is a local-first MVP for job application preparat
 - Delete application records
 - Search and filter records by status, company name, or job title
 
-## Version 1.2 Updates
+## Version 1.3 Updates
 
-- SQLite local application tracking
-- Save analysis result to history from `POST /api/analyze`
-- History page with list, detail, edit, and delete actions
-- Status and search filters for historical records
-- AI output now includes `company_name` and `job_title`
-- Database records do not store uploaded resume files
-- Database records do not store complete `resume_text`
+- Explainable scoring breakdown for skills, projects, education, work experience, and keyword match
+- Weighted match score calculation controlled by the backend
+- ATS keyword analysis with important, matched, and missing keywords
+- Resume bullet point optimization suggestions
+- Scoring and ATS results saved to SQLite history
+
+## Scoring Weights
+
+The final `match_score` returned by the backend is calculated from `scoring_breakdown`:
+
+- Skills Match: 35%
+- Project Experience: 25%
+- Education: 15%
+- Work Experience: 15%
+- Keyword Match: 10%
+
+If the AI returns a separate `match_score`, it is treated only as a reference. The backend normalized weighted score is the final score returned by the API.
 
 ## Tech Stack
 
@@ -69,7 +83,7 @@ backend/data/app.db
 
 The backend creates `backend/data/` and `app.db` automatically when it starts or when database helpers are imported.
 
-The database stores application tracking records only. It saves `resume_filename`, AI analysis results, status, and notes. It does not save uploaded resume files, and it does not save complete `resume_text`. Database files are ignored by Git.
+The database stores application tracking records only. It saves `resume_filename`, normalized AI analysis results, `scoring_breakdown`, `ats_analysis`, `upgraded_resume_bullets`, status, and notes. It does not save uploaded resume files, and it does not save complete `resume_text`. Database files are ignored by Git.
 
 ## Environment Variables
 
@@ -129,7 +143,7 @@ Expected response:
 {
   "status": "ok",
   "service": "personal-job-agent",
-  "version": "1.2"
+  "version": "1.3"
 }
 ```
 
@@ -212,6 +226,46 @@ Response shape:
   "missing_skills": ["string"],
   "resume_suggestions": ["string"],
   "cover_letter": "string",
+  "scoring_breakdown": {
+    "skills_match": {
+      "score": 0,
+      "reason": "string",
+      "evidence": ["string"]
+    },
+    "project_experience": {
+      "score": 0,
+      "reason": "string",
+      "evidence": ["string"]
+    },
+    "education": {
+      "score": 0,
+      "reason": "string",
+      "evidence": ["string"]
+    },
+    "work_experience": {
+      "score": 0,
+      "reason": "string",
+      "evidence": ["string"]
+    },
+    "keyword_match": {
+      "score": 0,
+      "reason": "string",
+      "evidence": ["string"]
+    }
+  },
+  "ats_analysis": {
+    "important_keywords": ["string"],
+    "matched_keywords": ["string"],
+    "missing_keywords": ["string"],
+    "keyword_suggestions": ["string"]
+  },
+  "upgraded_resume_bullets": [
+    {
+      "original": "string",
+      "improved": "string",
+      "reason": "string"
+    }
+  ],
   "application_id": 1,
   "saved_to_history": true
 }
@@ -230,7 +284,7 @@ Query parameters:
 
 ### `GET /api/applications/{id}`
 
-Returns one full application record, including match reason, job summary, skill lists, suggestions, cover letter, and notes.
+Returns one full application record, including match reason, job summary, skill lists, suggestions, cover letter, scoring breakdown, ATS analysis, upgraded resume bullets, status, and notes.
 
 ### `PATCH /api/applications/{id}`
 
@@ -256,6 +310,9 @@ Deletes one historical application record.
 
 ## Safety Notes
 
+- Do not invent resume experience, projects, education, work experience, or skills.
+- Resume bullet improvements must be based only on existing resume content.
+- ATS keyword suggestions should only recommend adding keywords when the user truly has relevant experience.
 - Do not commit `.env`, `.env.local`, or `*.env` files.
 - Do not commit SQLite database files such as `backend/data/app.db`.
 - Do not put real API keys in source code, README examples, screenshots, logs, or frontend output.
@@ -268,5 +325,4 @@ Deletes one historical application record.
 
 ## Roadmap
 
-- Version 1.3: explainable scoring breakdown and ATS keyword analysis
 - Version 1.4: DOCX/PDF export and deployment polish

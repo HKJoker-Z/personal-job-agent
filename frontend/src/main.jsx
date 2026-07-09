@@ -4,9 +4,20 @@ import "./styles.css";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://101.34.61.52:8000";
 const APPLICATION_STATUSES = ["Saved", "Applied", "Interview", "Rejected", "Offer"];
+const SCORING_DIMENSIONS = [
+  { key: "skills_match", label: "Skills Match" },
+  { key: "project_experience", label: "Project Experience" },
+  { key: "education", label: "Education" },
+  { key: "work_experience", label: "Work Experience" },
+  { key: "keyword_match", label: "Keyword Match" },
+];
 
 function asArray(value) {
   return Array.isArray(value) ? value : [];
+}
+
+function asObject(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : {};
 }
 
 function clampScore(value) {
@@ -92,6 +103,128 @@ function ResultList({ title, items }) {
   );
 }
 
+function ScoringBreakdownSection({ breakdown }) {
+  const safeBreakdown = asObject(breakdown);
+  const dimensions = SCORING_DIMENSIONS.map((dimension) => {
+    const section = asObject(safeBreakdown[dimension.key]);
+    return {
+      ...dimension,
+      score: clampScore(section.score),
+      reason: displayText(section.reason, "No reason generated."),
+      evidence: asArray(section.evidence),
+    };
+  });
+
+  return (
+    <section className="result-section scoring-section">
+      <h3>Scoring Breakdown</h3>
+      <div className="breakdown-grid">
+        {dimensions.map((dimension) => (
+          <article className="breakdown-card" key={dimension.key}>
+            <div className="breakdown-card-header">
+              <strong>{dimension.label}</strong>
+              <span>{dimension.score}/100</span>
+            </div>
+            <p>{dimension.reason}</p>
+            {dimension.evidence.length ? (
+              <ul>
+                {dimension.evidence.map((item, index) => (
+                  <li key={`${dimension.key}-evidence-${index}`}>{item}</li>
+                ))}
+              </ul>
+            ) : (
+              <p className="muted">No evidence provided.</p>
+            )}
+          </article>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function KeywordGroup({ title, items, variant = "neutral" }) {
+  const safeItems = asArray(items);
+
+  return (
+    <div className="keyword-group">
+      <h4>{title}</h4>
+      {safeItems.length ? (
+        <div className="keyword-list">
+          {safeItems.map((item, index) => (
+            <span className={`keyword-chip ${variant}`} key={`${title}-${index}`}>
+              {item}
+            </span>
+          ))}
+        </div>
+      ) : (
+        <p className="muted">No keywords found.</p>
+      )}
+    </div>
+  );
+}
+
+function ATSAnalysisSection({ analysis }) {
+  const safeAnalysis = asObject(analysis);
+
+  return (
+    <section className="result-section ats-section">
+      <h3>ATS Keyword Analysis</h3>
+      <div className="ats-grid">
+        <KeywordGroup title="Important Keywords" items={safeAnalysis.important_keywords} />
+        <KeywordGroup title="Matched Keywords" items={safeAnalysis.matched_keywords} variant="matched" />
+        <KeywordGroup title="Missing Keywords" items={safeAnalysis.missing_keywords} variant="missing" />
+        <div className="keyword-group suggestions-group">
+          <h4>Keyword Suggestions</h4>
+          {asArray(safeAnalysis.keyword_suggestions).length ? (
+            <ul>
+              {asArray(safeAnalysis.keyword_suggestions).map((item, index) => (
+                <li key={`keyword-suggestion-${index}`}>{item}</li>
+              ))}
+            </ul>
+          ) : (
+            <p className="muted">No keyword suggestions generated.</p>
+          )}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function UpgradedResumeBulletsSection({ bullets }) {
+  const safeBullets = asArray(bullets).filter((item) => asObject(item).original);
+
+  return (
+    <section className="result-section bullet-section">
+      <h3>Upgraded Resume Bullets</h3>
+      {safeBullets.length ? (
+        <div className="bullet-grid">
+          {safeBullets.map((item, index) => {
+            const bullet = asObject(item);
+            return (
+              <article className="bullet-card" key={`bullet-${index}`}>
+                <div>
+                  <span className="label">Original</span>
+                  <p>{displayText(bullet.original)}</p>
+                </div>
+                <div>
+                  <span className="label">Improved</span>
+                  <p>{displayText(bullet.improved, "No improved version generated.")}</p>
+                </div>
+                <div>
+                  <span className="label">Reason</span>
+                  <p>{displayText(bullet.reason, "No reason generated.")}</p>
+                </div>
+              </article>
+            );
+          })}
+        </div>
+      ) : (
+        <p className="muted">No bullet improvements generated.</p>
+      )}
+    </section>
+  );
+}
+
 function AnalysisResult({ result }) {
   const score = clampScore(result?.match_score);
   const savedToHistory = Boolean(result?.saved_to_history);
@@ -128,6 +261,9 @@ function AnalysisResult({ result }) {
       <ResultList title="匹配技能" items={result.matched_skills} />
       <ResultList title="缺失技能" items={result.missing_skills} />
       <ResultList title="简历优化建议" items={result.resume_suggestions} />
+      <ScoringBreakdownSection breakdown={result.scoring_breakdown} />
+      <ATSAnalysisSection analysis={result.ats_analysis} />
+      <UpgradedResumeBulletsSection bullets={result.upgraded_resume_bullets} />
 
       <section className="result-section cover-letter-section">
         <h3>English Cover Letter</h3>
@@ -580,6 +716,9 @@ function HistoryPage() {
           <ResultList title="Matched Skills" items={selectedRecord.matched_skills} />
           <ResultList title="Missing Skills" items={selectedRecord.missing_skills} />
           <ResultList title="Resume Suggestions" items={selectedRecord.resume_suggestions} />
+          <ScoringBreakdownSection breakdown={selectedRecord.scoring_breakdown} />
+          <ATSAnalysisSection analysis={selectedRecord.ats_analysis} />
+          <UpgradedResumeBulletsSection bullets={selectedRecord.upgraded_resume_bullets} />
 
           <section className="result-section cover-letter-section">
             <h3>Cover Letter</h3>

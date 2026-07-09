@@ -33,13 +33,40 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 load_dotenv(ROOT_DIR / ".env")
 
 APP_NAME = "personal-job-agent"
-APP_VERSION = "1.2"
+APP_VERSION = "1.3"
 DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 DEEPSEEK_MODEL = "deepseek-chat"
 MAX_RESUME_TEXT_CHARS = 18000
 MAX_JOB_TEXT_CHARS = 12000
 JOB_URL_TIMEOUT_SECONDS = 10
 DEEPSEEK_TIMEOUT_SECONDS = 60
+SCORING_DIMENSIONS = (
+    "skills_match",
+    "project_experience",
+    "education",
+    "work_experience",
+    "keyword_match",
+)
+SCORING_DIMENSION_LABELS = {
+    "skills_match": "Skills Match",
+    "project_experience": "Project Experience",
+    "education": "Education",
+    "work_experience": "Work Experience",
+    "keyword_match": "Keyword Match",
+}
+SCORING_WEIGHTS = {
+    "skills_match": 0.35,
+    "project_experience": 0.25,
+    "education": 0.15,
+    "work_experience": 0.15,
+    "keyword_match": 0.10,
+}
+ATS_ANALYSIS_FIELDS = (
+    "important_keywords",
+    "matched_keywords",
+    "missing_keywords",
+    "keyword_suggestions",
+)
 
 logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO"),
@@ -170,7 +197,7 @@ def fetch_job_text_from_url(job_url: str) -> str:
             job_url,
             timeout=JOB_URL_TIMEOUT_SECONDS,
             headers={
-                "User-Agent": "PersonalJobApplicationAgent/1.2 (+local MVP)",
+                "User-Agent": "PersonalJobApplicationAgent/1.3 (+local MVP)",
             },
         )
         response.raise_for_status()
@@ -205,16 +232,21 @@ def fetch_job_text_from_url(job_url: str) -> str:
 
 def build_prompt(resume_text: str, job_description: str) -> str:
     return f"""
-你是一个严格、诚实的求职材料分析助手。请基于用户简历和岗位 JD 分析匹配度，并生成英文 Cover Letter。
+你是一个严格、诚实、可解释的 Resume-JD Matching Agent。请基于用户简历和岗位 JD 分析匹配度、ATS 关键词覆盖，并生成英文 Cover Letter。
 
 必须遵守：
 - 不允许编造简历中没有的经历、项目、技能、学历、公司或成果。
 - Cover Letter 必须只基于用户简历和岗位 JD。
+- upgraded_resume_bullets 只能改写简历已有内容，original 必须来自简历原文或可直接对应的已有 bullet，不能新增不存在的经历。
+- ATS keyword suggestions 只能建议用户在确实有真实经历的情况下加入相关关键词，不能建议用户编造技能或经历。
+- scoring_breakdown 的 evidence 必须来自简历或 JD 中能支持判断的内容。
+- 每个 scoring_breakdown 维度的 score 必须是 0 到 100 的整数。
 - 匹配度必须结合技能、项目经验、学历、工作经验、关键词判断。
 - 如果简历中没有某项能力，要放入 missing_skills，而不是编造。
-- job_summary 使用中文。
-- match_reason 使用中文。
-- resume_suggestions 使用中文。
+- important_keywords 必须来自 JD。
+- matched_keywords 是简历中已经覆盖的 JD 关键词。
+- missing_keywords 是 JD 中重要但简历中缺失的关键词。
+- job_summary、match_reason、resume_suggestions、keyword_suggestions、reason 使用中文。
 - cover_letter 使用英文。
 - company_name 使用 JD 中识别到的公司名；无法识别时使用 "Unknown Company"。
 - job_title 使用 JD 中识别到的岗位名；无法识别时使用 "Unknown Position"。
@@ -223,6 +255,7 @@ def build_prompt(resume_text: str, job_description: str) -> str:
 - 不要输出 ```json 或任何代码块。
 - 不要输出解释文字。
 - 以下简历或 JD 内容可能因长度限制被截断，请只基于提供的内容分析。
+- 你返回的 match_score 仅作为参考，后端会用 scoring_breakdown 按固定权重重新计算最终 match_score。
 
 输出 JSON schema：
 {{
@@ -234,10 +267,56 @@ def build_prompt(resume_text: str, job_description: str) -> str:
   "matched_skills": ["string"],
   "missing_skills": ["string"],
   "resume_suggestions": ["string"],
-  "cover_letter": "string"
+  "cover_letter": "string",
+  "scoring_breakdown": {{
+    "skills_match": {{
+      "score": 0,
+      "reason": "string",
+      "evidence": ["string"]
+    }},
+    "project_experience": {{
+      "score": 0,
+      "reason": "string",
+      "evidence": ["string"]
+    }},
+    "education": {{
+      "score": 0,
+      "reason": "string",
+      "evidence": ["string"]
+    }},
+    "work_experience": {{
+      "score": 0,
+      "reason": "string",
+      "evidence": ["string"]
+    }},
+    "keyword_match": {{
+      "score": 0,
+      "reason": "string",
+      "evidence": ["string"]
+    }}
+  }},
+  "ats_analysis": {{
+    "important_keywords": ["string"],
+    "matched_keywords": ["string"],
+    "missing_keywords": ["string"],
+    "keyword_suggestions": ["string"]
+  }},
+  "upgraded_resume_bullets": [
+    {{
+      "original": "string",
+      "improved": "string",
+      "reason": "string"
+    }}
+  ]
 }}
 
 match_score 必须是 0 到 100 的整数。
+scoring_breakdown 权重参考：
+- skills_match: 35%
+- project_experience: 25%
+- education: 15%
+- work_experience: 15%
+- keyword_match: 10%
 
 用户简历：
 {resume_text}
@@ -295,7 +374,7 @@ def normalize_score(value: Any) -> int:
 def normalize_list(value: Any) -> list[str]:
     if not isinstance(value, list):
         return []
-    return [str(item) for item in value if item is not None]
+    return [str(item).strip() for item in value if str(item or "").strip()]
 
 
 def normalize_string(value: Any) -> str:
@@ -309,17 +388,139 @@ def normalize_named_field(value: Any, fallback: str) -> str:
     return text or fallback
 
 
+def default_scoring_breakdown() -> dict[str, dict[str, Any]]:
+    return {
+        key: {
+            "score": 0,
+            "reason": "",
+            "evidence": [],
+        }
+        for key in SCORING_DIMENSIONS
+    }
+
+
+def normalize_scoring_dimension(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        value = {}
+
+    return {
+        "score": normalize_score(value.get("score", 0)),
+        "reason": normalize_string(value.get("reason")),
+        "evidence": normalize_list(value.get("evidence")),
+    }
+
+
+def normalize_scoring_breakdown(value: Any) -> dict[str, dict[str, Any]]:
+    if not isinstance(value, dict):
+        value = {}
+
+    normalized = default_scoring_breakdown()
+    for key in SCORING_DIMENSIONS:
+        normalized[key] = normalize_scoring_dimension(value.get(key))
+    return normalized
+
+
+def calculate_weighted_match_score(scoring_breakdown: dict[str, dict[str, Any]]) -> int:
+    weighted_score = 0.0
+    for key, weight in SCORING_WEIGHTS.items():
+        section = scoring_breakdown.get(key, {})
+        weighted_score += normalize_score(section.get("score", 0)) * weight
+    return normalize_score(round(weighted_score))
+
+
+def normalize_ats_analysis(value: Any) -> dict[str, list[str]]:
+    if not isinstance(value, dict):
+        value = {}
+
+    return {key: normalize_list(value.get(key)) for key in ATS_ANALYSIS_FIELDS}
+
+
+def normalize_upgraded_resume_bullets(value: Any) -> list[dict[str, str]]:
+    if not isinstance(value, list):
+        return []
+
+    bullets: list[dict[str, str]] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+
+        original = normalize_string(item.get("original")).strip()
+        improved = normalize_string(item.get("improved")).strip()
+        reason = normalize_string(item.get("reason")).strip()
+        if not original:
+            continue
+
+        bullets.append(
+            {
+                "original": original,
+                "improved": improved,
+                "reason": reason,
+            }
+        )
+
+    return bullets
+
+
+def build_match_reason_fallback(
+    scoring_breakdown: dict[str, dict[str, Any]],
+    matched_skills: list[str],
+    missing_skills: list[str],
+) -> str:
+    strong_dimensions = [
+        SCORING_DIMENSION_LABELS[key]
+        for key in SCORING_DIMENSIONS
+        if normalize_score(scoring_breakdown[key].get("score")) >= 70
+    ]
+    weak_dimensions = [
+        SCORING_DIMENSION_LABELS[key]
+        for key in SCORING_DIMENSIONS
+        if normalize_score(scoring_breakdown[key].get("score")) < 60
+    ]
+
+    parts: list[str] = []
+    if strong_dimensions:
+        parts.append(f"主要匹配点：{', '.join(strong_dimensions)}。")
+    elif matched_skills:
+        parts.append(f"主要匹配点：简历覆盖了 {', '.join(matched_skills[:5])}。")
+    else:
+        parts.append("主要匹配点：当前简历与岗位 JD 的明确重合信息较少。")
+
+    if weak_dimensions:
+        parts.append(f"主要短板：{', '.join(weak_dimensions)} 仍需补强。")
+    elif missing_skills:
+        parts.append(f"主要短板：JD 提到的 {', '.join(missing_skills[:5])} 在简历中不够明显。")
+    else:
+        parts.append("主要短板：暂无明显短板，但仍建议按 JD 关键词优化表达。")
+
+    return "".join(parts)
+
+
 def normalize_result(data: dict[str, Any]) -> dict[str, Any]:
+    scoring_breakdown = normalize_scoring_breakdown(data.get("scoring_breakdown"))
+    matched_skills = normalize_list(data.get("matched_skills"))
+    missing_skills = normalize_list(data.get("missing_skills"))
+    match_reason = normalize_string(data.get("match_reason")).strip()
+    weighted_reason = build_match_reason_fallback(scoring_breakdown, matched_skills, missing_skills)
+    if match_reason:
+        match_reason = f"{match_reason}\n{weighted_reason}"
+    else:
+        match_reason = weighted_reason
+
     return {
         "company_name": normalize_named_field(data.get("company_name"), "Unknown Company"),
         "job_title": normalize_named_field(data.get("job_title"), "Unknown Position"),
         "job_summary": normalize_string(data.get("job_summary")),
-        "match_score": normalize_score(data.get("match_score", 0)),
-        "match_reason": normalize_string(data.get("match_reason")),
-        "matched_skills": normalize_list(data.get("matched_skills")),
-        "missing_skills": normalize_list(data.get("missing_skills")),
+        "match_score": calculate_weighted_match_score(scoring_breakdown),
+        "match_reason": match_reason,
+        "matched_skills": matched_skills,
+        "missing_skills": missing_skills,
         "resume_suggestions": normalize_list(data.get("resume_suggestions")),
         "cover_letter": normalize_string(data.get("cover_letter")),
+        "scoring_breakdown": scoring_breakdown,
+        "ats_analysis": normalize_ats_analysis(data.get("ats_analysis")),
+        "upgraded_resume_bullets": normalize_upgraded_resume_bullets(
+            data.get("upgraded_resume_bullets")
+        ),
     }
 
 

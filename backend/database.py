@@ -8,6 +8,19 @@ from typing import Any
 DB_PATH = Path(__file__).resolve().parent / "data" / "app.db"
 
 ALLOWED_APPLICATION_STATUSES = ("Saved", "Applied", "Interview", "Rejected", "Offer")
+SCORING_BREAKDOWN_KEYS = (
+    "skills_match",
+    "project_experience",
+    "education",
+    "work_experience",
+    "keyword_match",
+)
+ATS_ANALYSIS_KEYS = (
+    "important_keywords",
+    "matched_keywords",
+    "missing_keywords",
+    "keyword_suggestions",
+)
 
 
 def utc_now() -> str:
@@ -19,6 +32,49 @@ def get_connection() -> sqlite3.Connection:
     connection = sqlite3.connect(DB_PATH)
     connection.row_factory = sqlite3.Row
     return connection
+
+
+def default_scoring_breakdown() -> dict[str, dict[str, Any]]:
+    return {
+        key: {
+            "score": 0,
+            "reason": "",
+            "evidence": [],
+        }
+        for key in SCORING_BREAKDOWN_KEYS
+    }
+
+
+def default_ats_analysis() -> dict[str, list[str]]:
+    return {key: [] for key in ATS_ANALYSIS_KEYS}
+
+
+def default_scoring_breakdown_json() -> str:
+    return json.dumps(default_scoring_breakdown(), ensure_ascii=False)
+
+
+def default_ats_analysis_json() -> str:
+    return json.dumps(default_ats_analysis(), ensure_ascii=False)
+
+
+def get_table_columns(connection: sqlite3.Connection, table_name: str) -> set[str]:
+    rows = connection.execute(f"PRAGMA table_info({table_name})").fetchall()
+    return {str(row["name"]) for row in rows}
+
+
+def add_column_if_missing(
+    connection: sqlite3.Connection,
+    *,
+    table_name: str,
+    existing_columns: set[str],
+    column_name: str,
+    column_definition: str,
+) -> None:
+    if column_name in existing_columns:
+        return
+
+    connection.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_definition}")
+    existing_columns.add(column_name)
 
 
 def init_db() -> None:
@@ -41,9 +97,40 @@ def init_db() -> None:
                 missing_skills TEXT NOT NULL DEFAULT '[]',
                 resume_suggestions TEXT NOT NULL DEFAULT '[]',
                 cover_letter TEXT NOT NULL DEFAULT '',
+                scoring_breakdown TEXT NOT NULL DEFAULT '{"skills_match":{"score":0,"reason":"","evidence":[]},"project_experience":{"score":0,"reason":"","evidence":[]},"education":{"score":0,"reason":"","evidence":[]},"work_experience":{"score":0,"reason":"","evidence":[]},"keyword_match":{"score":0,"reason":"","evidence":[]}}',
+                ats_analysis TEXT NOT NULL DEFAULT '{"important_keywords":[],"matched_keywords":[],"missing_keywords":[],"keyword_suggestions":[]}',
+                upgraded_resume_bullets TEXT NOT NULL DEFAULT '[]',
                 notes TEXT
             )
             """
+        )
+        existing_columns = get_table_columns(connection, "application_records")
+        add_column_if_missing(
+            connection,
+            table_name="application_records",
+            existing_columns=existing_columns,
+            column_name="scoring_breakdown",
+            column_definition=(
+                "scoring_breakdown TEXT NOT NULL DEFAULT "
+                f"'{default_scoring_breakdown_json()}'"
+            ),
+        )
+        add_column_if_missing(
+            connection,
+            table_name="application_records",
+            existing_columns=existing_columns,
+            column_name="ats_analysis",
+            column_definition=(
+                "ats_analysis TEXT NOT NULL DEFAULT "
+                f"'{default_ats_analysis_json()}'"
+            ),
+        )
+        add_column_if_missing(
+            connection,
+            table_name="application_records",
+            existing_columns=existing_columns,
+            column_name="upgraded_resume_bullets",
+            column_definition="upgraded_resume_bullets TEXT NOT NULL DEFAULT '[]'",
         )
         connection.execute(
             """
@@ -78,6 +165,95 @@ def deserialize_list(value: Any) -> list[str]:
         return []
 
     return [str(item) for item in parsed if item is not None]
+
+
+def normalize_string_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item).strip() for item in value if str(item or "").strip()]
+
+
+def serialize_json(value: Any, fallback: Any) -> str:
+    if not isinstance(value, type(fallback)):
+        value = fallback
+    return json.dumps(value, ensure_ascii=False)
+
+
+def deserialize_json(value: Any, fallback: Any) -> Any:
+    if not value:
+        return fallback
+
+    try:
+        parsed = json.loads(value)
+    except (TypeError, json.JSONDecodeError):
+        return fallback
+
+    if not isinstance(parsed, type(fallback)):
+        return fallback
+
+    return parsed
+
+
+def normalize_db_score(value: Any) -> int:
+    try:
+        score = int(value)
+    except (TypeError, ValueError):
+        score = 0
+    return max(0, min(100, score))
+
+
+def deserialize_scoring_breakdown(value: Any) -> dict[str, dict[str, Any]]:
+    parsed = deserialize_json(value, {})
+    if not isinstance(parsed, dict):
+        parsed = {}
+
+    normalized = default_scoring_breakdown()
+    for key in SCORING_BREAKDOWN_KEYS:
+        section = parsed.get(key)
+        if not isinstance(section, dict):
+            continue
+
+        normalized[key] = {
+            "score": normalize_db_score(section.get("score")),
+            "reason": clean_text(section.get("reason")),
+            "evidence": normalize_string_list(section.get("evidence")),
+        }
+    return normalized
+
+
+def deserialize_ats_analysis(value: Any) -> dict[str, list[str]]:
+    parsed = deserialize_json(value, {})
+    if not isinstance(parsed, dict):
+        parsed = {}
+
+    normalized = default_ats_analysis()
+    for key in ATS_ANALYSIS_KEYS:
+        normalized[key] = normalize_string_list(parsed.get(key))
+    return normalized
+
+
+def deserialize_upgraded_resume_bullets(value: Any) -> list[dict[str, str]]:
+    parsed = deserialize_json(value, [])
+    if not isinstance(parsed, list):
+        return []
+
+    bullets: list[dict[str, str]] = []
+    for item in parsed:
+        if not isinstance(item, dict):
+            continue
+        original = clean_text(item.get("original"))
+        improved = clean_text(item.get("improved"))
+        reason = clean_text(item.get("reason"))
+        if not original:
+            continue
+        bullets.append(
+            {
+                "original": original,
+                "improved": improved,
+                "reason": reason,
+            }
+        )
+    return bullets
 
 
 def clean_text(value: Any, fallback: str = "") -> str:
@@ -119,6 +295,11 @@ def row_to_detail(row: sqlite3.Row) -> dict[str, Any]:
         "missing_skills": deserialize_list(row["missing_skills"]),
         "resume_suggestions": deserialize_list(row["resume_suggestions"]),
         "cover_letter": row["cover_letter"] or "",
+        "scoring_breakdown": deserialize_scoring_breakdown(row["scoring_breakdown"]),
+        "ats_analysis": deserialize_ats_analysis(row["ats_analysis"]),
+        "upgraded_resume_bullets": deserialize_upgraded_resume_bullets(
+            row["upgraded_resume_bullets"]
+        ),
         "notes": row["notes"],
     }
 
@@ -151,9 +332,12 @@ def insert_application_record(
                 missing_skills,
                 resume_suggestions,
                 cover_letter,
+                scoring_breakdown,
+                ats_analysis,
+                upgraded_resume_bullets,
                 notes
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 now,
@@ -170,6 +354,12 @@ def insert_application_record(
                 serialize_list(analysis_result.get("missing_skills")),
                 serialize_list(analysis_result.get("resume_suggestions")),
                 clean_text(analysis_result.get("cover_letter")),
+                serialize_json(
+                    analysis_result.get("scoring_breakdown"),
+                    default_scoring_breakdown(),
+                ),
+                serialize_json(analysis_result.get("ats_analysis"), default_ats_analysis()),
+                serialize_json(analysis_result.get("upgraded_resume_bullets"), []),
                 None,
             ),
         )
