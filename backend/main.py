@@ -10,19 +10,30 @@ import requests
 from bs4 import BeautifulSoup
 from docx import Document
 from dotenv import load_dotenv
-from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from openai import OpenAI
+from pydantic import BaseModel
 from pypdf import PdfReader
 
+from database import (
+    ALLOWED_APPLICATION_STATUSES,
+    DB_PATH,
+    delete_application_record,
+    get_application_record,
+    init_db,
+    insert_application_record,
+    list_application_records,
+    update_application_record,
+)
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 load_dotenv(ROOT_DIR / ".env")
 
 APP_NAME = "personal-job-agent"
-APP_VERSION = "1.1"
+APP_VERSION = "1.2"
 DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 DEEPSEEK_MODEL = "deepseek-chat"
 MAX_RESUME_TEXT_CHARS = 18000
@@ -37,6 +48,13 @@ logging.basicConfig(
 logger = logging.getLogger(APP_NAME)
 
 app = FastAPI(title="Personal Job Application Agent API", version=APP_VERSION)
+init_db()
+logger.info("SQLite database initialized path=%s", DB_PATH)
+
+
+class ApplicationUpdate(BaseModel):
+    application_status: str | None = None
+    notes: str | None = None
 
 allowed_origins = [
     "http://localhost:5173",
@@ -152,7 +170,7 @@ def fetch_job_text_from_url(job_url: str) -> str:
             job_url,
             timeout=JOB_URL_TIMEOUT_SECONDS,
             headers={
-                "User-Agent": "PersonalJobApplicationAgent/1.1 (+local MVP)",
+                "User-Agent": "PersonalJobApplicationAgent/1.2 (+local MVP)",
             },
         )
         response.raise_for_status()
@@ -198,6 +216,8 @@ def build_prompt(resume_text: str, job_description: str) -> str:
 - match_reason 使用中文。
 - resume_suggestions 使用中文。
 - cover_letter 使用英文。
+- company_name 使用 JD 中识别到的公司名；无法识别时使用 "Unknown Company"。
+- job_title 使用 JD 中识别到的岗位名；无法识别时使用 "Unknown Position"。
 - 只输出合法 JSON。
 - 不要输出 markdown。
 - 不要输出 ```json 或任何代码块。
@@ -206,6 +226,8 @@ def build_prompt(resume_text: str, job_description: str) -> str:
 
 输出 JSON schema：
 {{
+  "company_name": "string",
+  "job_title": "string",
   "job_summary": "string",
   "match_score": 0,
   "match_reason": "string",
@@ -282,8 +304,15 @@ def normalize_string(value: Any) -> str:
     return str(value)
 
 
+def normalize_named_field(value: Any, fallback: str) -> str:
+    text = normalize_string(value).strip()
+    return text or fallback
+
+
 def normalize_result(data: dict[str, Any]) -> dict[str, Any]:
     return {
+        "company_name": normalize_named_field(data.get("company_name"), "Unknown Company"),
+        "job_title": normalize_named_field(data.get("job_title"), "Unknown Position"),
         "job_summary": normalize_string(data.get("job_summary")),
         "match_score": normalize_score(data.get("match_score", 0)),
         "match_reason": normalize_string(data.get("match_reason")),
@@ -357,10 +386,38 @@ def analyze_with_deepseek(resume_text: str, job_description: str) -> dict[str, A
     return result
 
 
+def validate_application_status(value: str | None, *, required: bool) -> str | None:
+    status = (value or "").strip()
+    if status == "All" and not required:
+        return None
+
+    if not status:
+        if required:
+            raise HTTPException(status_code=400, detail="application_status is required.")
+        return None
+
+    if status not in ALLOWED_APPLICATION_STATUSES:
+        allowed = ", ".join(ALLOWED_APPLICATION_STATUSES)
+        raise HTTPException(
+            status_code=400,
+            detail=f"application_status must be one of: {allowed}.",
+        )
+
+    return status
+
+
+def field_was_provided(model: BaseModel, field_name: str) -> bool:
+    fields_set = getattr(model, "model_fields_set", None)
+    if fields_set is None:
+        fields_set = getattr(model, "__fields_set__", set())
+    return field_name in fields_set
+
+
 @app.get("/")
 def root() -> dict[str, str]:
     return {
         "message": "Personal Job Application Agent API",
+        "version": APP_VERSION,
         "docs": "/docs",
         "health": "/api/health",
     }
@@ -371,11 +428,63 @@ def health_check() -> dict[str, str]:
     return {"status": "ok", "service": APP_NAME, "version": APP_VERSION}
 
 
+@app.get("/api/applications")
+def get_applications(
+    status: str | None = Query(None),
+    search: str | None = Query(None),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+) -> dict[str, Any]:
+    clean_status = validate_application_status(status, required=False)
+    clean_search = (search or "").strip() or None
+    items, total = list_application_records(
+        status=clean_status,
+        search=clean_search,
+        limit=limit,
+        offset=offset,
+    )
+    return {"items": items, "total": total, "limit": limit, "offset": offset}
+
+
+@app.get("/api/applications/{application_id}")
+def get_application(application_id: int) -> dict[str, Any]:
+    record = get_application_record(application_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="Application record not found.")
+    return record
+
+
+@app.patch("/api/applications/{application_id}")
+def patch_application(application_id: int, payload: ApplicationUpdate) -> dict[str, Any]:
+    clean_status = validate_application_status(payload.application_status, required=True)
+    notes_provided = field_was_provided(payload, "notes")
+    updated_record = update_application_record(
+        application_id,
+        application_status=clean_status,
+        notes=payload.notes,
+        update_notes=notes_provided,
+    )
+
+    if updated_record is None:
+        raise HTTPException(status_code=404, detail="Application record not found.")
+
+    return updated_record
+
+
+@app.delete("/api/applications/{application_id}")
+def delete_application(application_id: int) -> dict[str, Any]:
+    deleted = delete_application_record(application_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Application record not found.")
+    return {"deleted": True, "id": application_id}
+
+
 @app.post("/api/analyze")
 async def analyze(
     resume: UploadFile | None = File(None),
     job_text: str | None = Form(None),
     job_url: str | None = Form(None),
+    save_to_history: bool = Form(True),
 ) -> dict[str, Any]:
     logger.info("Received analysis request")
 
@@ -411,4 +520,21 @@ async def analyze(
     if jd_was_truncated:
         logger.info("JD text truncated characters=%s", MAX_JOB_TEXT_CHARS)
 
-    return analyze_with_deepseek(resume_text, job_description)
+    result = analyze_with_deepseek(resume_text, job_description)
+    application_id: int | None = None
+    saved_to_history = False
+
+    if save_to_history:
+        application_id = insert_application_record(
+            result,
+            job_url=clean_job_url or None,
+            resume_filename=resume.filename or None,
+        )
+        saved_to_history = True
+        logger.info("Analysis saved to history application_id=%s", application_id)
+
+    return {
+        **result,
+        "application_id": application_id,
+        "saved_to_history": saved_to_history,
+    }

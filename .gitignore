@@ -1,6 +1,12 @@
 .env
 .env.local
 *.env
+backend/data/*.db
+backend/data/*.sqlite
+backend/data/*.sqlite3
+*.db
+*.sqlite
+*.sqlite3
 __pycache__/
 *.pyc
 node_modules/
