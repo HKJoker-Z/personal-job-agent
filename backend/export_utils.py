@@ -233,6 +233,33 @@ def add_upgraded_bullets(
     story.append(Spacer(1, 0.06 * inch))
 
 
+def add_rag_sources(
+    story: list[Any],
+    record: dict[str, Any],
+    heading_style: ParagraphStyle,
+    body_style: ParagraphStyle,
+) -> None:
+    add_heading(story, "RAG Sources", heading_style)
+    sources = record.get("rag_sources")
+    if not isinstance(sources, list) or not sources:
+        story.append(Paragraph("No RAG sources used.", body_style))
+        story.append(Spacer(1, 0.14 * inch))
+        return
+
+    for source in sources:
+        item = as_dict(source)
+        title = paragraph_text(item.get("document_title"), "Untitled knowledge document")
+        category = paragraph_text(item.get("category"), "Other")
+        chunk_index = paragraph_text(item.get("chunk_index"), "0")
+        reason = paragraph_text(item.get("relevance_reason"), "No relevance reason provided.")
+        story.append(Paragraph(f"<b>{title}</b>", body_style))
+        story.append(Paragraph(f"Category: {category} | Chunk Index: {chunk_index}", body_style))
+        story.append(Paragraph(f"Reason: {reason}", body_style))
+        story.append(Spacer(1, 0.1 * inch))
+
+    story.append(Spacer(1, 0.06 * inch))
+
+
 def build_analysis_report_pdf(record: dict[str, Any]) -> BytesIO:
     buffer = BytesIO()
     document = SimpleDocTemplate(
@@ -293,6 +320,7 @@ def build_analysis_report_pdf(record: dict[str, Any]) -> BytesIO:
         body_style,
     )
     add_upgraded_bullets(story, record, heading_style, body_style)
+    add_rag_sources(story, record, heading_style, body_style)
     add_paragraph_block(
         story,
         "Cover Letter",
