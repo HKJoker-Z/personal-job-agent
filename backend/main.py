@@ -13,7 +13,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from openai import OpenAI
 from pydantic import BaseModel
 from pypdf import PdfReader
@@ -28,12 +28,17 @@ from database import (
     list_application_records,
     update_application_record,
 )
+from export_utils import (
+    build_analysis_report_pdf,
+    build_cover_letter_docx,
+    build_export_filename,
+)
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 load_dotenv(ROOT_DIR / ".env")
 
 APP_NAME = "personal-job-agent"
-APP_VERSION = "1.3"
+APP_VERSION = "1.4"
 DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 DEEPSEEK_MODEL = "deepseek-chat"
 MAX_RESUME_TEXT_CHARS = 18000
@@ -67,6 +72,8 @@ ATS_ANALYSIS_FIELDS = (
     "missing_keywords",
     "keyword_suggestions",
 )
+DOCX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+PDF_MEDIA_TYPE = "application/pdf"
 
 logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO"),
@@ -95,6 +102,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["Content-Disposition"],
 )
 
 
@@ -197,7 +205,7 @@ def fetch_job_text_from_url(job_url: str) -> str:
             job_url,
             timeout=JOB_URL_TIMEOUT_SECONDS,
             headers={
-                "User-Agent": "PersonalJobApplicationAgent/1.3 (+local MVP)",
+                "User-Agent": "PersonalJobApplicationAgent/1.4 (+local MVP)",
             },
         )
         response.raise_for_status()
@@ -614,6 +622,17 @@ def field_was_provided(model: BaseModel, field_name: str) -> bool:
     return field_name in fields_set
 
 
+def get_existing_application_record(application_id: int) -> dict[str, Any]:
+    record = get_application_record(application_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="Application record not found.")
+    return record
+
+
+def attachment_headers(filename: str) -> dict[str, str]:
+    return {"Content-Disposition": f'attachment; filename="{filename}"'}
+
+
 @app.get("/")
 def root() -> dict[str, str]:
     return {
@@ -649,10 +668,47 @@ def get_applications(
 
 @app.get("/api/applications/{application_id}")
 def get_application(application_id: int) -> dict[str, Any]:
-    record = get_application_record(application_id)
-    if record is None:
-        raise HTTPException(status_code=404, detail="Application record not found.")
-    return record
+    return get_existing_application_record(application_id)
+
+
+@app.get("/api/applications/{application_id}/cover-letter.docx")
+def export_cover_letter_docx(application_id: int) -> StreamingResponse:
+    record = get_existing_application_record(application_id)
+    buffer = build_cover_letter_docx(record)
+    filename = build_export_filename("cover-letter", record, "docx")
+    logger.info("Cover letter export generated application_id=%s", application_id)
+    return StreamingResponse(
+        buffer,
+        media_type=DOCX_MEDIA_TYPE,
+        headers=attachment_headers(filename),
+    )
+
+
+@app.head("/api/applications/{application_id}/cover-letter.docx")
+def head_cover_letter_docx(application_id: int) -> Response:
+    record = get_existing_application_record(application_id)
+    filename = build_export_filename("cover-letter", record, "docx")
+    return Response(media_type=DOCX_MEDIA_TYPE, headers=attachment_headers(filename))
+
+
+@app.get("/api/applications/{application_id}/report.pdf")
+def export_analysis_report_pdf(application_id: int) -> StreamingResponse:
+    record = get_existing_application_record(application_id)
+    buffer = build_analysis_report_pdf(record)
+    filename = build_export_filename("analysis-report", record, "pdf")
+    logger.info("Analysis report export generated application_id=%s", application_id)
+    return StreamingResponse(
+        buffer,
+        media_type=PDF_MEDIA_TYPE,
+        headers=attachment_headers(filename),
+    )
+
+
+@app.head("/api/applications/{application_id}/report.pdf")
+def head_analysis_report_pdf(application_id: int) -> Response:
+    record = get_existing_application_record(application_id)
+    filename = build_export_filename("analysis-report", record, "pdf")
+    return Response(media_type=PDF_MEDIA_TYPE, headers=attachment_headers(filename))
 
 
 @app.patch("/api/applications/{application_id}")

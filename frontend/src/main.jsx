@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import "./styles.css";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://101.34.61.52:8000";
+const APP_VERSION = "1.4";
 const APPLICATION_STATUSES = ["Saved", "Applied", "Interview", "Rejected", "Offer"];
 const SCORING_DIMENSIONS = [
   { key: "skills_match", label: "Skills Match" },
@@ -84,6 +85,59 @@ async function requestJson(url, options, fallback) {
   return data || {};
 }
 
+function getDownloadFilename(response, fallback) {
+  const disposition = response.headers.get("Content-Disposition") || "";
+  const match = disposition.match(/filename="([^"]+)"/i) || disposition.match(/filename=([^;]+)/i);
+  if (!match) {
+    return fallback;
+  }
+
+  return match[1].trim() || fallback;
+}
+
+async function downloadBlob(url, fallbackFilename, fallbackError) {
+  const response = await fetch(url);
+  if (!response.ok) {
+    const data = await response.json().catch(() => null);
+    throw new Error(getBackendErrorMessage(data, fallbackError));
+  }
+
+  const blob = await response.blob();
+  const filename = getDownloadFilename(response, fallbackFilename);
+  const objectUrl = window.URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = objectUrl;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.URL.revokeObjectURL(objectUrl);
+}
+
+function statusClassName(status) {
+  const cleanStatus = String(status || "Saved").toLowerCase();
+  return `status-pill status-${cleanStatus}`;
+}
+
+function StatusBadge({ status }) {
+  const displayStatus = APPLICATION_STATUSES.includes(status) ? status : "Saved";
+  return <span className={statusClassName(displayStatus)}>{displayStatus}</span>;
+}
+
+function ScoreSummary({ score }) {
+  const safeScore = clampScore(score);
+
+  return (
+    <div className="score-summary" aria-label={`Match score ${safeScore} out of 100`}>
+      <strong>{safeScore}</strong>
+      <span>/100</span>
+      <div className="score-meter" aria-hidden="true">
+        <div style={{ width: `${safeScore}%` }} />
+      </div>
+    </div>
+  );
+}
+
 function ResultList({ title, items }) {
   const safeItems = asArray(items);
 
@@ -98,6 +152,67 @@ function ResultList({ title, items }) {
         </ul>
       ) : (
         <p className="muted">No items found.</p>
+      )}
+    </section>
+  );
+}
+
+function ExportActions({ applicationId, enabled = true }) {
+  const [loadingType, setLoadingType] = useState("");
+  const [error, setError] = useState("");
+  const canDownload = enabled && Boolean(applicationId);
+
+  async function handleDownload(type) {
+    if (!canDownload || loadingType) {
+      return;
+    }
+
+    const isDocx = type === "docx";
+    const endpoint = isDocx ? "cover-letter.docx" : "report.pdf";
+    const fallbackFilename = isDocx
+      ? `cover-letter-${applicationId}.docx`
+      : `analysis-report-${applicationId}.pdf`;
+    const fallbackError = isDocx
+      ? "Failed to download cover letter DOCX."
+      : "Failed to download analysis report PDF.";
+
+    setLoadingType(type);
+    setError("");
+    try {
+      await downloadBlob(
+        `${API_BASE_URL}/api/applications/${applicationId}/${endpoint}`,
+        fallbackFilename,
+        fallbackError,
+      );
+    } catch (err) {
+      setError(getRequestErrorMessage(err, fallbackError));
+    } finally {
+      setLoadingType("");
+    }
+  }
+
+  return (
+    <section className="result-section export-section">
+      <div className="section-heading-row">
+        <h3>Exports</h3>
+        {loadingType && <span className="muted">Preparing download...</span>}
+      </div>
+      {canDownload ? (
+        <div className="export-actions">
+          <button type="button" onClick={() => handleDownload("docx")} disabled={Boolean(loadingType)}>
+            {loadingType === "docx" ? "Preparing DOCX..." : "Download Cover Letter DOCX"}
+          </button>
+          <button type="button" onClick={() => handleDownload("pdf")} disabled={Boolean(loadingType)}>
+            {loadingType === "pdf" ? "Preparing PDF..." : "Download Analysis Report PDF"}
+          </button>
+        </div>
+      ) : (
+        <p className="muted">Enable save to history to download DOCX/PDF exports.</p>
+      )}
+      {error && (
+        <div className="inline-error" role="alert">
+          {error}
+        </div>
       )}
     </section>
   );
@@ -234,7 +349,7 @@ function AnalysisResult({ result }) {
       <div className="score-row">
         <div>
           <span className="label">Match Score</span>
-          <strong>{score}/100</strong>
+          <ScoreSummary score={score} />
         </div>
         <div className="job-identity">
           <span>{displayCompany(result?.company_name)}</span>
@@ -264,6 +379,7 @@ function AnalysisResult({ result }) {
       <ScoringBreakdownSection breakdown={result.scoring_breakdown} />
       <ATSAnalysisSection analysis={result.ats_analysis} />
       <UpgradedResumeBulletsSection bullets={result.upgraded_resume_bullets} />
+      <ExportActions applicationId={result.application_id} enabled={savedToHistory} />
 
       <section className="result-section cover-letter-section">
         <h3>English Cover Letter</h3>
@@ -345,6 +461,13 @@ function AnalyzePage() {
   return (
     <>
       <form className="panel form-panel" onSubmit={handleAnalyze}>
+        <div className="panel-heading">
+          <div>
+            <span className="eyebrow">Analyze</span>
+            <h2>Resume-JD Matching</h2>
+          </div>
+          <span className="version-pill">v{APP_VERSION}</span>
+        </div>
         <label>
           Resume
           <input
@@ -404,6 +527,7 @@ function AnalyzePage() {
 
       {!hasResult && !loading && !error && (
         <section className="panel state-panel">
+          <strong>Ready for one focused application analysis.</strong>
           <p className="muted">Upload your resume and provide a job description or URL to start analysis.</p>
         </section>
       )}
@@ -554,6 +678,13 @@ function HistoryPage() {
   return (
     <>
       <section className="panel history-panel">
+        <div className="panel-heading">
+          <div>
+            <span className="eyebrow">History</span>
+            <h2>Application Records</h2>
+          </div>
+          <span className="version-pill">{total} saved</span>
+        </div>
         <div className="history-toolbar">
           <label>
             Status
@@ -599,7 +730,8 @@ function HistoryPage() {
 
       {!loading && !error && records.length === 0 && (
         <section className="panel state-panel">
-          <p className="muted">No application records yet.</p>
+          <strong>No application records yet.</strong>
+          <p className="muted">Save an analysis result to build your application history.</p>
         </section>
       )}
 
@@ -629,7 +761,7 @@ function HistoryPage() {
                     <td>{displayPosition(record.job_title)}</td>
                     <td>{clampScore(record.match_score)}/100</td>
                     <td>
-                      <span className="status-pill">{record.application_status || "Saved"}</span>
+                      <StatusBadge status={record.application_status} />
                     </td>
                     <td>{formatDate(record.created_at)}</td>
                     <td>
@@ -683,7 +815,9 @@ function HistoryPage() {
           <div className="detail-grid">
             <div>
               <span className="label">Status</span>
-              <p>{selectedRecord.application_status || "Saved"}</p>
+              <p>
+                <StatusBadge status={selectedRecord.application_status} />
+              </p>
             </div>
             <div>
               <span className="label">Created</span>
@@ -719,6 +853,7 @@ function HistoryPage() {
           <ScoringBreakdownSection breakdown={selectedRecord.scoring_breakdown} />
           <ATSAnalysisSection analysis={selectedRecord.ats_analysis} />
           <UpgradedResumeBulletsSection bullets={selectedRecord.upgraded_resume_bullets} />
+          <ExportActions applicationId={selectedRecord.id} />
 
           <section className="result-section cover-letter-section">
             <h3>Cover Letter</h3>
@@ -783,8 +918,17 @@ function App() {
   return (
     <main className="app-shell">
       <header className="page-header">
-        <h1>Personal Job Application Agent</h1>
-        <p>Upload your resume, analyze one role, and track saved application records locally.</p>
+        <div className="header-title-row">
+          <h1>Personal Job Application Agent</h1>
+          <span className="version-pill">v{APP_VERSION}</span>
+        </div>
+        <p>Resume-JD matching, ATS analysis, cover letter generation, and application tracking.</p>
+        <div className="feature-strip" aria-label="Core product features">
+          <span>Explainable scoring</span>
+          <span>ATS keywords</span>
+          <span>DOCX/PDF exports</span>
+          <span>SQLite history</span>
+        </div>
       </header>
 
       <nav className="tabs" aria-label="Main sections">

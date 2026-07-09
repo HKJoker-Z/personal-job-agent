@@ -1,56 +1,39 @@
 # Personal Job Application Agent
 
-Version 1.3
+Current version: v1.4
 
-Personal Job Application Agent is a local-first Resume-JD Matching Agent for job application preparation and tracking. It parses a PDF or DOCX resume, accepts either pasted job description text or one job URL, uses the DeepSeek API to generate an explainable fit analysis, ATS keyword analysis, resume bullet optimization suggestions, and an English cover letter, then can save successful analysis results to a local SQLite application history.
+Personal Job Application Agent is a local-first Job Application Assistant. It parses a PDF or DOCX resume, accepts pasted job description text or one job URL, uses the DeepSeek API to generate explainable Resume-JD matching results, creates an English cover letter, tracks saved applications in SQLite, and exports application materials as DOCX/PDF files.
 
-## Current Features
+## Core Features
 
-- Upload a PDF or DOCX resume
-- Paste a job description
-- Provide one job posting URL and extract readable page text
-- Analyze resume and JD fit with DeepSeek
-- Return company name, job title, job summary, match score, match reason, matched skills, and missing skills
-- Explain match score through five scoring dimensions
-- Calculate final match score with backend-controlled weighted scoring
-- Analyze ATS keywords from the JD against resume coverage
-- Suggest safer resume bullet point rewrites based only on existing resume content
-- Generate Chinese resume improvement suggestions
-- Generate an English cover letter
-- Save successful analysis results to local SQLite history
-- View historical application records
-- Update application status: `Saved`, `Applied`, `Interview`, `Rejected`, `Offer`
-- Delete application records
-- Search and filter records by status, company name, or job title
+- Resume parsing from PDF and DOCX
+- Job description analysis from pasted text or one user-provided job URL
+- DeepSeek-powered resume and job matching analysis
+- Explainable scoring breakdown across skills, projects, education, work experience, and keyword match
+- Backend-controlled weighted match score calculation
+- ATS keyword analysis
+- Resume bullet optimization suggestions based only on existing resume content
+- English cover letter generation
+- SQLite application history tracking
+- Status updates: `Saved`, `Applied`, `Interview`, `Rejected`, `Offer`
+- History search and filtering
+- DOCX cover letter export
+- PDF analysis report export
 
-## Version 1.3 Updates
+## Demo / Screenshots
 
-- Explainable scoring breakdown for skills, projects, education, work experience, and keyword match
-- Weighted match score calculation controlled by the backend
-- ATS keyword analysis with important, matched, and missing keywords
-- Resume bullet point optimization suggestions
-- Scoring and ATS results saved to SQLite history
-
-## Scoring Weights
-
-The final `match_score` returned by the backend is calculated from `scoring_breakdown`:
-
-- Skills Match: 35%
-- Project Experience: 25%
-- Education: 15%
-- Work Experience: 15%
-- Keyword Match: 10%
-
-If the AI returns a separate `match_score`, it is treated only as a reference. The backend normalized weighted score is the final score returned by the API.
+Screenshots can be added here after running the app.
 
 ## Tech Stack
 
 - Frontend: React + Vite
 - Backend: Python FastAPI
 - LLM Provider: DeepSeek API
-- Resume parsing: `pypdf`, `python-docx`
-- URL extraction: `requests`, `beautifulsoup4`
 - Storage: SQLite through Python `sqlite3`
+- Resume parsing: `pypdf`, `python-docx`
+- DOCX export: `python-docx`
+- PDF export: `reportlab`
+- URL extraction: `requests`, `beautifulsoup4`
 
 ## Project Structure
 
@@ -60,6 +43,7 @@ If the AI returns a separate `match_score`, it is treated only as a reference. T
 │   ├── data/
 │   │   └── app.db            # generated locally, not committed
 │   ├── database.py
+│   ├── export_utils.py
 │   ├── main.py
 │   └── requirements.txt
 ├── frontend/
@@ -68,22 +52,9 @@ If the AI returns a separate `match_score`, it is treated only as a reference. T
 │   └── src/
 │       ├── main.jsx
 │       └── styles.css
-├── .env.example
 ├── .gitignore
 └── README.md
 ```
-
-## Database
-
-SQLite database file:
-
-```text
-backend/data/app.db
-```
-
-The backend creates `backend/data/` and `app.db` automatically when it starts or when database helpers are imported.
-
-The database stores application tracking records only. It saves `resume_filename`, normalized AI analysis results, `scoring_breakdown`, `ats_analysis`, `upgraded_resume_bullets`, status, and notes. It does not save uploaded resume files, and it does not save complete `resume_text`. Database files are ignored by Git.
 
 ## Environment Variables
 
@@ -143,7 +114,7 @@ Expected response:
 {
   "status": "ok",
   "service": "personal-job-agent",
-  "version": "1.3"
+  "version": "1.4"
 }
 ```
 
@@ -181,6 +152,18 @@ Docs:     http://101.34.61.52:8000/docs
 
 If another device cannot connect, check that the cloud security group or firewall allows TCP ports `5173` and `8000`.
 
+## Database
+
+SQLite database file:
+
+```text
+backend/data/app.db
+```
+
+The backend creates `backend/data/` and `app.db` automatically. The database stores application tracking records, normalized AI analysis results, scoring breakdowns, ATS analysis, upgraded resume bullets, status, and notes.
+
+The database does not store uploaded resume files, and it does not store complete `resume_text`. Database files are ignored by Git.
+
 ## API
 
 API documentation:
@@ -204,72 +187,22 @@ Request type: `multipart/form-data`
 
 If both `job_text` and `job_url` are provided, `job_text` is used first.
 
-Example:
+Response includes:
 
-```bash
-curl -X POST http://localhost:8000/api/analyze \
-  -F "resume=@/path/to/resume.pdf" \
-  -F "job_text=We are hiring a full-stack engineer..." \
-  -F "save_to_history=true"
-```
-
-Response shape:
-
-```json
-{
-  "company_name": "string",
-  "job_title": "string",
-  "job_summary": "string",
-  "match_score": 0,
-  "match_reason": "string",
-  "matched_skills": ["string"],
-  "missing_skills": ["string"],
-  "resume_suggestions": ["string"],
-  "cover_letter": "string",
-  "scoring_breakdown": {
-    "skills_match": {
-      "score": 0,
-      "reason": "string",
-      "evidence": ["string"]
-    },
-    "project_experience": {
-      "score": 0,
-      "reason": "string",
-      "evidence": ["string"]
-    },
-    "education": {
-      "score": 0,
-      "reason": "string",
-      "evidence": ["string"]
-    },
-    "work_experience": {
-      "score": 0,
-      "reason": "string",
-      "evidence": ["string"]
-    },
-    "keyword_match": {
-      "score": 0,
-      "reason": "string",
-      "evidence": ["string"]
-    }
-  },
-  "ats_analysis": {
-    "important_keywords": ["string"],
-    "matched_keywords": ["string"],
-    "missing_keywords": ["string"],
-    "keyword_suggestions": ["string"]
-  },
-  "upgraded_resume_bullets": [
-    {
-      "original": "string",
-      "improved": "string",
-      "reason": "string"
-    }
-  ],
-  "application_id": 1,
-  "saved_to_history": true
-}
-```
+- `company_name`
+- `job_title`
+- `job_summary`
+- `match_score`
+- `match_reason`
+- `matched_skills`
+- `missing_skills`
+- `resume_suggestions`
+- `cover_letter`
+- `scoring_breakdown`
+- `ats_analysis`
+- `upgraded_resume_bullets`
+- `application_id`
+- `saved_to_history`
 
 ### `GET /api/applications`
 
@@ -308,21 +241,85 @@ Deletes one historical application record.
 }
 ```
 
+### `GET /api/applications/{id}/cover-letter.docx`
+
+Exports the saved cover letter for one application record as a DOCX file.
+
+The generated document contains:
+
+- Cover Letter title
+- Company Name
+- Job Title
+- Generated Cover Letter
+
+If no cover letter was generated, the DOCX contains `No cover letter generated.`.
+
+### `GET /api/applications/{id}/report.pdf`
+
+Exports a full application analysis report as a PDF file.
+
+The generated report contains:
+
+- Company Name
+- Job Title
+- Job URL
+- Application Status
+- Match Score
+- Match Reason
+- Job Summary
+- Scoring Breakdown
+- ATS Keyword Analysis
+- Matched Skills
+- Missing Skills
+- Resume Suggestions
+- Upgraded Resume Bullets
+- Cover Letter
+
+## Export Behavior
+
+- Cover Letter DOCX files are generated in memory with `python-docx`.
+- Analysis Report PDF files are generated in memory with `reportlab`.
+- Exported files are returned directly to the browser.
+- Exported files are not stored long-term on the server.
+- Exported files do not include API keys, uploaded resume files, or complete `resume_text`.
+
+## Scoring Weights
+
+The final `match_score` returned by the backend is calculated from `scoring_breakdown`:
+
+- Skills Match: 35%
+- Project Experience: 25%
+- Education: 15%
+- Work Experience: 15%
+- Keyword Match: 10%
+
+If the AI returns a separate `match_score`, it is treated only as a reference. The backend normalized weighted score is the final score returned by the API.
+
 ## Safety Notes
 
+- Do not commit `.env`, `.env.local`, or `*.env` files.
+- Do not commit SQLite database files such as `backend/data/app.db`.
+- Do not commit generated DOCX/PDF export files.
+- Do not put real API keys in source code, README examples, screenshots, logs, or frontend output.
+- Uploaded resumes are processed in memory and are not saved to disk.
+- The database does not store complete `resume_text`.
+- Backend logs record steps and error types, not full resume content, full JD content, cover letter content, or report content.
+- This project does not bulk crawl job boards.
+- Only analyze user-provided text or a single user-provided job URL.
 - Do not invent resume experience, projects, education, work experience, or skills.
 - Resume bullet improvements must be based only on existing resume content.
 - ATS keyword suggestions should only recommend adding keywords when the user truly has relevant experience.
-- Do not commit `.env`, `.env.local`, or `*.env` files.
-- Do not commit SQLite database files such as `backend/data/app.db`.
-- Do not put real API keys in source code, README examples, screenshots, logs, or frontend output.
-- Backend logs record steps and error types, not full resume content or full JD content.
-- Uploaded resumes are processed in memory and are not saved to disk.
-- The database does not store complete `resume_text`.
-- This project does not bulk crawl job boards.
-- Only analyze user-provided text or a single user-provided job URL.
 - Public dev access is for testing only; production should use HTTPS and a proper deployment setup.
+
+## Version History
+
+- v1.1: Stability improvements
+- v1.2: SQLite application tracking
+- v1.3: Explainable scoring and ATS analysis
+- v1.4: DOCX/PDF export and product polish
 
 ## Roadmap
 
-- Version 1.4: DOCX/PDF export and deployment polish
+- v1.5: Docker and production deployment
+- v1.6: Agent workflow and next-action recommendation
+- v1.7: Evaluation and testing suite
