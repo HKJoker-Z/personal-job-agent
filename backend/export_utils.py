@@ -174,6 +174,7 @@ def add_summary_table(
         ["Application Status", paragraph_text(record.get("application_status"), "Saved")],
         ["Match Score", f"{clean_text(record.get('match_score'), '0')}/100"],
         ["RAG Mode", paragraph_text(record.get("rag_mode"), "Not recorded")],
+        ["Security Status", paragraph_text(record.get("security_status"), "not_available")],
     ]
     table = Table(
         [
@@ -349,6 +350,58 @@ def add_agent_workflow(
     story.append(Spacer(1, 0.06 * inch))
 
 
+def add_security_audit(
+    story: list[Any],
+    record: dict[str, Any],
+    heading_style: ParagraphStyle,
+    body_style: ParagraphStyle,
+) -> None:
+    add_heading(story, "AI Security Audit", heading_style)
+    scan = as_dict(record.get("security_scan"))
+    summary = as_dict(scan.get("redaction_summary"))
+    status = clean_text(record.get("security_status"), "not_available")
+    policy_version = clean_text(record.get("security_policy_version"), "Not recorded")
+    risk_level = clean_text(scan.get("risk_level"), "not_available")
+    prompt_injection = "Yes" if scan.get("prompt_injection_detected") else "No"
+    sensitive_data = "Yes" if scan.get("sensitive_data_detected") else "No"
+    redaction_counts = (
+        f"Email: {clean_text(summary.get('email_count'), '0')}; "
+        f"Phone: {clean_text(summary.get('phone_count'), '0')}; "
+        f"Secrets: {clean_text(summary.get('secret_count'), '0')}; "
+        f"Private keys: {clean_text(summary.get('private_key_count'), '0')}"
+    )
+
+    for label, value in (
+        ("Policy Version", policy_version),
+        ("Security Status", status),
+        ("Risk Level", risk_level),
+        ("Prompt Injection Detected", prompt_injection),
+        ("Sensitive Credential Detected", sensitive_data),
+        ("PII Redaction Counts", redaction_counts),
+    ):
+        story.append(Paragraph(f"<b>{escape(label)}:</b> {paragraph_text(value)}", body_style))
+
+    findings = scan.get("findings")
+    story.append(Paragraph("<b>Safe Findings Summary</b>", body_style))
+    if isinstance(findings, list) and findings:
+        for item in findings:
+            finding = as_dict(item)
+            category = paragraph_text(finding.get("category"), "security")
+            severity = paragraph_text(finding.get("severity"), "info")
+            source = paragraph_text(finding.get("source"), "unknown")
+            message = paragraph_text(finding.get("message"), "Security finding detected.")
+            story.append(
+                Paragraph(
+                    f"- {category} | {severity} | {source}: {message}",
+                    body_style,
+                )
+            )
+    else:
+        story.append(Paragraph("No security findings recorded.", body_style))
+
+    story.append(Spacer(1, 0.14 * inch))
+
+
 def add_next_action(
     story: list[Any],
     record: dict[str, Any],
@@ -479,6 +532,7 @@ def build_analysis_report_pdf(record: dict[str, Any]) -> BytesIO:
     )
     add_upgraded_bullets(story, record, heading_style, body_style)
     add_rag_sources(story, record, heading_style, body_style)
+    add_security_audit(story, record, heading_style, body_style)
     add_agent_workflow(story, record, heading_style, body_style)
     add_next_action(story, record, heading_style, body_style)
     add_human_decision(story, record, heading_style, body_style)

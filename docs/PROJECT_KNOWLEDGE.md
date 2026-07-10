@@ -4,7 +4,7 @@
 
 Personal Job Application Agent is a full-stack AI-powered job application assistant. It helps a user analyze how well a resume matches a job description, generate an English cover letter, review ATS keyword coverage, track saved job applications, and export reusable application materials.
 
-The project uses React and Vite on the frontend, FastAPI and Python on the backend, SQLite for local application storage and RAG indexing, and the DeepSeek API as the LLM reasoning engine. It supports PDF and DOCX resume parsing, JD analysis from pasted text or one user-provided job URL, explainable scoring, ATS keyword analysis, application tracking, DOCX/PDF export, Project Knowledge RAG, custom agent workflow orchestration, deterministic next-action recommendation, and human-in-the-loop decision recording.
+The project uses React and Vite on the frontend, FastAPI and Python on the backend, SQLite for local application storage and RAG indexing, deterministic Python security utilities for AI safety controls, and the DeepSeek API as the LLM reasoning engine. It supports PDF and DOCX resume parsing, JD analysis from pasted text or one user-provided job URL, explainable scoring, ATS keyword analysis, application tracking, DOCX/PDF export, Project Knowledge RAG, custom agent workflow orchestration, deterministic next-action recommendation, human-in-the-loop decision recording, prompt injection mitigation, secret scanning, PII minimization, safe prompt construction, LLM output leakage scanning, and security audit trails.
 
 The RAG design is intentionally project-centered. Instead of behaving like a general-purpose document storage product, the system retrieves evidence from a curated and auditable project skill evidence file: `docs/PROJECT_KNOWLEDGE.md`. This evidence helps the model ground job matching, cover letter generation, ATS analysis, and resume bullet optimization in real project experience.
 
@@ -155,12 +155,39 @@ Skills demonstrated:
 - API development
 - SQLite schema migration
 
+### Version 1.7 - AI Security and Prompt Injection Mitigation
+
+Version 1.7 added a defense-in-depth AI security layer around the RAG-powered agent workflow.
+
+- Added deterministic prompt injection detection.
+- Added credential and secret scanning.
+- Added PII minimization before LLM invocation.
+- Added safe prompt section isolation.
+- Added LLM output leakage scanning.
+- Added security audit trails.
+- Integrated security steps into the Agent workflow.
+- Added security unit and integration tests.
+
+Skills demonstrated:
+
+- AI security
+- Prompt injection mitigation
+- Data leakage prevention
+- Secure prompt construction
+- Untrusted input isolation
+- Secret detection
+- PII minimization
+- LLM output validation
+- Responsible AI
+- Defense-in-depth design
+
 ## 3. Technical Stack
 
 - React: Builds the frontend user interface for Analyze, History, and Project Knowledge workflows.
 - Vite: Provides the frontend development and production build toolchain.
 - FastAPI: Provides backend REST APIs for resume analysis, application tracking, export, Project Knowledge RAG, workflow audit trails, and next-action decisions.
 - Python: Implements backend orchestration, parsing, validation, SQLite operations, deterministic recommendation rules, and document export.
+- Python standard library security utilities: Implement deterministic regex-based prompt injection detection, credential scanning, PII redaction, output leakage scanning, and safe security finding normalization.
 - SQLite: Stores application records and local RAG metadata/chunks.
 - SQLite FTS5: Provides local full-text retrieval for Project Knowledge chunks.
 - DeepSeek API: Provides LLM reasoning for resume-JD matching, ATS analysis, cover letter generation, and structured JSON output.
@@ -168,6 +195,7 @@ Skills demonstrated:
 - python-docx: Extracts DOCX resume text and generates DOCX cover letters.
 - reportlab: Generates PDF analysis reports.
 - Custom orchestration layer: Tracks the synchronous Analyze workflow with stable steps, statuses, safe messages, and duration measurements.
+- Safe prompt builder: Constructs prompts with explicit security rules, untrusted data delimiters, prompt size controls, and an internal non-secret leakage detection marker.
 - Rule-based recommendation engine: Generates explainable next actions without an additional LLM call.
 - REST API: Connects the React frontend with FastAPI backend workflows.
 - Git/GitHub: Used for version control, feature branches, release history, and project documentation.
@@ -187,6 +215,12 @@ Skills demonstrated:
 - DeepSeek API integration: The backend calls the DeepSeek API through an OpenAI-compatible client and validates JSON responses.
 - FastAPI API development: The backend exposes REST APIs for Analyze, History, Export, and Project Knowledge status/rebuild/upload/search.
 - Prompt engineering: The backend prompt includes output schema rules, grounding rules, untrusted input handling, and anti-fabrication instructions.
+- AI security: The backend applies deterministic prompt injection detection, secret scanning, PII minimization, untrusted data isolation, and LLM output leakage checks.
+- Prompt injection mitigation: The workflow filters suspicious instruction text from untrusted JD, resume, and Project Knowledge inputs before LLM invocation.
+- Secret detection: The workflow blocks credential-like content such as API keys, bearer tokens, private key headers, password assignments, and database URLs before LLM invocation.
+- PII minimization: The workflow redacts emails, phone numbers, stable address patterns, and token-like URL query parameters from the LLM-bound resume copy.
+- Safe prompt construction: The prompt separates trusted security rules from untrusted resume, JD, and Project Knowledge evidence sections.
+- LLM output validation: The backend scans model output for credential-like content and internal marker leakage before parsing and returning results.
 - Structured JSON output validation: The backend parses and normalizes LLM JSON output before returning or saving it.
 - Workflow automation: Resume parsing, JD analysis, retrieval, LLM scoring, cover letter generation, recommendation, tracking, and export are combined into one workflow.
 - Agentic AI foundation: The app behaves like an agent-style workflow foundation by orchestrating inputs, retrieval, LLM reasoning, validation, evidence reconciliation, recommendation, persistence, and export.
@@ -220,6 +254,7 @@ Skills demonstrated:
 | Project Knowledge RAG | docs/PROJECT_KNOWLEDGE.md, chunking, SQLite | Project-centered RAG, evidence-based generation, retrieval scope control | RAG, Retrieval-Augmented Generation, evidence grounding |
 | SQLite FTS5 retrieval | SQLite FTS5, fallback keyword retrieval | Retrieval pipeline design, local search, resilient implementation | full-text search, FTS5, information retrieval |
 | Agent workflow orchestration | Python dataclasses, FastAPI, SQLite | Custom workflow orchestration, multi-step AI pipeline, execution audit trail | agentic AI foundation, workflow orchestration, audit trail |
+| AI security layer | Python standard library regex, FastAPI, safe prompt builder, SQLite audit fields | Prompt injection mitigation, secret detection, PII minimization, untrusted input isolation, LLM output validation | AI security, prompt injection, data leakage prevention, secure prompt construction |
 | Next-action recommendation | Deterministic Python rules, scoring breakdown, ATS analysis | Rule-based decision support, critical skill analysis, recommendation logic | decision support, next best action, explainable recommendation |
 | Human-in-the-loop decision | FastAPI PATCH API, SQLite, React UI | User-controlled AI workflow, decision recording, workflow governance | human-in-the-loop, HITL, AI governance |
 | Frontend/Backend integration | React, Vite, Fetch API, FastAPI REST API | Full-stack integration, state management, UI workflow design | React, FastAPI, REST API, full-stack |
@@ -236,6 +271,14 @@ Skills demonstrated:
 - RAG sends only top-k relevant chunks from `docs/PROJECT_KNOWLEDGE.md`.
 - The RAG source is curated and auditable.
 - Job descriptions and project knowledge content are treated as untrusted data.
+- Uploaded resumes, pasted JDs, fetched job URL content, Project Knowledge chunks, and LLM output are treated as untrusted data.
+- Deterministic prompt injection detection filters suspicious instruction text before LLM invocation.
+- Critical credential-like content is blocked before LLM invocation.
+- PII minimization redacts emails, phone numbers, stable address patterns, and token-like URL query parameters from the LLM-bound resume copy.
+- Safe prompt construction isolates untrusted resume, JD, and Project Knowledge evidence from trusted security rules.
+- LLM output leakage scanning redacts credential-like content and blocks internal marker leakage.
+- Security findings use stable codes and safe messages without storing full malicious content or detected secret values.
+- These controls are heuristic and reduce risk, but they cannot guarantee complete protection against every prompt injection attack.
 - The system instructs the LLM not to fabricate user experience.
 - Cover letters must be grounded in the resume and retrieved evidence.
 - Generic arbitrary knowledge upload is removed from the product UI in v1.5.2 to reduce retrieval noise and data leakage risk.
@@ -273,6 +316,10 @@ Q: How does the next-action recommendation work?
 
 A: The backend uses deterministic rules based on match score, critical missing skills, ATS keyword gaps, scoring breakdown, and Project Knowledge evidence. It recommends applying now, improving the resume first, upskilling first, saving for later, or skipping the role. The rule-based confidence is an explainable indicator, not a machine learning probability.
 
+Q: How does Version 1.7 reduce prompt injection and data leakage risk?
+
+A: Version 1.7 uses defense-in-depth controls around the LLM call. The backend scans untrusted resume, JD, fetched job URL, and Project Knowledge content for prompt injection patterns, blocks credential-like secrets before LLM invocation, redacts common PII from the LLM-bound resume copy, builds prompts with explicit untrusted data sections, and scans LLM output for credential-like content or internal marker leakage. These are deterministic heuristic controls that reduce risk, but they do not guarantee complete prompt injection prevention or represent a formal security certification.
+
 ## 8. Resume Bullet Examples
 
 - Built a full-stack AI job application assistant using React, FastAPI, SQLite, and DeepSeek API to automate resume-JD matching, ATS analysis, and cover letter generation.
@@ -284,10 +331,10 @@ A: The backend uses deterministic rules based on match score, critical missing s
 - Designed a custom agent orchestration layer that decomposes resume-job analysis into traceable workflow steps, including resume parsing, RAG retrieval, LLM analysis, evidence validation, and recommendation generation.
 - Implemented a deterministic next-action engine with human-in-the-loop decisions to recommend applying, improving the resume, upskilling, saving, or skipping a role.
 - Persisted workflow audit trails and user decisions in SQLite and exposed them through FastAPI, React, and PDF reports.
+- Implemented a defense-in-depth AI security layer with prompt injection detection, secret scanning, PII redaction, untrusted context isolation, and LLM output leakage checks.
 
 ## 9. Future Roadmap
 
-- Version 1.7 AI security and prompt injection mitigation.
 - Version 1.8 Monitoring and evaluation.
 - Version 1.9 Docker and cloud deployment.
 - Version 2.0 MCP server integration.

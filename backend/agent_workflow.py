@@ -152,7 +152,13 @@ class WorkflowContext:
     rag_mode: str = "project"
     rag_top_k: int = 5
     retrieved_chunks: list[dict[str, Any]] = field(default_factory=list)
+    security_filtered_rag_sources: list[dict[str, Any]] = field(default_factory=list)
     rag_sources: list[dict[str, Any]] = field(default_factory=list)
+    sanitized_resume_text: str = ""
+    sanitized_job_text: str = ""
+    safe_prompt: str = ""
+    security_scan: dict[str, Any] = field(default_factory=dict)
+    security_status: str = "passed"
     llm_raw_response: str = ""
     normalized_result: dict[str, Any] = field(default_factory=dict)
     next_action: dict[str, Any] = field(default_factory=dict)

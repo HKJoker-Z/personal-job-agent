@@ -3,7 +3,7 @@ import { createRoot } from "react-dom/client";
 import "./styles.css";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://101.34.61.52:8000";
-const APP_VERSION = "1.6";
+const APP_VERSION = "1.7";
 const APPLICATION_STATUSES = ["Saved", "Applied", "Interview", "Rejected", "Offer"];
 const NEXT_ACTION_DECISIONS = [
   { value: "accepted", label: "Accept Recommendation" },
@@ -115,6 +115,10 @@ function getBackendErrorMessage(data, fallback = "Request failed.") {
     return data.detail;
   }
 
+  if (typeof data.detail === "object") {
+    return data.detail.message || fallback;
+  }
+
   return fallback;
 }
 
@@ -131,7 +135,9 @@ async function requestJson(url, options, fallback) {
   const data = await response.json().catch(() => null);
 
   if (!response.ok) {
-    throw new Error(getBackendErrorMessage(data, fallback));
+    const error = new Error(getBackendErrorMessage(data, fallback));
+    error.payload = data?.detail;
+    throw error;
   }
 
   return data || {};
@@ -174,6 +180,101 @@ function statusClassName(status) {
 function StatusBadge({ status }) {
   const displayStatus = APPLICATION_STATUSES.includes(status) ? status : "Saved";
   return <span className={statusClassName(displayStatus)}>{displayStatus}</span>;
+}
+
+function securityStatusLabel(status) {
+  const cleanStatus = String(status || "not_available").toLowerCase();
+  if (cleanStatus === "passed") {
+    return "Passed";
+  }
+  if (cleanStatus === "passed_with_warnings") {
+    return "Passed with Warnings";
+  }
+  if (cleanStatus === "blocked") {
+    return "Blocked";
+  }
+  return "Not Available";
+}
+
+function securityStatusClassName(status) {
+  const cleanStatus = String(status || "not_available").toLowerCase();
+  return `status-pill security-${cleanStatus}`;
+}
+
+function SecurityBadge({ status }) {
+  return <span className={securityStatusClassName(status)}>{securityStatusLabel(status)}</span>;
+}
+
+function SecurityAuditSection({ scan, status, policyVersion }) {
+  const safeScan = asObject(scan);
+  const summary = asObject(safeScan.redaction_summary);
+  const findings = asArray(safeScan.findings).map((item) => asObject(item));
+  const redactionTotal =
+    (Number.parseInt(summary.email_count, 10) || 0) +
+    (Number.parseInt(summary.phone_count, 10) || 0) +
+    (Number.parseInt(summary.secret_count, 10) || 0) +
+    (Number.parseInt(summary.private_key_count, 10) || 0);
+  const safeStatus = status || "not_available";
+
+  return (
+    <section className="result-section security-section">
+      <div className="section-heading-row">
+        <h3>AI Security Check</h3>
+        <SecurityBadge status={safeStatus} />
+      </div>
+      {safeScan.prompt_injection_detected && (
+        <div className="history-message">
+          Suspicious instructions were detected and removed before the job description was sent to the LLM.
+        </div>
+      )}
+      {safeStatus === "blocked" && (
+        <div className="inline-error" role="alert">
+          Credential-like content was detected. Remove secrets before retrying.
+        </div>
+      )}
+      <div className="security-grid">
+        <div>
+          <span className="label">Security Status</span>
+          <p>{securityStatusLabel(safeStatus)}</p>
+        </div>
+        <div>
+          <span className="label">Risk Level</span>
+          <p>{displayText(safeScan.risk_level, "not_available")}</p>
+        </div>
+        <div>
+          <span className="label">Prompt Injection Detected</span>
+          <p>{safeScan.prompt_injection_detected ? "Yes" : "No"}</p>
+        </div>
+        <div>
+          <span className="label">Sensitive Credential Detected</span>
+          <p>{safeScan.sensitive_data_detected ? "Yes" : "No"}</p>
+        </div>
+        <div>
+          <span className="label">PII Redactions</span>
+          <p>{redactionTotal}</p>
+        </div>
+        <div>
+          <span className="label">Policy Version</span>
+          <p>{displayText(policyVersion || safeScan.policy_version, "not_available")}</p>
+        </div>
+      </div>
+      <div className="findings-list">
+        <h4>Findings</h4>
+        {findings.length ? (
+          findings.map((finding, index) => (
+            <article className="finding-card" key={`${finding.code || "finding"}-${index}`}>
+              <span>{displayText(finding.category, "security")}</span>
+              <strong>{displayText(finding.severity, "info")}</strong>
+              <p>{displayText(finding.message, "Security finding detected.")}</p>
+              <p className="muted">Source: {displayText(finding.source, "unknown")}</p>
+            </article>
+          ))
+        ) : (
+          <p className="muted">No security findings recorded.</p>
+        )}
+      </div>
+    </section>
+  );
 }
 
 function ScoreSummary({ score }) {
@@ -600,6 +701,25 @@ function NextActionSection({ nextAction, decision, applicationId, canPersistDeci
 function AnalysisResult({ result }) {
   const score = clampScore(result?.match_score);
   const savedToHistory = Boolean(result?.saved_to_history);
+  const securityStatus = result?.security_status || "not_available";
+  const blockedBySecurity = securityStatus === "blocked";
+
+  if (blockedBySecurity) {
+    return (
+      <section className="panel results-panel">
+        <SecurityAuditSection
+          scan={result.security_scan}
+          status={securityStatus}
+          policyVersion={result.security_policy_version}
+        />
+        <AgentWorkflowSection
+          steps={result.workflow_steps}
+          workflowDurationMs={result.workflow_duration_ms}
+          workflowDurationUs={result.workflow_duration_us}
+        />
+      </section>
+    );
+  }
 
   return (
     <section className="panel results-panel">
@@ -619,6 +739,12 @@ function AnalysisResult({ result }) {
           ? `Saved to history. Application ID: ${result.application_id}`
           : "Not saved to history."}
       </div>
+
+      <SecurityAuditSection
+        scan={result.security_scan}
+        status={securityStatus}
+        policyVersion={result.security_policy_version}
+      />
 
       <section className="result-section">
         <h3>岗位摘要</h3>
@@ -671,6 +797,7 @@ function AnalyzePage() {
   const [ragTopK, setRagTopK] = useState(5);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [securityError, setSecurityError] = useState(null);
   const [result, setResult] = useState(null);
 
   function handleResumeChange(event) {
@@ -688,6 +815,7 @@ function AnalyzePage() {
     }
 
     setError("");
+    setSecurityError(null);
     setResult(null);
 
     if (!resume) {
@@ -728,6 +856,9 @@ function AnalyzePage() {
 
       setResult(data);
     } catch (err) {
+      if (err.payload?.security_status === "blocked") {
+        setSecurityError(err.payload);
+      }
       setError(getRequestErrorMessage(err, "Analyze request failed."));
     } finally {
       setLoading(false);
@@ -815,6 +946,21 @@ function AnalyzePage() {
         <section className="panel state-panel error-panel" role="alert">
           <strong>Analysis failed</strong>
           <p>{error}</p>
+        </section>
+      )}
+
+      {securityError && (
+        <section className="panel results-panel">
+          <SecurityAuditSection
+            scan={securityError.security_scan}
+            status={securityError.security_status}
+            policyVersion={securityError.security_scan?.policy_version}
+          />
+          <AgentWorkflowSection
+            steps={securityError.workflow_steps}
+            workflowDurationMs={securityError.workflow_duration_ms}
+            workflowDurationUs={securityError.workflow_duration_us}
+          />
         </section>
       )}
 
@@ -1065,6 +1211,7 @@ function HistoryPage() {
                   <th>Position</th>
                   <th>Score</th>
                   <th>Status</th>
+                  <th>Security</th>
                   <th>Next Action</th>
                   <th>Decision</th>
                   <th>Created</th>
@@ -1079,6 +1226,9 @@ function HistoryPage() {
                     <td>{clampScore(record.match_score)}/100</td>
                     <td>
                       <StatusBadge status={record.application_status} />
+                    </td>
+                    <td>
+                      <SecurityBadge status={record.security_status} />
                     </td>
                     <td>{displayText(record.next_action_label, "No Recommendation")}</td>
                     <td>{displayText(record.next_action_decision, "pending")}</td>
@@ -1150,11 +1300,23 @@ function HistoryPage() {
               <span className="label">Resume File</span>
               <p>{displayText(selectedRecord.resume_filename)}</p>
             </div>
+            <div>
+              <span className="label">Security</span>
+              <p>
+                <SecurityBadge status={selectedRecord.security_status} />
+              </p>
+            </div>
             <div className="wide-field">
               <span className="label">Job URL</span>
               <p>{displayText(selectedRecord.job_url)}</p>
             </div>
           </div>
+
+          <SecurityAuditSection
+            scan={selectedRecord.security_scan}
+            status={selectedRecord.security_status}
+            policyVersion={selectedRecord.security_policy_version}
+          />
 
           <section className="result-section">
             <h3>Match Reason</h3>
@@ -1592,10 +1754,14 @@ function App() {
           <span className="version-pill">v{APP_VERSION}</span>
         </div>
         <p>
-          Resume-JD matching, Project Knowledge RAG, ATS analysis, cover letter generation, and application tracking.
+          Resume-JD matching, Project Knowledge RAG, AI security checks, ATS analysis, cover letter generation, and application tracking.
+        </p>
+        <p className="security-notice">
+          This tool uses heuristic security controls and cannot guarantee complete protection against every prompt injection attack. Users should review generated content before use.
         </p>
         <div className="feature-strip" aria-label="Core product features">
           <span>Project Knowledge RAG</span>
+          <span>AI Security</span>
           <span>Explainable scoring</span>
           <span>ATS keywords</span>
           <span>DOCX/PDF exports</span>

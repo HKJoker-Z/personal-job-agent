@@ -1,10 +1,10 @@
 # Personal Job Application Agent
 
-Current version: v1.6
+Current version: v1.7
 
-Personal Job Application Agent is a local-first, full-stack AI job application assistant. It parses a PDF or DOCX resume, accepts pasted job description text or one user-provided job URL, uses the DeepSeek API to generate explainable Resume-JD matching results, retrieves evidence from a curated Project Knowledge RAG source, creates an English cover letter, recommends the next application action, tracks saved applications in SQLite, and exports application materials as DOCX/PDF files.
+Personal Job Application Agent is a local-first, full-stack AI job application assistant. It parses a PDF or DOCX resume, accepts pasted job description text or one user-provided job URL, applies deterministic AI security checks, uses the DeepSeek API to generate explainable Resume-JD matching results, retrieves evidence from a curated Project Knowledge RAG source, creates an English cover letter, recommends the next application action, tracks saved applications in SQLite, and exports application materials as DOCX/PDF files.
 
-Version 1.6 adds a custom lightweight agent workflow orchestration layer. The synchronous Analyze API now executes explicit backend workflow steps, returns a real execution audit trail, generates a deterministic next-action recommendation, and lets the user record a human-in-the-loop decision. The project still uses Project Knowledge RAG only; it does not use LangGraph, CrewAI, AutoGen, MCP, or fake real-time streaming.
+Version 1.7 adds a defense-in-depth AI security layer for prompt injection mitigation, secret detection, PII minimization, safe prompt construction, LLM output leakage scanning, and security audit trails. The controls are deterministic heuristic rules that reduce risk but cannot guarantee complete prompt injection prevention. The project still uses Project Knowledge RAG only; it does not use LangGraph, CrewAI, AutoGen, MCP, external AI firewall products, or fake real-time streaming.
 
 ## Core Features
 
@@ -21,6 +21,13 @@ Version 1.6 adds a custom lightweight agent workflow orchestration layer. The sy
 - RAG Mode and RAG Sources in Analyze results and History Detail
 - RAG Mode and RAG Sources in PDF analysis reports
 - Custom Agent Workflow Orchestration for the Analyze pipeline
+- AI Security Layer for prompt injection mitigation and data leakage prevention
+- Secret and credential-like content detection before LLM calls
+- Best-effort PII minimization for resume data sent to DeepSeek
+- Safe prompt construction with isolated untrusted sections
+- LLM output leakage scanning
+- Security audit trail in Analyze, History Detail, and PDF reports
+- Security policy endpoint
 - Workflow IDs and real execution audit trails
 - Deterministic next-action recommendation
 - Human-in-the-loop decision recording for recommendations
@@ -34,7 +41,7 @@ Version 1.6 adds a custom lightweight agent workflow orchestration layer. The sy
 - DOCX cover letter export
 - PDF analysis report export
 
-Version 1.5.2 removed the generic knowledge base upload UI and disabled generic `/api/knowledge/*` endpoints with HTTP `410 Gone`. Version 1.6 keeps that Project Knowledge-only RAG design.
+Version 1.5.2 removed the generic knowledge base upload UI and disabled generic `/api/knowledge/*` endpoints with HTTP `410 Gone`. Version 1.7 keeps that Project Knowledge-only RAG design.
 
 ## Why Project Knowledge RAG Only
 
@@ -70,7 +77,7 @@ Project Knowledge RAG keeps retrieval focused on a single curated evidence file:
 - URL extraction: `requests`, `beautifulsoup4`
 - Version control: Git/GitHub
 
-No external vector database is used in v1.6.
+No external vector database is used in v1.7.
 
 ## Project Structure
 
@@ -83,10 +90,14 @@ No external vector database is used in v1.6.
 │   ├── export_utils.py
 │   ├── agent_workflow.py
 │   ├── recommendation_engine.py
+│   ├── security_utils.py
+│   ├── safe_prompt.py
 │   ├── knowledge_utils.py
 │   ├── main.py
 │   ├── test_agent_workflow.py
 │   ├── test_recommendation_engine.py
+│   ├── test_security_utils.py
+│   ├── test_safe_prompt.py
 │   └── requirements.txt
 ├── docs/
 │   └── PROJECT_KNOWLEDGE.md  # curated Project Knowledge RAG source
@@ -158,7 +169,7 @@ Expected response:
 {
   "status": "ok",
   "service": "personal-job-agent",
-  "version": "1.6"
+  "version": "1.7"
 }
 ```
 
@@ -206,7 +217,7 @@ backend/data/app.db
 
 The backend creates `backend/data/` and `app.db` automatically. Database files are ignored by Git.
 
-Application history stores normalized AI analysis results, scoring breakdowns, ATS analysis, upgraded resume bullets, RAG mode, RAG source metadata, workflow IDs, workflow step audit trails, next-action recommendations, human decisions, status, and notes. It does not store uploaded resume files or complete `resume_text`.
+Application history stores normalized AI analysis results, scoring breakdowns, ATS analysis, upgraded resume bullets, RAG mode, RAG source metadata, workflow IDs, workflow step audit trails, security audit metadata, next-action recommendations, human decisions, status, and notes. It does not store uploaded resume files or complete `resume_text`.
 
 Project Knowledge RAG uses the existing v1.5 tables:
 
@@ -218,7 +229,7 @@ The tables remain in place to avoid breaking existing local databases, but the p
 
 ## RAG Retrieval
 
-Version 1.6 uses Project Knowledge RAG only:
+Version 1.7 uses Project Knowledge RAG only:
 
 - The only recommended RAG source is `docs/PROJECT_KNOWLEDGE.md`.
 - The backend chunks the file and indexes it in SQLite.
@@ -226,26 +237,45 @@ Version 1.6 uses Project Knowledge RAG only:
 - If FTS5 is unavailable, the backend falls back to lightweight keyword scoring over chunk content, title, and category.
 - Only top-k relevant chunks are sent to DeepSeek during analysis.
 - The entire Project Knowledge file is never sent to the LLM.
-- Generic `/api/knowledge/*` endpoints are disabled in v1.6 and return `410 Gone`.
+- Generic `/api/knowledge/*` endpoints are disabled in v1.7 and return `410 Gone`.
+
+## AI Security Layer
+
+Version 1.7 adds deterministic security controls around the RAG-powered analysis workflow:
+
+- Prompt injection mitigation scans untrusted resume, JD, job URL content, and Project Knowledge chunks for instruction override, system prompt extraction, data exfiltration, role manipulation, tool or command manipulation, and indirect instruction priority patterns.
+- Prompt injection findings do not automatically block ordinary analysis. Suspicious instruction segments are replaced with `[REMOVED_SUSPICIOUS_INSTRUCTION]`, the workflow continues, and the result is marked `passed_with_warnings`.
+- Secret detection scans for credential-like API keys, GitHub tokens, bearer tokens, AWS access keys, AWS secret assignments, private key headers, password assignments, database URLs with embedded credentials, and generic secret environment variable assignments.
+- Critical credential-like content is blocked before DeepSeek invocation with a 4xx response. The response does not echo the detected secret, and blocked requests are not saved to application history.
+- PII minimization redacts email addresses, phone numbers, stable street address patterns, and token-like URL query parameters from the copy of resume text sent to DeepSeek.
+- Safe prompt construction isolates untrusted resume, JD, and Project Knowledge evidence in explicit XML-style sections and states that untrusted content is data only.
+- LLM output scanning redacts credential-like content before returning output. If an internal security marker appears in model output, the response is blocked as internal instruction leakage.
+- Security findings use stable codes, categories, severity, source, and safe messages. Full malicious text, secrets, full resumes, full JDs, and full Project Knowledge chunks are not stored in findings.
+
+These controls are heuristic and pattern-based. They reduce risk but cannot guarantee complete protection against every prompt injection attack, and they may produce false positives or false negatives. PII redaction is best-effort. Version 1.7 does not claim formal security certification, penetration testing coverage, SOC 2, ISO 27001, or a third-party AI firewall.
 
 ## Agent Workflow Orchestration
 
-Version 1.6 decomposes `POST /api/analyze` into real backend workflow steps:
+Version 1.7 decomposes `POST /api/analyze` into real backend workflow steps:
 
 1. Validate Input
 2. Parse Resume
 3. Acquire Job Description
-4. Retrieve Project Knowledge
-5. Run LLM Analysis
-6. Validate Structured Output
-7. Reconcile Evidence
-8. Recommend Next Action
-9. Save Application
-10. Finalize Result
+4. Scan Untrusted Input
+5. Retrieve Project Knowledge
+6. Scan Project Evidence
+7. Build Safe Prompt
+8. Run LLM Analysis
+9. Scan LLM Output
+10. Validate Structured Output
+11. Reconcile Evidence
+12. Recommend Next Action
+13. Save Application
+14. Finalize Result
 
 Each step records a stable key, display name, status, safe message, start time, completion time, and measured `duration_ms`. Steps can be `pending`, `running`, `completed`, `skipped`, or `failed`.
 
-The current workflow is synchronous. Version 1.6 returns an execution audit trail after the synchronous workflow completes. The UI may show a loading message while the request is running, but it does not simulate fake step progress with timers and it does not provide real-time streaming.
+The current workflow is synchronous. Version 1.7 returns an execution audit trail after the synchronous workflow completes. The UI may show a loading message while the request is running, but it does not simulate fake step progress with timers and it does not provide real-time streaming.
 
 This is a custom lightweight orchestration layer, not LangGraph, CrewAI, AutoGen, MCP, or an asynchronous distributed task queue.
 
@@ -352,6 +382,31 @@ Response includes all analysis fields plus:
 - `workflow_steps`
 - `next_action`
 - `next_action_decision`
+- `security_scan`
+- `security_status`
+- `security_policy_version`
+
+`security_status` is one of `passed`, `passed_with_warnings`, or `blocked`. If critical credential-like content is detected before DeepSeek invocation, the API returns a 4xx security error and does not save an application record.
+
+### `GET /api/security/policy`
+
+Returns the public security policy capabilities and limitations without exposing internal regex rules, system prompts, or internal markers.
+
+Example response:
+
+```json
+{
+  "version": "1.7",
+  "prompt_injection_detection": true,
+  "secret_detection": true,
+  "pii_redaction": true,
+  "output_leakage_scan": true,
+  "limitations": [
+    "Pattern-based detection may produce false positives or false negatives.",
+    "The system cannot guarantee complete prompt injection prevention."
+  ]
+}
+```
 
 ### `GET /api/project-knowledge/status`
 
@@ -424,7 +479,7 @@ curl "http://localhost:8000/api/project-knowledge/search?query=RAG%20FastAPI%20D
 
 ### Generic Knowledge Endpoints
 
-The following generic knowledge endpoints are disabled in v1.6 and return `410 Gone`:
+The following generic knowledge endpoints are disabled in v1.7 and return `410 Gone`:
 
 - `GET /api/knowledge/documents`
 - `POST /api/knowledge/documents`
@@ -436,19 +491,19 @@ Response:
 
 ```json
 {
-  "detail": "Generic knowledge base upload is disabled in v1.6. Use Project Knowledge RAG instead."
+  "detail": "Generic knowledge base upload is disabled in v1.7. Use Project Knowledge RAG instead."
 }
 ```
 
 ### Application History and Export APIs
 
-- `GET /api/applications`: returns historical application records without heavy detail fields, plus lightweight next-action label and decision data.
-- `GET /api/applications/{id}`: returns one full application record, including RAG mode, RAG sources, workflow steps, next action, and human decision data.
+- `GET /api/applications`: returns historical application records without heavy detail fields, plus lightweight next-action label, decision data, security status, and security risk level.
+- `GET /api/applications/{id}`: returns one full application record, including RAG mode, RAG sources, workflow steps, security audit data, next action, and human decision data.
 - `PATCH /api/applications/{id}`: updates application status and optional notes.
 - `PATCH /api/applications/{id}/next-action`: records the user's decision for the Agent recommendation.
 - `DELETE /api/applications/{id}`: deletes one historical application record.
 - `GET /api/applications/{id}/cover-letter.docx`: exports the saved cover letter as DOCX.
-- `GET /api/applications/{id}/report.pdf`: exports a full PDF report, including RAG Mode, RAG Sources, Agent Workflow, Recommended Next Action, and Human Decision.
+- `GET /api/applications/{id}/report.pdf`: exports a full PDF report, including RAG Mode, RAG Sources, AI Security Audit, Agent Workflow, Recommended Next Action, and Human Decision.
 
 ### `PATCH /api/applications/{id}/next-action`
 
@@ -495,19 +550,30 @@ Response:
 - Backend logs record steps and counts, not full resume content, full JD content, knowledge chunk content, cover letter content, or report content.
 - Workflow step messages are short, safe status messages and do not contain full resumes, full JDs, full Project Knowledge chunks, or API keys.
 - Job descriptions and Project Knowledge content are treated as untrusted data in the prompt.
+- Uploaded resumes, pasted JDs, fetched job URL content, Project Knowledge chunks, and DeepSeek output are treated as untrusted data.
+- Untrusted JD and RAG content are isolated as data in safe prompt sections.
+- Deterministic prompt injection detection filters suspicious instruction text before LLM invocation.
+- Critical credential-like content is blocked before LLM invocation.
+- PII redaction is best-effort and is applied to the LLM-bound copy of resume text.
+- LLM output is scanned for credential-like content and internal marker leakage before returning.
+- Security findings do not store full malicious content, full resume text, full JD text, full Project Knowledge chunks, or detected secret values.
+- Detection uses deterministic heuristic rules. It reduces risk but cannot guarantee complete protection against every prompt injection attack.
+- Version 1.7 does not claim formal security certification.
 - The system instructs the LLM not to fabricate user experience.
 - Cover letters must be grounded in the resume and retrieved Project Knowledge evidence.
 
-## Version 1.6 Core Changes
+## Version 1.7 Core Changes
 
-- Added custom Agent Workflow Orchestration for `POST /api/analyze`.
-- Added workflow IDs and backend execution audit trails.
-- Broke analysis into explicit steps for validation, resume parsing, JD acquisition, Project Knowledge retrieval, LLM analysis, structured output validation, evidence reconciliation, recommendation, saving, and finalization.
-- Added deterministic next-action recommendation without an extra LLM call.
-- Added human-in-the-loop recommendation decisions.
-- Persisted workflow, recommendation, and decision data in SQLite.
-- Displayed workflow and recommendations in Analyze, History Detail, and PDF reports.
-- Kept Version 1.5.2 Project Knowledge RAG only behavior.
+- Added deterministic prompt injection detection.
+- Added secret and credential scanning.
+- Added PII minimization before LLM calls.
+- Added safe prompt construction with untrusted data isolation.
+- Added LLM output leakage scanning.
+- Added AI security workflow steps to `POST /api/analyze`.
+- Added persisted security audit trails.
+- Displayed security status and findings in Analyze, History Detail, and PDF reports.
+- Added `/api/security/policy`.
+- Kept Version 1.6 workflow, Project Knowledge RAG, History, Export, and next-action recommendation behavior.
 
 ## Version History
 
@@ -518,10 +584,10 @@ Response:
 - v1.5: RAG Knowledge Base
 - v1.5.2: Project Knowledge RAG Only
 - v1.6: Agent workflow orchestration and next-action recommendation
+- v1.7: AI Security and Prompt Injection Mitigation
 
 ## Roadmap
 
-- v1.7: AI security and prompt injection mitigation
 - v1.8: Monitoring and evaluation
 - v1.9: Docker and cloud deployment
 - v2.0: MCP server integration

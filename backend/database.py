@@ -5,6 +5,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from security_utils import normalized_security_scan
+
 
 DB_PATH = Path(__file__).resolve().parent / "data" / "app.db"
 
@@ -140,6 +142,9 @@ def init_db() -> None:
                 next_action_decision TEXT NOT NULL DEFAULT 'pending',
                 next_action_decision_notes TEXT,
                 next_action_decided_at TEXT,
+                security_scan TEXT NOT NULL DEFAULT '{}',
+                security_status TEXT NOT NULL DEFAULT 'not_available',
+                security_policy_version TEXT,
                 notes TEXT
             )
             """
@@ -241,6 +246,27 @@ def init_db() -> None:
             existing_columns=existing_columns,
             column_name="next_action_decided_at",
             column_definition="next_action_decided_at TEXT",
+        )
+        add_column_if_missing(
+            connection,
+            table_name="application_records",
+            existing_columns=existing_columns,
+            column_name="security_scan",
+            column_definition="security_scan TEXT NOT NULL DEFAULT '{}'",
+        )
+        add_column_if_missing(
+            connection,
+            table_name="application_records",
+            existing_columns=existing_columns,
+            column_name="security_status",
+            column_definition="security_status TEXT NOT NULL DEFAULT 'not_available'",
+        )
+        add_column_if_missing(
+            connection,
+            table_name="application_records",
+            existing_columns=existing_columns,
+            column_name="security_policy_version",
+            column_definition="security_policy_version TEXT",
         )
         connection.execute(
             """
@@ -488,6 +514,13 @@ def deserialize_next_action(value: Any) -> dict[str, Any]:
     }
 
 
+def deserialize_security_scan(value: Any) -> dict[str, Any]:
+    parsed = deserialize_json(value, {})
+    if not parsed:
+        return {}
+    return normalized_security_scan(parsed)
+
+
 def clean_text(value: Any, fallback: str = "") -> str:
     if value is None:
         return fallback
@@ -512,6 +545,7 @@ def safe_float(value: Any, fallback: Any = 0.0) -> Any:
 
 def row_to_list_item(row: sqlite3.Row) -> dict[str, Any]:
     next_action = deserialize_next_action(row["next_action"])
+    security_scan = deserialize_security_scan(row["security_scan"])
     return {
         "id": row["id"],
         "created_at": row["created_at"],
@@ -525,6 +559,8 @@ def row_to_list_item(row: sqlite3.Row) -> dict[str, Any]:
         "rag_mode": clean_text(row["rag_mode"]),
         "next_action_label": next_action.get("label") or "No Recommendation",
         "next_action_decision": clean_text(row["next_action_decision"], "pending"),
+        "security_status": clean_text(row["security_status"], "not_available"),
+        "security_risk_level": clean_text(security_scan.get("risk_level"), "not_available"),
     }
 
 
@@ -560,6 +596,9 @@ def row_to_detail(row: sqlite3.Row) -> dict[str, Any]:
         "next_action_decision": clean_text(row["next_action_decision"], "pending"),
         "next_action_decision_notes": row["next_action_decision_notes"],
         "next_action_decided_at": row["next_action_decided_at"],
+        "security_scan": deserialize_security_scan(row["security_scan"]),
+        "security_status": clean_text(row["security_status"], "not_available"),
+        "security_policy_version": clean_text(row["security_policy_version"]) or None,
         "notes": row["notes"],
     }
 
@@ -605,9 +644,12 @@ def insert_application_record(
                 next_action_decision,
                 next_action_decision_notes,
                 next_action_decided_at,
+                security_scan,
+                security_status,
+                security_policy_version,
                 notes
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 now,
@@ -640,6 +682,9 @@ def insert_application_record(
                 clean_text(analysis_result.get("next_action_decision"), "pending"),
                 clean_text(analysis_result.get("next_action_decision_notes")) or None,
                 clean_text(analysis_result.get("next_action_decided_at")) or None,
+                serialize_json(analysis_result.get("security_scan"), {}),
+                clean_text(analysis_result.get("security_status"), "not_available"),
+                clean_text(analysis_result.get("security_policy_version")) or None,
                 None,
             ),
         )
@@ -686,7 +731,9 @@ def list_application_records(
                 match_score,
                 rag_mode,
                 next_action,
-                next_action_decision
+                next_action_decision,
+                security_scan,
+                security_status
             FROM application_records
             {where_sql}
             ORDER BY created_at DESC, id DESC
