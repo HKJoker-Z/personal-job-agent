@@ -356,6 +356,7 @@ def deserialize_rag_sources(value: Any) -> list[dict[str, Any]]:
             "document_title": clean_text(item.get("document_title")),
             "category": clean_text(item.get("category")),
             "chunk_index": safe_int(item.get("chunk_index")),
+            "content_preview": clean_text(item.get("content_preview")),
             "relevance_reason": clean_text(item.get("relevance_reason")),
         }
         if source["document_title"] or source["document_id"] or source["chunk_id"]:

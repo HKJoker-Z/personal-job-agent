@@ -602,6 +602,20 @@ th {
   gap: 12px;
 }
 
+.rag-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.rag-summary p {
+  border: 1px solid #e1e8f0;
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: #fbfcfe;
+}
+
 .source-grid {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
@@ -699,6 +713,7 @@ th {
   .history-toolbar,
   .detail-grid,
   .rag-controls,
+  .rag-summary,
   .breakdown-grid,
   .ats-grid,
   .source-grid {

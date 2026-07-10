@@ -219,6 +219,41 @@ Version 1.5.2 uses Project Knowledge RAG only:
 - The entire Project Knowledge file is never sent to the LLM.
 - Generic `/api/knowledge/*` endpoints are disabled in v1.5.2 and return `410 Gone`.
 
+## Troubleshooting / Validation
+
+### How to verify Project Knowledge RAG affects matching
+
+Project Knowledge evidence is treated as user project experience for matching, but not as system instructions. If a JD requires RAG and `docs/PROJECT_KNOWLEDGE.md` contains RAG evidence, the system should treat RAG as a matched skill instead of a missing skill.
+
+Use these checks:
+
+```bash
+curl http://127.0.0.1:8000/api/project-knowledge/status
+curl -X POST http://127.0.0.1:8000/api/project-knowledge/rebuild
+curl "http://127.0.0.1:8000/api/project-knowledge/search?query=RAG%20Retrieval-Augmented%20Generation%20LLM%20applications%20FastAPI%20workflow%20automation&top_k=5"
+```
+
+The search response should include Project Knowledge chunks containing terms such as:
+
+- RAG
+- Retrieval-Augmented Generation
+- Project Knowledge RAG
+- SQLite FTS5 retrieval
+- document chunking
+- top-k evidence injection
+- evidence-based generation
+- LLM applications
+- FastAPI API development
+- workflow automation
+
+When calling `POST /api/analyze` with a JD that requires RAG, LLM applications, FastAPI, and workflow automation, verify:
+
+- `rag_mode` is `project`.
+- `used_knowledge_base` is `true`.
+- `rag_sources` is not empty.
+- `missing_skills` does not include RAG when retrieved Project Knowledge evidence supports it.
+- `matched_skills` or `ats_analysis.matched_keywords` includes RAG or Retrieval-Augmented Generation.
+
 ## API
 
 API documentation:
