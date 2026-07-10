@@ -21,6 +21,13 @@ def safe_message(message: Any) -> str:
     return text[:240]
 
 
+def duration_from_ns(duration_ns: int) -> tuple[float, int]:
+    safe_duration_ns = max(int(duration_ns), 0)
+    duration_us = int(round(safe_duration_ns / 1_000))
+    duration_ms = round(safe_duration_ns / 1_000_000, 3)
+    return duration_ms, duration_us
+
+
 @dataclass
 class WorkflowStep:
     key: str
@@ -29,8 +36,9 @@ class WorkflowStep:
     message: str = ""
     started_at: str | None = None
     completed_at: str | None = None
-    duration_ms: int | None = None
-    _start_perf: float | None = field(default=None, repr=False)
+    duration_ms: float | None = None
+    duration_us: int | None = None
+    _started_perf_ns: int | None = field(default=None, repr=False)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -41,6 +49,7 @@ class WorkflowStep:
             "started_at": self.started_at,
             "completed_at": self.completed_at,
             "duration_ms": self.duration_ms,
+            "duration_us": self.duration_us,
         }
 
 
@@ -51,6 +60,8 @@ class AgentWorkflow:
         self._steps_by_key: dict[str, WorkflowStep] = {}
         self.has_warnings = False
         self.has_failure = False
+        self._started_perf_ns = time.perf_counter_ns()
+        self._completed_perf_ns: int | None = None
 
     def start_step(self, key: str, name: str, message: str = "") -> WorkflowStep:
         step = WorkflowStep(
@@ -59,7 +70,7 @@ class AgentWorkflow:
             status="running",
             message=safe_message(message),
             started_at=utc_now(),
-            _start_perf=time.perf_counter(),
+            _started_perf_ns=time.perf_counter_ns(),
         )
         self.steps.append(step)
         self._steps_by_key[key] = step
@@ -69,8 +80,20 @@ class AgentWorkflow:
         return self._finish_step(key, "completed", message)
 
     def skip_step(self, key: str, name: str, message: str = "") -> WorkflowStep:
-        step = self.start_step(key, name, message)
-        return self._finish_step(step.key, "skipped", message)
+        now = utc_now()
+        step = WorkflowStep(
+            key=key,
+            name=name,
+            status="skipped",
+            message=safe_message(message),
+            started_at=now,
+            completed_at=now,
+            duration_ms=0.0,
+            duration_us=0,
+        )
+        self.steps.append(step)
+        self._steps_by_key[key] = step
+        return step
 
     def fail_step(self, key: str, message: str = "") -> WorkflowStep:
         self.has_failure = True
@@ -87,9 +110,26 @@ class AgentWorkflow:
         step.status = status
         step.message = safe_message(message or step.message)
         step.completed_at = utc_now()
-        start_perf = step._start_perf if step._start_perf is not None else time.perf_counter()
-        step.duration_ms = max(0, int((time.perf_counter() - start_perf) * 1000))
+        start_perf_ns = (
+            step._started_perf_ns
+            if step._started_perf_ns is not None
+            else time.perf_counter_ns()
+        )
+        end_perf_ns = time.perf_counter_ns()
+        step.duration_ms, step.duration_us = duration_from_ns(end_perf_ns - start_perf_ns)
         return step
+
+    def finish(self) -> None:
+        if self._completed_perf_ns is None:
+            self._completed_perf_ns = time.perf_counter_ns()
+
+    def workflow_duration(self) -> dict[str, float | int]:
+        end_perf_ns = self._completed_perf_ns or time.perf_counter_ns()
+        duration_ms, duration_us = duration_from_ns(end_perf_ns - self._started_perf_ns)
+        return {
+            "workflow_duration_ms": duration_ms,
+            "workflow_duration_us": duration_us,
+        }
 
     def status(self) -> str:
         if self.has_failure or any(step.status == "failed" for step in self.steps):

@@ -249,6 +249,8 @@ The current workflow is synchronous. Version 1.6 returns an execution audit trai
 
 This is a custom lightweight orchestration layer, not LangGraph, CrewAI, AutoGen, MCP, or an asynchronous distributed task queue.
 
+Workflow timing uses Python `time.perf_counter_ns()` for high-resolution monotonic backend timing. Each step returns `duration_ms` with sub-millisecond precision and `duration_us` for microsecond-level display. Fast operations below one millisecond are displayed as `<1 ms`; no artificial delays or fake minimum durations are added. The timing values represent measured backend workflow execution time, not frontend network round-trip time.
+
 ## Next-Action Recommendation
 
 The backend generates a deterministic recommendation without making an additional DeepSeek call:
