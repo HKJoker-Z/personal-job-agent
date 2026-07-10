@@ -49,6 +49,10 @@ function displayRagMode(value) {
   return cleanValue;
 }
 
+function isRagEnabled(value) {
+  return displayRagMode(value).toLowerCase() === "project";
+}
+
 function formatDate(value) {
   if (!value) {
     return "Unknown";
@@ -348,12 +352,33 @@ function UpgradedResumeBulletsSection({ bullets }) {
   );
 }
 
-function RagSourcesSection({ sources }) {
+function RagSourcesSection({ sources, ragMode, usedKnowledgeBase }) {
   const safeSources = asArray(sources).filter((source) => asObject(source).document_title || asObject(source).document_id);
+  const ragEnabled = isRagEnabled(ragMode);
+  const usedKnowledge = usedKnowledgeBase ?? safeSources.length > 0;
 
   return (
     <section className="result-section rag-section">
       <h3>RAG Sources</h3>
+      <div className="rag-summary">
+        <p>
+          <strong>RAG Mode:</strong> {displayRagMode(ragMode)}
+        </p>
+        <p>
+          <strong>Used Knowledge Base:</strong> {usedKnowledge ? "Yes" : "No"}
+        </p>
+        <p>
+          <strong>RAG Sources Count:</strong> {safeSources.length}
+        </p>
+      </div>
+      {ragEnabled && safeSources.length > 0 && (
+        <div className="history-message">Project Knowledge evidence was used in this analysis.</div>
+      )}
+      {ragEnabled && safeSources.length === 0 && (
+        <div className="inline-error" role="alert">
+          Project Knowledge RAG was enabled, but no relevant project evidence was retrieved.
+        </div>
+      )}
       {safeSources.length ? (
         <div className="source-grid">
           {safeSources.map((source, index) => {
@@ -366,6 +391,9 @@ function RagSourcesSection({ sources }) {
                 </div>
                 <p className="muted">Chunk #{Number.parseInt(item.chunk_index, 10) || 0}</p>
                 <p>{displayText(item.relevance_reason, "No relevance reason provided.")}</p>
+                {item.content_preview && (
+                  <p className="muted">{displayText(String(item.content_preview).slice(0, 320))}</p>
+                )}
               </article>
             );
           })}
@@ -416,11 +444,11 @@ function AnalysisResult({ result }) {
       <ScoringBreakdownSection breakdown={result.scoring_breakdown} />
       <ATSAnalysisSection analysis={result.ats_analysis} />
       <UpgradedResumeBulletsSection bullets={result.upgraded_resume_bullets} />
-      <section className="result-section">
-        <h3>RAG Mode</h3>
-        <p>{displayRagMode(result.rag_mode)}</p>
-      </section>
-      <RagSourcesSection sources={result.rag_sources} />
+      <RagSourcesSection
+        sources={result.rag_sources}
+        ragMode={result.rag_mode}
+        usedKnowledgeBase={Boolean(result.used_knowledge_base)}
+      />
       <ExportActions applicationId={result.application_id} enabled={savedToHistory} />
 
       <section className="result-section cover-letter-section">
@@ -922,11 +950,11 @@ function HistoryPage() {
           <ScoringBreakdownSection breakdown={selectedRecord.scoring_breakdown} />
           <ATSAnalysisSection analysis={selectedRecord.ats_analysis} />
           <UpgradedResumeBulletsSection bullets={selectedRecord.upgraded_resume_bullets} />
-          <section className="result-section">
-            <h3>RAG Mode</h3>
-            <p>{displayRagMode(selectedRecord.rag_mode)}</p>
-          </section>
-          <RagSourcesSection sources={selectedRecord.rag_sources} />
+          <RagSourcesSection
+            sources={selectedRecord.rag_sources}
+            ragMode={selectedRecord.rag_mode}
+            usedKnowledgeBase={asArray(selectedRecord.rag_sources).length > 0}
+          />
           <ExportActions applicationId={selectedRecord.id} />
 
           <section className="result-section cover-letter-section">

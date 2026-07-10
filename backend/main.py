@@ -98,6 +98,96 @@ ATS_ANALYSIS_FIELDS = (
 )
 DOCX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 PDF_MEDIA_TYPE = "application/pdf"
+RAG_CONTENT_PREVIEW_CHARS = 320
+AI_RETRIEVAL_TERMS = (
+    "RAG",
+    "Retrieval-Augmented Generation",
+    "retrieval augmented generation",
+    "LLM",
+    "LLM applications",
+    "Generative AI",
+    "Agentic AI",
+    "workflow automation",
+    "API development",
+    "system integration",
+    "FastAPI",
+    "SQLite",
+    "prompt engineering",
+    "responsible AI",
+    "data leakage prevention",
+    "evidence-based generation",
+)
+SKILL_SYNONYM_GROUPS: dict[str, tuple[str, ...]] = {
+    "RAG": (
+        "RAG",
+        "Retrieval-Augmented Generation",
+        "retrieval augmented generation",
+        "retrieval-augmented",
+        "top-k evidence injection",
+        "top k evidence injection",
+        "document chunking",
+        "chunking",
+        "SQLite FTS5 retrieval",
+        "FTS5 retrieval",
+        "retrieval pipeline",
+        "project-centered RAG",
+        "Project Knowledge RAG",
+    ),
+    "LLM applications": (
+        "LLM applications",
+        "LLM application",
+        "DeepSeek API",
+        "DeepSeek API integration",
+        "LLM API integration",
+        "AI application",
+        "Generative AI",
+    ),
+    "workflow automation": (
+        "workflow automation",
+        "job application workflow",
+        "export workflow",
+        "application tracking",
+        "cover letter generation",
+        "resume parsing",
+        "JD analysis",
+    ),
+    "API development": (
+        "API development",
+        "FastAPI",
+        "FastAPI API development",
+        "REST API",
+        "CRUD API",
+        "project knowledge rebuild/search/status/upload",
+    ),
+    "system integration": (
+        "system integration",
+        "frontend/backend integration",
+        "frontend backend integration",
+        "React",
+        "FastAPI",
+        "SQLite",
+        "DeepSeek API",
+        "file parsing",
+        "document export",
+    ),
+    "responsible AI": (
+        "responsible AI",
+        "data minimization",
+        "not fabricate",
+        "anti-fabrication",
+        "evidence-based generation",
+        "grounded",
+    ),
+    "data leakage prevention": (
+        "data leakage prevention",
+        "top-k chunks",
+        "top k chunks",
+        "not save resume_text",
+        "full resume_text is not saved",
+        ".env ignored",
+        "safe logging",
+    ),
+}
 
 logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO"),
@@ -312,6 +402,15 @@ System rules:
 - 如果没有检索到 Project Knowledge evidence，不要假装使用了 RAG。
 - 如果使用 Project Knowledge evidence，请在 rag_sources 中引用来源。
 - 不要把没有出现在当前简历或 Project Knowledge evidence 中的经历写入 Cover Letter。
+- Project Knowledge Evidence Rules:
+  - "Relevant Project Knowledge Evidence" 是用户维护的 curated project skill evidence base。
+  - 它描述用户真实的 personal-job-agent 项目。
+  - 你可以把这些 evidence 作为用户真实项目经验来评估岗位匹配。
+  - 如果 JD 要求的能力被 Project Knowledge Evidence 直接支持，应将其视为 matched，而不是 missing。
+  - 不要把简历或 Project Knowledge Evidence 已明确支持的技能列入 missing_skills。
+  - 例如，如果 JD 要求 RAG，而 Project Knowledge Evidence 描述了 RAG、Retrieval-Augmented Generation、SQLite FTS5 retrieval、chunking、document chunking、top-k evidence injection 或 evidence-based generation，则 RAG 必须被视为 matched skill。
+  - 仍然不能编造超出简历和 Project Knowledge Evidence 的经历。
+  - 不要声称 LangGraph、MCP、Docker production deployment、AI monitoring 等高级工具或能力，除非它们在 evidence 中明确实现并出现。
 - job_summary、match_reason、resume_suggestions、keyword_suggestions、reason 使用中文。
 - cover_letter 使用英文。
 - company_name 使用 JD 中识别到的公司名；无法识别时使用 "Unknown Company"。
@@ -385,6 +484,12 @@ System rules:
 }}
 
 match_score 必须是 0 到 100 的整数。
+matched_skills 必须包含 resume text 或 Project Knowledge Evidence 支持的 JD 技能。
+missing_skills 只能包含 JD 要求但 resume text 和 Project Knowledge Evidence 都没有支持的技能。
+ats_analysis.matched_keywords 必须包含 resume text 或 Project Knowledge Evidence 中覆盖的 JD 关键词。
+ats_analysis.missing_keywords 必须排除 Project Knowledge Evidence 中已经覆盖的关键词。
+scoring_breakdown.skills_match 和 scoring_breakdown.project_experience 必须考虑 Project Knowledge Evidence。
+rag_sources 必须引用实际使用的 Project Knowledge chunks。
 scoring_breakdown 权重参考：
 - skills_match: 35%
 - project_experience: 25%
@@ -459,6 +564,59 @@ def normalize_list(value: Any) -> list[str]:
     if not isinstance(value, list):
         return []
     return [str(item).strip() for item in value if str(item or "").strip()]
+
+
+def normalize_skill_text(text: Any) -> str:
+    normalized = normalize_string(text).lower()
+    normalized = normalized.replace("&", " and ")
+    normalized = re.sub(r"[^a-z0-9+#]+", " ", normalized)
+    return re.sub(r"\s+", " ", normalized).strip()
+
+
+def normalized_phrase_exists(needle: str, haystack: str) -> bool:
+    clean_needle = normalize_skill_text(needle)
+    clean_haystack = normalize_skill_text(haystack)
+    if not clean_needle or not clean_haystack:
+        return False
+    return f" {clean_needle} " in f" {clean_haystack} "
+
+
+def skill_synonym_variants(skill: str) -> list[str]:
+    variants = [skill]
+    normalized_skill = normalize_skill_text(skill)
+    for group_name, group_variants in SKILL_SYNONYM_GROUPS.items():
+        normalized_group_terms = [normalize_skill_text(item) for item in (group_name, *group_variants)]
+        if any(
+            normalized_skill == term
+            or normalized_skill in term
+            or term in normalized_skill
+            for term in normalized_group_terms
+            if term
+        ):
+            variants.extend(group_variants)
+
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for variant in variants:
+        key = normalize_skill_text(variant)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        deduped.append(variant)
+    return deduped
+
+
+def rag_evidence_contains_skill(skill: str, retrieved_chunks_text: str) -> bool:
+    return any(
+        normalized_phrase_exists(variant, retrieved_chunks_text)
+        for variant in skill_synonym_variants(skill)
+    )
+
+
+def append_unique_skill(items: list[str], skill: str) -> None:
+    normalized_existing = {normalize_skill_text(item) for item in items}
+    if normalize_skill_text(skill) not in normalized_existing:
+        items.append(skill)
 
 
 def normalize_string(value: Any) -> str:
@@ -561,6 +719,9 @@ def build_default_rag_sources(retrieved_chunks: list[dict[str, Any]]) -> list[di
             "document_title": normalize_string(chunk.get("document_title")),
             "category": normalize_string(chunk.get("category")),
             "chunk_index": normalize_int(chunk.get("chunk_index")),
+            "content_preview": normalize_string(chunk.get("content"))[
+                :RAG_CONTENT_PREVIEW_CHARS
+            ],
             "relevance_reason": "该知识库片段与当前岗位描述中的技能、项目或公司信息相关。",
         }
         for chunk in retrieved_chunks
@@ -603,6 +764,65 @@ def normalize_rag_sources(
     return default_sources
 
 
+def apply_rag_supported_skill_corrections(
+    *,
+    matched_skills: list[str],
+    missing_skills: list[str],
+    ats_analysis: dict[str, list[str]],
+    scoring_breakdown: dict[str, dict[str, Any]],
+    retrieved_chunks: list[dict[str, Any]],
+) -> list[str]:
+    if not retrieved_chunks:
+        return []
+
+    retrieved_chunks_text = "\n".join(
+        normalize_string(chunk.get("content")) for chunk in retrieved_chunks
+    )
+    corrected_terms: list[str] = []
+    remaining_missing_skills: list[str] = []
+
+    for skill in missing_skills:
+        if rag_evidence_contains_skill(skill, retrieved_chunks_text):
+            append_unique_skill(matched_skills, skill)
+            append_unique_skill(corrected_terms, skill)
+        else:
+            remaining_missing_skills.append(skill)
+    missing_skills[:] = remaining_missing_skills
+
+    matched_keywords = ats_analysis.setdefault("matched_keywords", [])
+    missing_keywords = ats_analysis.setdefault("missing_keywords", [])
+    remaining_missing_keywords: list[str] = []
+    for keyword in missing_keywords:
+        if rag_evidence_contains_skill(keyword, retrieved_chunks_text):
+            append_unique_skill(matched_keywords, keyword)
+            append_unique_skill(corrected_terms, keyword)
+        else:
+            remaining_missing_keywords.append(keyword)
+    missing_keywords[:] = remaining_missing_keywords
+
+    if not corrected_terms:
+        return []
+
+    evidence_note = (
+        "Project Knowledge RAG evidence supports: "
+        f"{', '.join(corrected_terms[:8])}."
+    )
+    for key, minimum_score in (
+        ("skills_match", 70),
+        ("project_experience", 65),
+        ("keyword_match", 70),
+    ):
+        section = scoring_breakdown.get(key)
+        if not isinstance(section, dict):
+            continue
+        section["score"] = max(normalize_score(section.get("score")), minimum_score)
+        evidence = section.setdefault("evidence", [])
+        if isinstance(evidence, list):
+            append_unique_skill(evidence, evidence_note)
+
+    return corrected_terms
+
+
 def build_match_reason_fallback(
     scoring_breakdown: dict[str, dict[str, Any]],
     matched_skills: list[str],
@@ -642,15 +862,38 @@ def normalize_result(
     *,
     retrieved_rag_chunks: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
+    retrieved_rag_chunks = retrieved_rag_chunks or []
     scoring_breakdown = normalize_scoring_breakdown(data.get("scoring_breakdown"))
     matched_skills = normalize_list(data.get("matched_skills"))
     missing_skills = normalize_list(data.get("missing_skills"))
+    ats_analysis = normalize_ats_analysis(data.get("ats_analysis"))
+    upgraded_resume_bullets = normalize_upgraded_resume_bullets(
+        data.get("upgraded_resume_bullets")
+    )
+    rag_sources = normalize_rag_sources(
+        data.get("rag_sources"),
+        retrieved_rag_chunks,
+    )
+    rag_corrected_terms = apply_rag_supported_skill_corrections(
+        matched_skills=matched_skills,
+        missing_skills=missing_skills,
+        ats_analysis=ats_analysis,
+        scoring_breakdown=scoring_breakdown,
+        retrieved_chunks=retrieved_rag_chunks,
+    )
+
     match_reason = normalize_string(data.get("match_reason")).strip()
     weighted_reason = build_match_reason_fallback(scoring_breakdown, matched_skills, missing_skills)
     if match_reason:
         match_reason = f"{match_reason}\n{weighted_reason}"
     else:
         match_reason = weighted_reason
+    if rag_corrected_terms:
+        match_reason = (
+            f"{match_reason}\n"
+            "Project Knowledge RAG evidence also supports: "
+            f"{', '.join(rag_corrected_terms[:8])}."
+        )
 
     return {
         "company_name": normalize_named_field(data.get("company_name"), "Unknown Company"),
@@ -663,14 +906,9 @@ def normalize_result(
         "resume_suggestions": normalize_list(data.get("resume_suggestions")),
         "cover_letter": normalize_string(data.get("cover_letter")),
         "scoring_breakdown": scoring_breakdown,
-        "ats_analysis": normalize_ats_analysis(data.get("ats_analysis")),
-        "upgraded_resume_bullets": normalize_upgraded_resume_bullets(
-            data.get("upgraded_resume_bullets")
-        ),
-        "rag_sources": normalize_rag_sources(
-            data.get("rag_sources"),
-            retrieved_rag_chunks,
-        ),
+        "ats_analysis": ats_analysis,
+        "upgraded_resume_bullets": upgraded_resume_bullets,
+        "rag_sources": rag_sources,
     }
 
 
@@ -812,9 +1050,47 @@ def extract_retrieval_keywords(text: str) -> list[str]:
     ]
 
 
+def extract_ai_retrieval_terms(text: str) -> list[str]:
+    normalized_text = normalize_skill_text(text)
+    terms: list[str] = []
+    for term in AI_RETRIEVAL_TERMS:
+        if normalized_phrase_exists(term, normalized_text):
+            terms.append(term)
+
+    for group_name, variants in SKILL_SYNONYM_GROUPS.items():
+        if any(normalized_phrase_exists(variant, normalized_text) for variant in variants):
+            terms.append(group_name)
+            terms.extend(variants)
+
+    if normalized_phrase_exists("RAG", normalized_text):
+        terms.append("Retrieval-Augmented Generation")
+    if normalized_phrase_exists("Retrieval-Augmented Generation", normalized_text):
+        terms.append("RAG")
+    if normalized_phrase_exists("LLM applications", normalized_text):
+        terms.extend(["DeepSeek API", "LLM application", "LLM API integration"])
+    if normalized_phrase_exists("workflow automation", normalized_text):
+        terms.extend(["job application workflow automation", "export workflow automation"])
+
+    for acronym in ("RAG", "LLM", "API", "ATS", "AI"):
+        if normalized_phrase_exists(acronym, normalized_text):
+            terms.append(acronym)
+
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for term in terms:
+        key = normalize_skill_text(term)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        deduped.append(term)
+    return deduped
+
+
 def build_knowledge_retrieval_query(job_description: str, resume_text: str) -> str:
     keywords = extract_retrieval_keywords(job_description)
+    ai_terms = extract_ai_retrieval_terms(job_description)
     query_parts = [
+        " ".join(ai_terms),
         job_description[:2500],
         " ".join(keywords),
         resume_text[:1200],
@@ -1244,6 +1520,12 @@ async def analyze(
     rag_chunks: list[dict[str, Any]] = []
     clean_rag_top_k = clamp_rag_top_k(rag_top_k)
     resolved_rag_mode = resolve_rag_mode(use_knowledge_base, rag_mode)
+    logger.info(
+        "Analyze RAG settings rag_mode=%s use_knowledge_base=%s rag_top_k=%s",
+        resolved_rag_mode,
+        use_knowledge_base,
+        clean_rag_top_k,
+    )
     if resolved_rag_mode == "project":
         retrieval_query = build_knowledge_retrieval_query(job_description, resume_text)
         rag_chunks, retrieval_method = search_project_knowledge(
@@ -1251,9 +1533,11 @@ async def analyze(
             clean_rag_top_k,
         )
         logger.info(
-            "Project Knowledge retrieval completed result_count=%s retrieval_method=%s",
+            "Project Knowledge retrieval completed result_count=%s retrieval_method=%s chunk_ids=%s titles=%s",
             len(rag_chunks),
             retrieval_method,
+            [chunk.get("chunk_id") for chunk in rag_chunks],
+            [chunk.get("document_title") for chunk in rag_chunks],
         )
 
     result = analyze_with_deepseek(resume_text, job_description, rag_chunks)

@@ -150,6 +150,12 @@ Skills demonstrated:
 - LLM applications: The project wraps the DeepSeek API in a real application workflow with validation, persistence, UI, and exports.
 - RAG: The system retrieves relevant project evidence before calling the LLM.
 - Retrieval-Augmented Generation: Top-k Project Knowledge chunks are injected into the analysis prompt to ground generated outputs.
+- Project-centered RAG: The RAG source is scoped to a curated project evidence file instead of arbitrary document uploads.
+- Document chunking: The backend splits `docs/PROJECT_KNOWLEDGE.md` into searchable chunks before indexing.
+- SQLite FTS5 retrieval: Project Knowledge chunks are indexed with SQLite FTS5 when available.
+- Top-k evidence injection: Only the most relevant retrieved chunks are inserted into the LLM prompt.
+- DeepSeek API integration: The backend calls the DeepSeek API through an OpenAI-compatible client and validates JSON responses.
+- FastAPI API development: The backend exposes REST APIs for Analyze, History, Export, and Project Knowledge status/rebuild/upload/search.
 - Prompt engineering: The backend prompt includes output schema rules, grounding rules, untrusted input handling, and anti-fabrication instructions.
 - Structured JSON output validation: The backend parses and normalizes LLM JSON output before returning or saving it.
 - Workflow automation: Resume parsing, JD analysis, scoring, cover letter generation, tracking, and export are combined into one workflow.
