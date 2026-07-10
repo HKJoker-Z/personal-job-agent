@@ -4,7 +4,7 @@
 
 Personal Job Application Agent is a full-stack AI-powered job application assistant. It helps a user analyze how well a resume matches a job description, generate an English cover letter, review ATS keyword coverage, track saved job applications, and export reusable application materials.
 
-The project uses React and Vite on the frontend, FastAPI and Python on the backend, SQLite for local application storage and RAG indexing, deterministic Python security utilities for AI safety controls, and the DeepSeek API as the LLM reasoning engine. It supports PDF and DOCX resume parsing, JD analysis from pasted text or one user-provided job URL, explainable scoring, ATS keyword analysis, application tracking, DOCX/PDF export, Project Knowledge RAG, custom agent workflow orchestration, deterministic next-action recommendation, human-in-the-loop decision recording, prompt injection mitigation, secret scanning, PII minimization, safe prompt construction, LLM output leakage scanning, and security audit trails.
+The project uses React and Vite on the frontend, FastAPI and Python on the backend, SQLite for local application storage, monitoring, evaluation, and RAG indexing, deterministic Python security utilities for AI safety controls, and the DeepSeek API as the LLM reasoning engine. It supports PDF and DOCX resume parsing, JD analysis from pasted text or one user-provided job URL, explainable scoring, ATS keyword analysis, application tracking, DOCX/PDF export, Project Knowledge RAG, custom agent workflow orchestration, deterministic next-action recommendation, human-in-the-loop decision recording, prompt injection mitigation, secret scanning, PII minimization, safe prompt construction, LLM output leakage scanning, security audit trails, local AI monitoring, sanitized trace lookup, and offline behavioral evaluation.
 
 The RAG design is intentionally project-centered. Instead of behaving like a general-purpose document storage product, the system retrieves evidence from a curated and auditable project skill evidence file: `docs/PROJECT_KNOWLEDGE.md`. This evidence helps the model ground job matching, cover letter generation, ATS analysis, and resume bullet optimization in real project experience.
 
@@ -181,6 +181,37 @@ Skills demonstrated:
 - Responsible AI
 - Defense-in-depth design
 
+### Version 1.8 - AI Monitoring and Behavioral Evaluation
+
+Version 1.8 added a lightweight monitoring and evaluation layer for the local AI workflow.
+
+- Added local SQLite monitoring for every Analyze workflow.
+- Recorded sanitized workflow and step metrics.
+- Added LLM latency and workflow latency aggregation.
+- Added RAG hit-rate and reconciliation monitoring.
+- Added security event and PII redaction monitoring.
+- Added recommendation and human-decision metrics.
+- Added sanitized trace lookup by workflow ID.
+- Added an offline deterministic behavioral evaluation suite.
+- Added evaluation run and result persistence.
+- Added a React Monitoring dashboard.
+
+Skills demonstrated:
+
+- AI observability
+- LLM monitoring
+- Workflow tracing
+- Performance metrics
+- Latency analysis
+- RAG evaluation
+- Security monitoring
+- Behavioral evaluation
+- Regression testing
+- Data minimization
+- SQLite analytics
+- FastAPI metrics APIs
+- Full-stack monitoring dashboard
+
 ## 3. Technical Stack
 
 - React: Builds the frontend user interface for Analyze, History, and Project Knowledge workflows.
@@ -189,6 +220,7 @@ Skills demonstrated:
 - Python: Implements backend orchestration, parsing, validation, SQLite operations, deterministic recommendation rules, and document export.
 - Python standard library security utilities: Implement deterministic regex-based prompt injection detection, credential scanning, PII redaction, output leakage scanning, and safe security finding normalization.
 - SQLite: Stores application records and local RAG metadata/chunks.
+- SQLite analytics: Stores metadata-only monitoring metrics, step timings, evaluation runs, and evaluation results.
 - SQLite FTS5: Provides local full-text retrieval for Project Knowledge chunks.
 - DeepSeek API: Provides LLM reasoning for resume-JD matching, ATS analysis, cover letter generation, and structured JSON output.
 - pypdf: Extracts text from PDF resumes.
@@ -197,6 +229,8 @@ Skills demonstrated:
 - Custom orchestration layer: Tracks the synchronous Analyze workflow with stable steps, statuses, safe messages, and duration measurements.
 - Safe prompt builder: Constructs prompts with explicit security rules, untrusted data delimiters, prompt size controls, and an internal non-secret leakage detection marker.
 - Rule-based recommendation engine: Generates explainable next actions without an additional LLM call.
+- Monitoring service: Records Analyze workflow metadata, step latency, RAG metrics, security metrics, recommendation metrics, and sanitized trace data.
+- Evaluation service: Runs deterministic offline behavioral and regression checks without calling DeepSeek.
 - REST API: Connects the React frontend with FastAPI backend workflows.
 - Git/GitHub: Used for version control, feature branches, release history, and project documentation.
 - Ubuntu server: Used for development and public IP testing.
@@ -227,6 +261,13 @@ Skills demonstrated:
 - Custom workflow orchestration: The backend records real workflow steps for validation, parsing, retrieval, LLM analysis, output validation, evidence reconciliation, recommendation, saving, and finalization.
 - Multi-step AI pipelines: The Analyze API is decomposed into explicit execution stages instead of a single opaque LLM call.
 - Workflow state management: Workflow steps track pending, running, completed, skipped, and failed states with measured duration.
+- AI observability: The system records metadata-only Analyze metrics for workflow outcomes, step latency, LLM duration, RAG behavior, security events, and recommendations.
+- LLM monitoring: The system measures LLM step duration without storing prompts or model responses.
+- Workflow tracing: Sanitized trace lookup by workflow ID exposes step status and duration without user content.
+- RAG evaluation: The system tracks RAG hit rate and Project Knowledge reconciliation counts.
+- Security monitoring: The system aggregates prompt injection, credential detection, output leakage, and PII redaction counts.
+- Behavioral evaluation: The offline suite validates security, safe prompt, RAG, recommendation, workflow timing, legacy default, and output leakage behavior.
+- Regression testing: Evaluation cases are deterministic and repeatable without external LLM calls.
 - Human-in-the-loop design: The Agent recommends the next action while the user controls accept, dismiss, or complete decisions.
 - Rule-based decision support: The next-action recommendation uses deterministic backend rules instead of an additional model call.
 - RAG-enhanced reasoning workflow: Project Knowledge retrieval and evidence reconciliation influence matching, ATS keywords, scoring, and recommendations.
@@ -255,6 +296,11 @@ Skills demonstrated:
 | SQLite FTS5 retrieval | SQLite FTS5, fallback keyword retrieval | Retrieval pipeline design, local search, resilient implementation | full-text search, FTS5, information retrieval |
 | Agent workflow orchestration | Python dataclasses, FastAPI, SQLite | Custom workflow orchestration, multi-step AI pipeline, execution audit trail | agentic AI foundation, workflow orchestration, audit trail |
 | AI security layer | Python standard library regex, FastAPI, safe prompt builder, SQLite audit fields | Prompt injection mitigation, secret detection, PII minimization, untrusted input isolation, LLM output validation | AI security, prompt injection, data leakage prevention, secure prompt construction |
+| Workflow Monitoring | FastAPI, SQLite, React | Workflow metrics, latency analysis, local AI observability | workflow monitoring, LLM monitoring, latency metrics |
+| RAG Monitoring | SQLite metrics, Project Knowledge RAG | RAG hit-rate analysis, reconciliation monitoring, retrieval observability | RAG evaluation, retrieval monitoring, RAG metrics |
+| Security Monitoring | Security utilities, SQLite analytics, React dashboard | Security event monitoring, PII redaction metrics, finding code aggregation | security monitoring, AI security metrics, data leakage monitoring |
+| Trace Explorer | FastAPI trace APIs, React UI, workflow IDs | Sanitized trace lookup, metadata-only debugging, data minimization | trace explorer, workflow tracing, observability |
+| Behavioral Evaluation Suite | Python standard library, SQLite, deterministic runners | Behavioral evaluation, regression testing, rule compliance testing | offline evaluation, regression evaluation, rule compliance |
 | Next-action recommendation | Deterministic Python rules, scoring breakdown, ATS analysis | Rule-based decision support, critical skill analysis, recommendation logic | decision support, next best action, explainable recommendation |
 | Human-in-the-loop decision | FastAPI PATCH API, SQLite, React UI | User-controlled AI workflow, decision recording, workflow governance | human-in-the-loop, HITL, AI governance |
 | Frontend/Backend integration | React, Vite, Fetch API, FastAPI REST API | Full-stack integration, state management, UI workflow design | React, FastAPI, REST API, full-stack |
@@ -279,6 +325,10 @@ Skills demonstrated:
 - LLM output leakage scanning redacts credential-like content and blocks internal marker leakage.
 - Security findings use stable codes and safe messages without storing full malicious content or detected secret values.
 - These controls are heuristic and reduce risk, but they cannot guarantee complete protection against every prompt injection attack.
+- Monitoring stores metadata and counts only, not raw resumes, job descriptions, prompts, model outputs, RAG chunk content, detected secret values, or attack text.
+- Evaluation runs offline without DeepSeek or external LLM calls.
+- Evaluation pass rate measures deterministic behavioral and rule compliance checks, not model accuracy or hiring success probability.
+- The trace explorer is a local sanitized trace lookup, not distributed tracing or production APM.
 - The system instructs the LLM not to fabricate user experience.
 - Cover letters must be grounded in the resume and retrieved evidence.
 - Generic arbitrary knowledge upload is removed from the product UI in v1.5.2 to reduce retrieval noise and data leakage risk.
@@ -332,9 +382,11 @@ A: Version 1.7 uses defense-in-depth controls around the LLM call. The backend s
 - Implemented a deterministic next-action engine with human-in-the-loop decisions to recommend applying, improving the resume, upskilling, saving, or skipping a role.
 - Persisted workflow audit trails and user decisions in SQLite and exposed them through FastAPI, React, and PDF reports.
 - Implemented a defense-in-depth AI security layer with prompt injection detection, secret scanning, PII redaction, untrusted context isolation, and LLM output leakage checks.
+- Built a privacy-aware AI monitoring layer using FastAPI and SQLite to track workflow latency, LLM execution time, RAG hit rates, security events, and recommendation outcomes without storing raw resumes or prompts.
+- Developed an offline behavioral evaluation suite for RAG evidence consistency, prompt injection controls, structured workflow behavior, and rule-based recommendation regression testing.
+- Implemented sanitized trace exploration by workflow ID to diagnose step-level performance, security outcomes, and RAG behavior without exposing user content.
 
 ## 9. Future Roadmap
 
-- Version 1.8 Monitoring and evaluation.
-- Version 1.9 Docker and cloud deployment.
+- Version 1.9 Docker, CI/CD, and cloud deployment.
 - Version 2.0 MCP server integration.

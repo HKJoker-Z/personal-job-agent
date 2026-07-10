@@ -148,6 +148,13 @@ button {
   cursor: pointer;
 }
 
+.link-button {
+  padding: 0;
+  color: #166b5f;
+  background: transparent;
+  text-decoration: underline;
+}
+
 .tabs {
   display: flex;
   gap: 8px;
@@ -480,6 +487,10 @@ pre {
   align-items: end;
 }
 
+.monitoring-toolbar {
+  grid-template-columns: minmax(160px, 220px) auto;
+}
+
 .list-summary {
   display: flex;
   align-items: baseline;
@@ -748,6 +759,28 @@ th {
   background: #f8fbff;
 }
 
+.metrics-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.metric-card {
+  border: 1px solid #e1e8f0;
+  border-radius: 8px;
+  padding: 12px;
+  background: #fbfcfe;
+}
+
+.metric-card strong {
+  display: block;
+  margin-top: 5px;
+  color: #1f2937;
+  font-size: 18px;
+  overflow-wrap: anywhere;
+}
+
 .security-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -858,7 +891,8 @@ th {
   .breakdown-grid,
   .ats-grid,
   .source-grid,
-  .security-grid {
+  .security-grid,
+  .metrics-grid {
     grid-template-columns: 1fr;
   }
 

@@ -149,6 +149,7 @@ class WorkflowContext:
     resume_text: str = ""
     job_text: str = ""
     job_url: str | None = None
+    source_type: str = "text"
     rag_mode: str = "project"
     rag_top_k: int = 5
     retrieved_chunks: list[dict[str, Any]] = field(default_factory=list)
@@ -159,6 +160,8 @@ class WorkflowContext:
     safe_prompt: str = ""
     security_scan: dict[str, Any] = field(default_factory=dict)
     security_status: str = "passed"
+    json_parse_success: bool | None = None
+    rag_reconciliation_count: int = 0
     llm_raw_response: str = ""
     normalized_result: dict[str, Any] = field(default_factory=dict)
     next_action: dict[str, Any] = field(default_factory=dict)

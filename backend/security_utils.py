@@ -259,6 +259,7 @@ def empty_security_scan() -> dict[str, Any]:
         "redaction_summary": {
             "email_count": 0,
             "phone_count": 0,
+            "address_count": 0,
             "secret_count": 0,
             "private_key_count": 0,
         },
@@ -545,6 +546,7 @@ def prepare_resume_for_llm(resume_text: str) -> tuple[str, dict[str, Any]]:
     scan["pii_redacted"] = any(pii_summary.values())
     scan["redaction_summary"]["email_count"] = pii_summary["email_count"]
     scan["redaction_summary"]["phone_count"] = pii_summary["phone_count"]
+    scan["redaction_summary"]["address_count"] = pii_summary["address_count"]
     scan["risk_level"] = calculate_risk_level(scan["findings"], bool(scan["blocked"]))
     return redacted, scan
 

@@ -3,7 +3,7 @@ import { createRoot } from "react-dom/client";
 import "./styles.css";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://101.34.61.52:8000";
-const APP_VERSION = "1.7";
+const APP_VERSION = "1.8";
 const APPLICATION_STATUSES = ["Saved", "Applied", "Interview", "Rejected", "Offer"];
 const NEXT_ACTION_DECISIONS = [
   { value: "accepted", label: "Accept Recommendation" },
@@ -60,6 +60,14 @@ function displayConfidence(value) {
     return "0%";
   }
   return `${Math.round(Math.max(0, Math.min(1, confidence)) * 100)}%`;
+}
+
+function formatPercent(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) {
+    return "0%";
+  }
+  return `${Math.round(Math.max(0, number) * 100)}%`;
 }
 
 function formatDuration(durationMs, durationUs, status = "") {
@@ -128,6 +136,10 @@ function getRequestErrorMessage(error, fallback) {
   }
 
   return error.message || fallback;
+}
+
+function getRequestErrorPayload(error) {
+  return error?.payload && typeof error.payload === "object" ? error.payload : null;
 }
 
 async function requestJson(url, options, fallback) {
@@ -212,6 +224,7 @@ function SecurityAuditSection({ scan, status, policyVersion }) {
   const redactionTotal =
     (Number.parseInt(summary.email_count, 10) || 0) +
     (Number.parseInt(summary.phone_count, 10) || 0) +
+    (Number.parseInt(summary.address_count, 10) || 0) +
     (Number.parseInt(summary.secret_count, 10) || 0) +
     (Number.parseInt(summary.private_key_count, 10) || 0);
   const safeStatus = status || "not_available";
@@ -1390,6 +1403,434 @@ function HistoryPage() {
   );
 }
 
+function MetricCard({ label, value }) {
+  return (
+    <div className="metric-card">
+      <span className="label">{label}</span>
+      <strong>{value}</strong>
+    </div>
+  );
+}
+
+function MonitoringPage() {
+  const [days, setDays] = useState(30);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [data, setData] = useState(null);
+  const [selectedTrace, setSelectedTrace] = useState(null);
+  const [traceLoadingId, setTraceLoadingId] = useState("");
+  const [evaluationRun, setEvaluationRun] = useState(null);
+  const [evaluationRunning, setEvaluationRunning] = useState(false);
+
+  async function loadMonitoring() {
+    if (loading) {
+      return;
+    }
+    setLoading(true);
+    setError("");
+    try {
+      const params = `days=${days}`;
+      const [
+        status,
+        overview,
+        workflowSteps,
+        rag,
+        security,
+        recommendations,
+        traces,
+        evaluationStatus,
+        evaluationRuns,
+      ] = await Promise.all([
+        requestJson(`${API_BASE_URL}/api/monitoring/status`, undefined, "Failed to load monitoring status."),
+        requestJson(`${API_BASE_URL}/api/monitoring/overview?${params}`, undefined, "Failed to load monitoring overview."),
+        requestJson(`${API_BASE_URL}/api/monitoring/workflow-steps?${params}`, undefined, "Failed to load workflow metrics."),
+        requestJson(`${API_BASE_URL}/api/monitoring/rag?${params}`, undefined, "Failed to load RAG metrics."),
+        requestJson(`${API_BASE_URL}/api/monitoring/security?${params}`, undefined, "Failed to load security metrics."),
+        requestJson(`${API_BASE_URL}/api/monitoring/recommendations?${params}`, undefined, "Failed to load recommendation metrics."),
+        requestJson(`${API_BASE_URL}/api/monitoring/traces?${params}&limit=20`, undefined, "Failed to load traces."),
+        requestJson(`${API_BASE_URL}/api/evaluations/status`, undefined, "Failed to load evaluation status."),
+        requestJson(`${API_BASE_URL}/api/evaluations/runs?limit=1&offset=0`, undefined, "Failed to load evaluation runs."),
+      ]);
+      setData({
+        status,
+        overview,
+        workflowSteps,
+        rag,
+        security,
+        recommendations,
+        traces,
+        evaluationStatus,
+        evaluationRuns,
+      });
+      const latestRun = asArray(evaluationRuns.items)[0] || null;
+      if (latestRun && !evaluationRun) {
+        setEvaluationRun(latestRun);
+      }
+    } catch (err) {
+      setError(getRequestErrorMessage(err, "Failed to load monitoring data."));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    loadMonitoring();
+  }, []);
+
+  async function loadTrace(workflowId) {
+    if (!workflowId || traceLoadingId) {
+      return;
+    }
+    setTraceLoadingId(workflowId);
+    setError("");
+    try {
+      const trace = await requestJson(
+        `${API_BASE_URL}/api/monitoring/traces/${workflowId}`,
+        undefined,
+        "Failed to load trace.",
+      );
+      setSelectedTrace(trace);
+    } catch (err) {
+      setError(getRequestErrorMessage(err, "Failed to load trace."));
+    } finally {
+      setTraceLoadingId("");
+    }
+  }
+
+  async function runEvaluation() {
+    if (evaluationRunning) {
+      return;
+    }
+    setEvaluationRunning(true);
+    setError("");
+    try {
+      const run = await requestJson(
+        `${API_BASE_URL}/api/evaluations/run`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ suite_name: "default", mode: "offline" }),
+        },
+        "Failed to run offline evaluation.",
+      );
+      setEvaluationRun(run);
+      await loadMonitoring();
+    } catch (err) {
+      const payload = getRequestErrorPayload(err);
+      const workflowNote = payload?.workflow_id ? ` Workflow ID: ${payload.workflow_id}` : "";
+      setError(`${getRequestErrorMessage(err, "Failed to run offline evaluation.")}${workflowNote}`);
+    } finally {
+      setEvaluationRunning(false);
+    }
+  }
+
+  const overview = asObject(data?.overview);
+  const workflowItems = asArray(data?.workflowSteps?.items);
+  const rag = asObject(data?.rag);
+  const security = asObject(data?.security);
+  const recommendations = asObject(data?.recommendations);
+  const actionDistribution = asObject(recommendations.action_distribution);
+  const decisionDistribution = asObject(recommendations.decision_distribution);
+  const traces = asArray(data?.traces?.items);
+  const findingCodes = asObject(security.finding_codes);
+  const latestRun = evaluationRun || asArray(data?.evaluationRuns?.items)[0] || null;
+  const latestResults = asArray(latestRun?.results);
+
+  return (
+    <>
+      <section className="panel history-panel">
+        <div className="panel-heading">
+          <div>
+            <span className="eyebrow">Monitoring</span>
+            <h2>AI Monitoring and Behavioral Evaluation</h2>
+          </div>
+          <span className="version-pill">v{APP_VERSION}</span>
+        </div>
+        <div className="history-toolbar monitoring-toolbar">
+          <label>
+            Date Range
+            <select value={days} onChange={(event) => setDays(Number(event.target.value))}>
+              <option value="7">7 days</option>
+              <option value="30">30 days</option>
+              <option value="90">90 days</option>
+            </select>
+          </label>
+          <button type="button" onClick={loadMonitoring} disabled={loading}>
+            {loading ? "Refreshing..." : "Refresh"}
+          </button>
+        </div>
+        <p className="muted">
+          Trace metadata does not include resumes, job descriptions, prompts, model responses, or detected secrets.
+        </p>
+      </section>
+
+      {error && (
+        <section className="panel state-panel error-panel" role="alert">
+          <strong>Monitoring request failed</strong>
+          <p>{error}</p>
+        </section>
+      )}
+
+      {!data && !loading && !error && (
+        <section className="panel state-panel">
+          <p className="muted">Monitoring data has not loaded yet.</p>
+        </section>
+      )}
+
+      {data && (
+        <>
+          <section className="panel results-panel">
+            <div className="section-heading-row">
+              <h3>Overview</h3>
+              <span className="muted">{displayText(data.status?.privacy_mode, "metadata_only")}</span>
+            </div>
+            <div className="metrics-grid">
+              <MetricCard label="Total Analyses" value={overview.total_analyses ?? 0} />
+              <MetricCard label="Completion Rate" value={formatPercent(overview.completion_rate)} />
+              <MetricCard label="Clean Success Rate" value={formatPercent(overview.clean_success_rate)} />
+              <MetricCard label="Blocked" value={overview.blocked ?? 0} />
+              <MetricCard label="Average Workflow Duration" value={formatDuration(overview.average_workflow_duration_ms)} />
+              <MetricCard label="Average LLM Duration" value={formatDuration(overview.average_llm_duration_ms)} />
+              <MetricCard label="RAG Hit Rate" value={formatPercent(overview.rag_hit_rate)} />
+              <MetricCard label="Security Warning Rate" value={formatPercent(overview.security_warning_rate)} />
+              <MetricCard label="JSON Parse Failures" value={overview.json_parse_failure_count ?? 0} />
+            </div>
+          </section>
+
+          <section className="panel list-panel">
+            <h3>Workflow Performance</h3>
+            {workflowItems.length ? (
+              <div className="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Step</th>
+                      <th>Completed</th>
+                      <th>Failed</th>
+                      <th>Skipped</th>
+                      <th>Average</th>
+                      <th>P50</th>
+                      <th>P95</th>
+                      <th>Maximum</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {workflowItems.map((item) => (
+                      <tr key={item.step_key}>
+                        <td>{displayText(item.step_key)}</td>
+                        <td>{item.completed_count}</td>
+                        <td>{item.failed_count}</td>
+                        <td>{item.skipped_count}</td>
+                        <td>{formatDuration(item.average_ms)}</td>
+                        <td>{formatDuration(item.p50_ms)}</td>
+                        <td>{formatDuration(item.p95_ms)}</td>
+                        <td>{formatDuration(item.maximum_ms)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <p className="muted">No workflow step metrics found for this period.</p>
+            )}
+          </section>
+
+          <section className="panel results-panel">
+            <h3>RAG Monitoring</h3>
+            <div className="metrics-grid">
+              <MetricCard label="RAG Enabled Runs" value={rag.rag_enabled_runs ?? 0} />
+              <MetricCard label="RAG Hit Runs" value={rag.rag_hit_runs ?? 0} />
+              <MetricCard label="RAG No-Hit Runs" value={rag.rag_no_hit_runs ?? 0} />
+              <MetricCard label="Hit Rate" value={formatPercent(rag.rag_hit_rate)} />
+              <MetricCard label="Average Sources" value={Number(rag.average_source_count || 0).toFixed(2)} />
+              <MetricCard label="Average Retrieval Duration" value={formatDuration(rag.average_retrieval_duration_ms)} />
+              <MetricCard label="Reconciliation Runs" value={rag.reconciliation_runs ?? 0} />
+              <MetricCard label="Skills Reconciled" value={rag.reconciliation_total ?? 0} />
+            </div>
+          </section>
+
+          <section className="panel results-panel">
+            <h3>Security Monitoring</h3>
+            <div className="metrics-grid">
+              <MetricCard label="Passed" value={security.passed ?? 0} />
+              <MetricCard label="Passed with Warnings" value={security.passed_with_warnings ?? 0} />
+              <MetricCard label="Blocked" value={security.blocked ?? 0} />
+              <MetricCard label="Prompt Injection Detections" value={security.prompt_injection_detection_count ?? 0} />
+              <MetricCard label="Sensitive Credential Detections" value={security.sensitive_data_detection_count ?? 0} />
+              <MetricCard label="Output Leakage Detections" value={security.output_leakage_detection_count ?? 0} />
+              <MetricCard label="Email Redactions" value={security.total_email_redactions ?? 0} />
+              <MetricCard label="Phone Redactions" value={security.total_phone_redactions ?? 0} />
+              <MetricCard label="Address Redactions" value={security.total_address_redactions ?? 0} />
+            </div>
+            <div className="findings-list">
+              <h4>Finding Code Distribution</h4>
+              {Object.keys(findingCodes).length ? (
+                Object.entries(findingCodes).map(([code, count]) => (
+                  <article className="finding-card" key={code}>
+                    <span>{code}</span>
+                    <strong>{count}</strong>
+                  </article>
+                ))
+              ) : (
+                <p className="muted">No security finding codes recorded.</p>
+              )}
+            </div>
+          </section>
+
+          <section className="panel results-panel">
+            <h3>Recommendation Monitoring</h3>
+            <div className="metrics-grid">
+              <MetricCard label="Apply Now" value={actionDistribution.apply_now ?? 0} />
+              <MetricCard label="Improve Resume First" value={actionDistribution.improve_resume_first ?? 0} />
+              <MetricCard label="Upskill First" value={actionDistribution.upskill_first ?? 0} />
+              <MetricCard label="Save for Later" value={actionDistribution.save_for_later ?? 0} />
+              <MetricCard label="Skip" value={actionDistribution.skip ?? 0} />
+              <MetricCard label="Pending" value={decisionDistribution.pending ?? 0} />
+              <MetricCard label="Accepted" value={decisionDistribution.accepted ?? 0} />
+              <MetricCard label="Dismissed" value={decisionDistribution.dismissed ?? 0} />
+              <MetricCard label="Completed" value={decisionDistribution.completed ?? 0} />
+              <MetricCard label="Acceptance Rate" value={formatPercent(recommendations.recommendation_acceptance_rate)} />
+            </div>
+          </section>
+
+          <section className="panel list-panel">
+            <h3>Trace Explorer</h3>
+            {traces.length ? (
+              <div className="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Workflow ID</th>
+                      <th>Time</th>
+                      <th>Outcome</th>
+                      <th>Duration</th>
+                      <th>LLM Duration</th>
+                      <th>RAG Sources</th>
+                      <th>Security</th>
+                      <th>Risk</th>
+                      <th>Next Action</th>
+                      <th>Error</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {traces.map((trace) => (
+                      <tr key={trace.workflow_id}>
+                        <td>
+                          <button type="button" className="link-button" onClick={() => loadTrace(trace.workflow_id)}>
+                            {traceLoadingId === trace.workflow_id ? "Loading..." : trace.workflow_id.slice(0, 8)}
+                          </button>
+                        </td>
+                        <td>{formatDate(trace.created_at)}</td>
+                        <td>{displayText(trace.outcome)}</td>
+                        <td>{formatDuration(trace.workflow_duration_ms)}</td>
+                        <td>{formatDuration(trace.llm_duration_ms)}</td>
+                        <td>{trace.rag_source_count ?? 0}</td>
+                        <td>{displayText(trace.security_status)}</td>
+                        <td>{displayText(trace.security_risk_level)}</td>
+                        <td>{displayText(trace.next_action, "None")}</td>
+                        <td>{displayText(trace.error_code, "None")}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <p className="muted">No trace metadata found for this period.</p>
+            )}
+          </section>
+
+          {selectedTrace && (
+            <section className="panel detail-panel">
+              <h3>Trace Detail</h3>
+              <div className="detail-grid">
+                <div>
+                  <span className="label">Workflow ID</span>
+                  <p>{selectedTrace.workflow_id}</p>
+                </div>
+                <div>
+                  <span className="label">Outcome</span>
+                  <p>{displayText(selectedTrace.outcome)}</p>
+                </div>
+                <div>
+                  <span className="label">Duration</span>
+                  <p>{formatDuration(selectedTrace.workflow_duration_ms)}</p>
+                </div>
+                <div>
+                  <span className="label">LLM Duration</span>
+                  <p>{formatDuration(selectedTrace.llm_duration_ms)}</p>
+                </div>
+              </div>
+              <AgentWorkflowSection steps={selectedTrace.steps} workflowDurationMs={selectedTrace.workflow_duration_ms} />
+              <div className="metrics-grid">
+                <MetricCard label="RAG Mode" value={displayText(selectedTrace.rag?.mode, "None")} />
+                <MetricCard label="RAG Sources" value={selectedTrace.rag?.source_count ?? 0} />
+                <MetricCard label="RAG Hit" value={selectedTrace.rag?.hit ? "Yes" : "No"} />
+                <MetricCard label="Reconciliations" value={selectedTrace.rag?.reconciliation_count ?? 0} />
+                <MetricCard label="Security Status" value={displayText(selectedTrace.security?.status, "not_available")} />
+                <MetricCard label="Security Risk" value={displayText(selectedTrace.security?.risk_level, "not_available")} />
+                <MetricCard label="Error Stage" value={displayText(selectedTrace.error_stage, "None")} />
+                <MetricCard label="Error Code" value={displayText(selectedTrace.error_code, "None")} />
+              </div>
+            </section>
+          )}
+
+          <section className="panel results-panel">
+            <div className="section-heading-row">
+              <h3>Behavioral Evaluation Suite</h3>
+              <button type="button" onClick={runEvaluation} disabled={evaluationRunning}>
+                {evaluationRunning ? "Running..." : "Run Offline Evaluation"}
+              </button>
+            </div>
+            <p className="muted">
+              Evaluation pass rate measures deterministic behavioral and rule compliance checks. It is not model accuracy or hiring success probability.
+            </p>
+            <div className="metrics-grid">
+              <MetricCard label="Evaluation Mode" value={displayText(data.evaluationStatus?.mode, "offline")} />
+              <MetricCard label="Suite Version" value={displayText(data.evaluationStatus?.suite_version, "1.8.0")} />
+              <MetricCard label="Total Cases" value={latestRun?.total_cases ?? 0} />
+              <MetricCard label="Passed" value={latestRun?.passed_cases ?? 0} />
+              <MetricCard label="Failed" value={latestRun?.failed_cases ?? 0} />
+              <MetricCard label="Errors" value={latestRun?.error_cases ?? 0} />
+              <MetricCard label="Pass Rate" value={formatPercent(latestRun?.pass_rate)} />
+              <MetricCard label="Duration" value={formatDuration(latestRun?.duration_ms)} />
+            </div>
+            {latestResults.length ? (
+              <div className="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Case</th>
+                      <th>Category</th>
+                      <th>Status</th>
+                      <th>Duration</th>
+                      <th>Checks</th>
+                      <th>Failure Summary</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {latestResults.map((item) => (
+                      <tr key={item.case_id}>
+                        <td>{displayText(item.case_name)}</td>
+                        <td>{displayText(item.category)}</td>
+                        <td>{displayText(item.status)}</td>
+                        <td>{formatDuration(item.duration_ms)}</td>
+                        <td>{Object.entries(asObject(item.checks)).filter(([, passed]) => passed).length}/{Object.keys(asObject(item.checks)).length}</td>
+                        <td>{displayText(item.failure_summary, "None")}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <p className="muted">No evaluation case results loaded yet.</p>
+            )}
+          </section>
+        </>
+      )}
+    </>
+  );
+}
+
 function ProjectKnowledgePage() {
   const [status, setStatus] = useState(null);
   const [statusLoading, setStatusLoading] = useState(false);
@@ -1754,7 +2195,7 @@ function App() {
           <span className="version-pill">v{APP_VERSION}</span>
         </div>
         <p>
-          Resume-JD matching, Project Knowledge RAG, AI security checks, ATS analysis, cover letter generation, and application tracking.
+          Resume-JD matching, Project Knowledge RAG, AI security checks, monitoring, behavioral evaluation, ATS analysis, cover letter generation, and application tracking.
         </p>
         <p className="security-notice">
           This tool uses heuristic security controls and cannot guarantee complete protection against every prompt injection attack. Users should review generated content before use.
@@ -1762,6 +2203,7 @@ function App() {
         <div className="feature-strip" aria-label="Core product features">
           <span>Project Knowledge RAG</span>
           <span>AI Security</span>
+          <span>Monitoring</span>
           <span>Explainable scoring</span>
           <span>ATS keywords</span>
           <span>DOCX/PDF exports</span>
@@ -1791,11 +2233,19 @@ function App() {
         >
           Project Knowledge
         </button>
+        <button
+          type="button"
+          className={activeTab === "monitoring" ? "active-tab" : ""}
+          onClick={() => setActiveTab("monitoring")}
+        >
+          Monitoring
+        </button>
       </nav>
 
       {activeTab === "analyze" && <AnalyzePage />}
       {activeTab === "history" && <HistoryPage />}
       {activeTab === "knowledge" && <ProjectKnowledgePage />}
+      {activeTab === "monitoring" && <MonitoringPage />}
 
       <footer className="app-footer">API Base URL: {API_BASE_URL}</footer>
     </main>
