@@ -132,6 +132,7 @@ def add_summary_table(
         ["Job URL", paragraph_text(record.get("job_url"))],
         ["Application Status", paragraph_text(record.get("application_status"), "Saved")],
         ["Match Score", f"{clean_text(record.get('match_score'), '0')}/100"],
+        ["RAG Mode", paragraph_text(record.get("rag_mode"), "Not recorded")],
     ]
     table = Table(
         [
@@ -240,6 +241,11 @@ def add_rag_sources(
     body_style: ParagraphStyle,
 ) -> None:
     add_heading(story, "RAG Sources", heading_style)
+    story.append(
+        Paragraph(f"RAG Mode: {paragraph_text(record.get('rag_mode'), 'Not recorded')}", body_style)
+    )
+    story.append(Spacer(1, 0.06 * inch))
+
     sources = record.get("rag_sources")
     if not isinstance(sources, list) or not sources:
         story.append(Paragraph("No RAG sources used.", body_style))

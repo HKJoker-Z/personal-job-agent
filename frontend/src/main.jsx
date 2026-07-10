@@ -3,16 +3,8 @@ import { createRoot } from "react-dom/client";
 import "./styles.css";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://101.34.61.52:8000";
-const APP_VERSION = "1.5";
+const APP_VERSION = "1.5.2";
 const APPLICATION_STATUSES = ["Saved", "Applied", "Interview", "Rejected", "Offer"];
-const KNOWLEDGE_CATEGORIES = [
-  "Resume",
-  "Project Experience",
-  "Skill Profile",
-  "Past Cover Letter",
-  "Company Research",
-  "Other",
-];
 const SCORING_DIMENSIONS = [
   { key: "skills_match", label: "Skills Match" },
   { key: "project_experience", label: "Project Experience" },
@@ -47,6 +39,14 @@ function displayPosition(value) {
 
 function displayText(value, fallback = "Not provided") {
   return String(value || "").trim() || fallback;
+}
+
+function displayRagMode(value) {
+  const cleanValue = String(value || "").trim();
+  if (!cleanValue) {
+    return "Not recorded";
+  }
+  return cleanValue;
 }
 
 function formatDate(value) {
@@ -416,6 +416,10 @@ function AnalysisResult({ result }) {
       <ScoringBreakdownSection breakdown={result.scoring_breakdown} />
       <ATSAnalysisSection analysis={result.ats_analysis} />
       <UpgradedResumeBulletsSection bullets={result.upgraded_resume_bullets} />
+      <section className="result-section">
+        <h3>RAG Mode</h3>
+        <p>{displayRagMode(result.rag_mode)}</p>
+      </section>
       <RagSourcesSection sources={result.rag_sources} />
       <ExportActions applicationId={result.application_id} enabled={savedToHistory} />
 
@@ -432,7 +436,7 @@ function AnalyzePage() {
   const [jobText, setJobText] = useState("");
   const [jobUrl, setJobUrl] = useState("");
   const [saveToHistory, setSaveToHistory] = useState(true);
-  const [useKnowledgeBase, setUseKnowledgeBase] = useState(true);
+  const [ragMode, setRagMode] = useState("project");
   const [ragTopK, setRagTopK] = useState(5);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -476,7 +480,8 @@ function AnalyzePage() {
     formData.append("job_text", jobText);
     formData.append("job_url", jobUrl);
     formData.append("save_to_history", saveToHistory ? "true" : "false");
-    formData.append("use_knowledge_base", useKnowledgeBase ? "true" : "false");
+    formData.append("rag_mode", ragMode);
+    formData.append("use_knowledge_base", ragMode !== "off" ? "true" : "false");
     formData.append("rag_top_k", String(Math.max(1, Math.min(10, Number(ragTopK) || 5))));
 
     setLoading(true);
@@ -549,13 +554,12 @@ function AnalyzePage() {
         </label>
 
         <div className="rag-controls">
-          <label className="checkbox-label">
-            <input
-              type="checkbox"
-              checked={useKnowledgeBase}
-              onChange={(event) => setUseKnowledgeBase(event.target.checked)}
-            />
-            Use Knowledge Base RAG
+          <label>
+            RAG Mode
+            <select value={ragMode} onChange={(event) => setRagMode(event.target.value)}>
+              <option value="project">Project Knowledge RAG</option>
+              <option value="off">Off</option>
+            </select>
           </label>
 
           <label>
@@ -566,7 +570,7 @@ function AnalyzePage() {
               max="10"
               value={ragTopK}
               onChange={(event) => setRagTopK(event.target.value)}
-              disabled={!useKnowledgeBase}
+              disabled={ragMode === "off"}
             />
           </label>
         </div>
@@ -918,6 +922,10 @@ function HistoryPage() {
           <ScoringBreakdownSection breakdown={selectedRecord.scoring_breakdown} />
           <ATSAnalysisSection analysis={selectedRecord.ats_analysis} />
           <UpgradedResumeBulletsSection bullets={selectedRecord.upgraded_resume_bullets} />
+          <section className="result-section">
+            <h3>RAG Mode</h3>
+            <p>{displayRagMode(selectedRecord.rag_mode)}</p>
+          </section>
           <RagSourcesSection sources={selectedRecord.rag_sources} />
           <ExportActions applicationId={selectedRecord.id} />
 
@@ -952,24 +960,18 @@ function HistoryPage() {
   );
 }
 
-function KnowledgeBasePage() {
-  const [documents, setDocuments] = useState([]);
-  const [total, setTotal] = useState(0);
-  const [categoryFilter, setCategoryFilter] = useState("All");
-  const [documentSearch, setDocumentSearch] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
-  const [title, setTitle] = useState("");
-  const [category, setCategory] = useState("Project Experience");
-  const [contentText, setContentText] = useState("");
-  const [file, setFile] = useState(null);
-  const [fileInputKey, setFileInputKey] = useState(0);
-  const [adding, setAdding] = useState(false);
-  const [addError, setAddError] = useState("");
-  const [selectedDocument, setSelectedDocument] = useState(null);
-  const [detailLoading, setDetailLoading] = useState(false);
-  const [detailError, setDetailError] = useState("");
-  const [deletingId, setDeletingId] = useState(null);
+function ProjectKnowledgePage() {
+  const [status, setStatus] = useState(null);
+  const [statusLoading, setStatusLoading] = useState(false);
+  const [statusError, setStatusError] = useState("");
+  const [uploadFile, setUploadFile] = useState(null);
+  const [uploadInputKey, setUploadInputKey] = useState(0);
+  const [uploading, setUploading] = useState(false);
+  const [uploadMessage, setUploadMessage] = useState("");
+  const [uploadError, setUploadError] = useState("");
+  const [rebuilding, setRebuilding] = useState(false);
+  const [rebuildMessage, setRebuildMessage] = useState("");
+  const [rebuildError, setRebuildError] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
   const [searchTopK, setSearchTopK] = useState(5);
   const [searchResults, setSearchResults] = useState([]);
@@ -977,141 +979,102 @@ function KnowledgeBasePage() {
   const [searchError, setSearchError] = useState("");
   const [hasSearched, setHasSearched] = useState(false);
 
-  async function loadDocuments() {
-    if (loading) {
+  async function loadStatus() {
+    if (statusLoading) {
       return;
     }
 
-    setLoading(true);
-    setError("");
-
-    const params = new URLSearchParams();
-    params.set("limit", "50");
-    params.set("offset", "0");
-    if (categoryFilter !== "All") {
-      params.set("category", categoryFilter);
-    }
-    if (documentSearch.trim()) {
-      params.set("search", documentSearch.trim());
-    }
-
+    setStatusLoading(true);
+    setStatusError("");
     try {
       const data = await requestJson(
-        `${API_BASE_URL}/api/knowledge/documents?${params.toString()}`,
+        `${API_BASE_URL}/api/project-knowledge/status`,
         undefined,
-        "Failed to load knowledge documents.",
+        "Failed to load Project Knowledge status.",
       );
-      setDocuments(asArray(data.items));
-      setTotal(Number.isFinite(Number(data.total)) ? Number(data.total) : 0);
+      setStatus(data);
     } catch (err) {
-      setError(getRequestErrorMessage(err, "Failed to load knowledge documents."));
-      setDocuments([]);
-      setTotal(0);
+      setStatusError(getRequestErrorMessage(err, "Failed to load Project Knowledge status."));
+      setStatus(null);
     } finally {
-      setLoading(false);
+      setStatusLoading(false);
     }
   }
 
   useEffect(() => {
-    loadDocuments();
+    loadStatus();
   }, []);
 
-  async function handleAddDocument(event) {
+  function isSupportedProjectKnowledgeFile(file) {
+    const name = String(file?.name || "").toLowerCase();
+    return name.endsWith(".md") || name.endsWith(".txt");
+  }
+
+  async function handleUpload(event) {
     event.preventDefault();
-    if (adding) {
+    if (uploading) {
       return;
     }
 
-    setAddError("");
-    if (!title.trim()) {
-      setAddError("Please provide a document title.");
+    setUploadMessage("");
+    setUploadError("");
+    if (!uploadFile) {
+      setUploadError("Please choose a .md or .txt file.");
       return;
     }
-    if (!contentText.trim() && !file) {
-      setAddError("Please provide text content or upload a supported file.");
+    if (!isSupportedProjectKnowledgeFile(uploadFile)) {
+      setUploadError("Only .md and .txt files are supported.");
       return;
     }
 
     const formData = new FormData();
-    formData.append("title", title.trim());
-    formData.append("category", category);
-    formData.append("content_text", contentText);
-    if (file) {
-      formData.append("file", file);
-    }
+    formData.append("file", uploadFile);
 
-    setAdding(true);
+    setUploading(true);
     try {
-      await requestJson(
-        `${API_BASE_URL}/api/knowledge/documents`,
+      const data = await requestJson(
+        `${API_BASE_URL}/api/project-knowledge/upload`,
         {
           method: "POST",
           body: formData,
         },
-        "Failed to add knowledge document.",
+        "Failed to upload Project Knowledge file.",
       );
-      setTitle("");
-      setCategory("Project Experience");
-      setContentText("");
-      setFile(null);
-      setFileInputKey((value) => value + 1);
-      await loadDocuments();
+      setUploadMessage(data.message || "Project Knowledge uploaded and indexed successfully.");
+      setUploadFile(null);
+      setUploadInputKey((value) => value + 1);
+      await loadStatus();
     } catch (err) {
-      setAddError(getRequestErrorMessage(err, "Failed to add knowledge document."));
+      setUploadError(getRequestErrorMessage(err, "Failed to upload Project Knowledge file."));
     } finally {
-      setAdding(false);
+      setUploading(false);
     }
   }
 
-  async function handleViewDocument(documentId) {
-    if (detailLoading) {
+  async function handleRebuild() {
+    if (rebuilding) {
       return;
     }
 
-    setDetailLoading(true);
-    setDetailError("");
-
+    setRebuildMessage("");
+    setRebuildError("");
+    setRebuilding(true);
     try {
       const data = await requestJson(
-        `${API_BASE_URL}/api/knowledge/documents/${documentId}`,
-        undefined,
-        "Failed to load knowledge document.",
+        `${API_BASE_URL}/api/project-knowledge/rebuild`,
+        { method: "POST" },
+        "Failed to rebuild Project Knowledge index.",
       );
-      setSelectedDocument(data);
+      setRebuildMessage(`Rebuilt ${Number.parseInt(data.chunk_count, 10) || 0} chunks.`);
+      await loadStatus();
     } catch (err) {
-      setDetailError(getRequestErrorMessage(err, "Failed to load knowledge document."));
+      setRebuildError(getRequestErrorMessage(err, "Failed to rebuild Project Knowledge index."));
     } finally {
-      setDetailLoading(false);
+      setRebuilding(false);
     }
   }
 
-  async function handleDeleteDocument(documentId) {
-    if (deletingId || !window.confirm("Delete this knowledge document?")) {
-      return;
-    }
-
-    setDeletingId(documentId);
-    setError("");
-    setDetailError("");
-
-    try {
-      await requestJson(
-        `${API_BASE_URL}/api/knowledge/documents/${documentId}`,
-        { method: "DELETE" },
-        "Failed to delete knowledge document.",
-      );
-      if (selectedDocument?.id === documentId) {
-        setSelectedDocument(null);
-      }
-      await loadDocuments();
-    } catch (err) {
-      setError(getRequestErrorMessage(err, "Failed to delete knowledge document."));
-    } finally {
-      setDeletingId(null);
-    }
-  }
-
-  async function handleKnowledgeSearch(event) {
+  async function handleProjectKnowledgeSearch(event) {
     event.preventDefault();
     if (searchLoading) {
       return;
@@ -1132,13 +1095,13 @@ function KnowledgeBasePage() {
 
     try {
       const data = await requestJson(
-        `${API_BASE_URL}/api/knowledge/search?${params.toString()}`,
+        `${API_BASE_URL}/api/project-knowledge/search?${params.toString()}`,
         undefined,
-        "Failed to search knowledge base.",
+        "Failed to search Project Knowledge.",
       );
       setSearchResults(asArray(data.items));
     } catch (err) {
-      setSearchError(getRequestErrorMessage(err, "Failed to search knowledge base."));
+      setSearchError(getRequestErrorMessage(err, "Failed to search Project Knowledge."));
       setSearchResults([]);
     } finally {
       setSearchLoading(false);
@@ -1147,63 +1110,93 @@ function KnowledgeBasePage() {
 
   return (
     <>
-      <form className="panel form-panel" onSubmit={handleAddDocument}>
+      <section className="panel state-panel">
+        <p className="muted">
+          This project intentionally uses a curated project knowledge file instead of arbitrary knowledge uploads. It
+          keeps the RAG source focused, auditable, and aligned with AI job application use cases.
+        </p>
+      </section>
+
+      <section className="panel detail-panel">
         <div className="panel-heading">
           <div>
-            <span className="eyebrow">Knowledge Base</span>
-            <h2>Add Knowledge Document</h2>
+            <span className="eyebrow">Project Knowledge</span>
+            <h2>Status</h2>
           </div>
-          <span className="version-pill">{total} docs</span>
+          <button type="button" onClick={loadStatus} disabled={statusLoading}>
+            {statusLoading ? "Refreshing..." : "Refresh"}
+          </button>
+        </div>
+
+        {statusError && (
+          <div className="inline-error" role="alert">
+            {statusError}
+          </div>
+        )}
+
+        {status ? (
+          <div className="detail-grid">
+            <div>
+              <span className="label">Path</span>
+              <p>{displayText(status.path, "docs/PROJECT_KNOWLEDGE.md")}</p>
+            </div>
+            <div>
+              <span className="label">File</span>
+              <p>
+                <span className="status-pill">{status.exists ? "Exists" : "Missing"}</span>
+              </p>
+            </div>
+            <div>
+              <span className="label">Index</span>
+              <p>
+                <span className="status-pill">{status.indexed ? "Indexed" : "Not indexed"}</span>
+              </p>
+            </div>
+            <div>
+              <span className="label">Document ID</span>
+              <p>{status.document_id ?? "None"}</p>
+            </div>
+            <div>
+              <span className="label">Chunks</span>
+              <p>{Number.parseInt(status.chunk_count, 10) || 0}</p>
+            </div>
+            <div>
+              <span className="label">Updated</span>
+              <p>{status.updated_at ? formatDate(status.updated_at) : "Not indexed"}</p>
+            </div>
+          </div>
+        ) : (
+          <p className="muted">Status has not loaded yet.</p>
+        )}
+      </section>
+
+      <form className="panel form-panel" onSubmit={handleUpload}>
+        <div className="panel-heading">
+          <div>
+            <span className="eyebrow">Upload</span>
+            <h2>Replace Project Knowledge File</h2>
+          </div>
+          <span className="version-pill">.md / .txt</span>
         </div>
 
         <label>
-          Title
+          Project Knowledge File
           <input
-            type="text"
-            value={title}
-            onChange={(event) => setTitle(event.target.value)}
-            placeholder="Stock prediction project, Cloud skills profile, Company research..."
-          />
-        </label>
-
-        <label>
-          Category
-          <select value={category} onChange={(event) => setCategory(event.target.value)}>
-            {KNOWLEDGE_CATEGORIES.map((item) => (
-              <option key={item} value={item}>
-                {item}
-              </option>
-            ))}
-          </select>
-        </label>
-
-        <label>
-          Content Text
-          <textarea
-            rows="7"
-            value={contentText}
-            onChange={(event) => setContentText(event.target.value)}
-            placeholder="Paste project notes, skill profile, company research, or previous cover letter content."
-          />
-        </label>
-
-        <label>
-          Upload File
-          <input
-            key={fileInputKey}
+            key={uploadInputKey}
             type="file"
-            accept=".pdf,.docx,.txt,.md,.markdown,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain,text/markdown"
-            onChange={(event) => setFile(event.target.files?.[0] || null)}
+            accept=".md,.txt,text/plain,text/markdown"
+            onChange={(event) => setUploadFile(event.target.files?.[0] || null)}
           />
         </label>
 
-        <button type="submit" disabled={adding}>
-          {adding ? "Adding..." : "Add to Knowledge Base"}
+        <button type="submit" disabled={uploading}>
+          {uploading ? "Uploading..." : "Upload and Rebuild Index"}
         </button>
 
-        {addError && (
+        {uploadMessage && <div className="history-message">{uploadMessage}</div>}
+        {uploadError && (
           <div className="inline-error" role="alert">
-            {addError}
+            {uploadError}
           </div>
         )}
       </form>
@@ -1211,106 +1204,26 @@ function KnowledgeBasePage() {
       <section className="panel history-panel">
         <div className="panel-heading">
           <div>
-            <span className="eyebrow">Browse</span>
-            <h2>Knowledge Documents</h2>
+            <span className="eyebrow">Rebuild</span>
+            <h2>Project Knowledge Index</h2>
           </div>
-          <button type="button" onClick={loadDocuments} disabled={loading}>
-            {loading ? "Loading..." : "Refresh"}
+          <button type="button" onClick={handleRebuild} disabled={rebuilding}>
+            {rebuilding ? "Rebuilding..." : "Rebuild Index from docs/PROJECT_KNOWLEDGE.md"}
           </button>
         </div>
-        <div className="history-toolbar">
-          <label>
-            Category
-            <select value={categoryFilter} onChange={(event) => setCategoryFilter(event.target.value)}>
-              <option value="All">All</option>
-              {KNOWLEDGE_CATEGORIES.map((item) => (
-                <option key={item} value={item}>
-                  {item}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            Search
-            <input
-              type="search"
-              value={documentSearch}
-              onChange={(event) => setDocumentSearch(event.target.value)}
-              placeholder="Title, filename, or preview"
-            />
-          </label>
-          <button type="button" onClick={loadDocuments} disabled={loading}>
-            Apply
-          </button>
-        </div>
+        {rebuildMessage && <div className="history-message">{rebuildMessage}</div>}
+        {rebuildError && (
+          <div className="inline-error" role="alert">
+            {rebuildError}
+          </div>
+        )}
       </section>
 
-      {error && (
-        <section className="panel state-panel error-panel" role="alert">
-          <strong>Knowledge request failed</strong>
-          <p>{error}</p>
-        </section>
-      )}
-
-      {!loading && !error && documents.length === 0 && (
-        <section className="panel state-panel">
-          <strong>No knowledge documents yet.</strong>
-          <p className="muted">Add project, skill, resume, cover letter, or company research notes.</p>
-        </section>
-      )}
-
-      {documents.length > 0 && (
-        <section className="panel list-panel">
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Title</th>
-                  <th>Category</th>
-                  <th>Source</th>
-                  <th>Chunks</th>
-                  <th>Created</th>
-                  <th>Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {documents.map((document) => (
-                  <tr key={document.id}>
-                    <td>{displayText(document.title, "Untitled")}</td>
-                    <td>
-                      <span className="status-pill">{displayText(document.category, "Other")}</span>
-                    </td>
-                    <td>{displayText(document.source_filename)}</td>
-                    <td>{Number.parseInt(document.chunk_count, 10) || 0}</td>
-                    <td>{formatDate(document.created_at)}</td>
-                    <td>
-                      <div className="action-row">
-                        <button type="button" onClick={() => handleViewDocument(document.id)} disabled={detailLoading}>
-                          View
-                        </button>
-                        <button
-                          type="button"
-                          className="danger-button"
-                          onClick={() => handleDeleteDocument(document.id)}
-                          disabled={deletingId === document.id}
-                        >
-                          {deletingId === document.id ? "Deleting..." : "Delete"}
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </section>
-      )}
-
-      <form className="panel history-panel" onSubmit={handleKnowledgeSearch}>
+      <form className="panel history-panel" onSubmit={handleProjectKnowledgeSearch}>
         <div className="panel-heading">
           <div>
             <span className="eyebrow">Search</span>
-            <h2>Test Retrieval</h2>
+            <h2>Search Project Knowledge</h2>
           </div>
           {searchLoading && <span className="muted">Searching...</span>}
         </div>
@@ -1321,7 +1234,7 @@ function KnowledgeBasePage() {
               type="search"
               value={searchQuery}
               onChange={(event) => setSearchQuery(event.target.value)}
-              placeholder="Python LSTM stock prediction"
+              placeholder="RAG FastAPI DeepSeek workflow automation"
             />
           </label>
           <label>
@@ -1353,85 +1266,21 @@ function KnowledgeBasePage() {
 
       {searchResults.length > 0 && (
         <section className="panel detail-panel">
-          <h2>Search Results</h2>
+          <h2>Project Knowledge Search Results</h2>
           <div className="source-grid">
             {searchResults.map((result) => (
               <article className="source-card" key={result.chunk_id}>
                 <div className="source-card-header">
-                  <strong>{displayText(result.document_title, "Untitled knowledge document")}</strong>
+                  <strong>{displayText(result.document_title, "Project Knowledge")}</strong>
                   <span>{displayText(result.category, "Other")}</span>
                 </div>
                 <p className="muted">
                   Chunk #{Number.parseInt(result.chunk_index, 10) || 0} · Score {Number(result.score || 0).toFixed(2)}
                 </p>
-                <p>{displayText(String(result.content || "").slice(0, 600), "No content preview.")}</p>
+                <p>{displayText(String(result.content || "").slice(0, 700), "No content preview.")}</p>
               </article>
             ))}
           </div>
-        </section>
-      )}
-
-      {detailLoading && (
-        <section className="panel state-panel">
-          <strong>Loading document...</strong>
-          <p className="muted">Fetching parsed chunks.</p>
-        </section>
-      )}
-
-      {detailError && (
-        <section className="panel state-panel error-panel" role="alert">
-          <strong>Document detail failed</strong>
-          <p>{detailError}</p>
-        </section>
-      )}
-
-      {selectedDocument && (
-        <section className="panel detail-panel">
-          <div className="detail-header">
-            <div>
-              <span className="label">Knowledge Document #{selectedDocument.id}</span>
-              <h2>{displayText(selectedDocument.title, "Untitled")}</h2>
-              <p>{displayText(selectedDocument.category, "Other")}</p>
-            </div>
-            <strong>{Number.parseInt(selectedDocument.chunk_count, 10) || 0} chunks</strong>
-          </div>
-          <div className="detail-grid">
-            <div>
-              <span className="label">Source File</span>
-              <p>{displayText(selectedDocument.source_filename)}</p>
-            </div>
-            <div>
-              <span className="label">Created</span>
-              <p>{formatDate(selectedDocument.created_at)}</p>
-            </div>
-            <div>
-              <span className="label">Updated</span>
-              <p>{formatDate(selectedDocument.updated_at)}</p>
-            </div>
-            <div>
-              <span className="label">Category</span>
-              <p>{displayText(selectedDocument.category, "Other")}</p>
-            </div>
-          </div>
-          <section className="result-section">
-            <h3>Content Preview</h3>
-            <p>{displayText(selectedDocument.content_preview)}</p>
-          </section>
-          <section className="result-section">
-            <h3>Chunks</h3>
-            {asArray(selectedDocument.chunks).length ? (
-              <div className="chunk-list">
-                {asArray(selectedDocument.chunks).map((chunk) => (
-                  <article className="chunk-card" key={chunk.id}>
-                    <strong>Chunk #{Number.parseInt(chunk.chunk_index, 10) || 0}</strong>
-                    <p>{displayText(chunk.content)}</p>
-                  </article>
-                ))}
-              </div>
-            ) : (
-              <p className="muted">No chunks found.</p>
-            )}
-          </section>
         </section>
       )}
     </>
@@ -1474,9 +1323,11 @@ function App() {
           <h1>Personal Job Application Agent</h1>
           <span className="version-pill">v{APP_VERSION}</span>
         </div>
-        <p>Resume-JD matching, RAG knowledge retrieval, ATS analysis, cover letter generation, and application tracking.</p>
+        <p>
+          Resume-JD matching, Project Knowledge RAG, ATS analysis, cover letter generation, and application tracking.
+        </p>
         <div className="feature-strip" aria-label="Core product features">
-          <span>RAG knowledge base</span>
+          <span>Project Knowledge RAG</span>
           <span>Explainable scoring</span>
           <span>ATS keywords</span>
           <span>DOCX/PDF exports</span>
@@ -1504,13 +1355,13 @@ function App() {
           className={activeTab === "knowledge" ? "active-tab" : ""}
           onClick={() => setActiveTab("knowledge")}
         >
-          Knowledge Base
+          Project Knowledge
         </button>
       </nav>
 
       {activeTab === "analyze" && <AnalyzePage />}
       {activeTab === "history" && <HistoryPage />}
-      {activeTab === "knowledge" && <KnowledgeBasePage />}
+      {activeTab === "knowledge" && <ProjectKnowledgePage />}
 
       <footer className="app-footer">API Base URL: {API_BASE_URL}</footer>
     </main>
