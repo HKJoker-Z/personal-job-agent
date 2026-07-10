@@ -48,6 +48,11 @@ textarea {
   line-height: 1.6;
 }
 
+.security-notice {
+  margin-top: 10px;
+  color: #3f4d5e;
+}
+
 .feature-strip {
   display: flex;
   flex-wrap: wrap;
@@ -673,6 +678,30 @@ th {
   border-color: #b9dfd6;
 }
 
+.security-passed {
+  border-color: #b9dfd6;
+  color: #135f54;
+  background: #edf9f6;
+}
+
+.security-passed_with_warnings {
+  border-color: #d5c88f;
+  color: #695a05;
+  background: #fff9d6;
+}
+
+.security-blocked {
+  border-color: #f2b8b5;
+  color: #8f1d18;
+  background: #fff2f1;
+}
+
+.security-not_available {
+  border-color: #d8e0ea;
+  color: #66758a;
+  background: #f7f9fc;
+}
+
 .workflow-failed {
   border-color: #f2b8b5;
   color: #8f1d18;
@@ -710,6 +739,58 @@ th {
 .source-card p,
 .chunk-card p {
   overflow-wrap: anywhere;
+}
+
+.security-section {
+  border: 1px solid #d8e0ea;
+  border-radius: 8px;
+  padding: 16px;
+  background: #f8fbff;
+}
+
+.security-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.security-grid > div,
+.finding-card {
+  border: 1px solid #e1e8f0;
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: #ffffff;
+}
+
+.security-grid p,
+.finding-card p {
+  overflow-wrap: anywhere;
+}
+
+.findings-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.findings-list h4 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.finding-card span {
+  display: block;
+  color: #66758a;
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.finding-card strong {
+  display: block;
+  margin: 4px 0;
+  color: #1f2937;
 }
 
 .wide-field {
@@ -776,7 +857,8 @@ th {
   .workflow-step-header,
   .breakdown-grid,
   .ats-grid,
-  .source-grid {
+  .source-grid,
+  .security-grid {
     grid-template-columns: 1fr;
   }
 
