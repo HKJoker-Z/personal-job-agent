@@ -129,6 +129,7 @@ def init_db() -> None:
                 scoring_breakdown TEXT NOT NULL DEFAULT '{"skills_match":{"score":0,"reason":"","evidence":[]},"project_experience":{"score":0,"reason":"","evidence":[]},"education":{"score":0,"reason":"","evidence":[]},"work_experience":{"score":0,"reason":"","evidence":[]},"keyword_match":{"score":0,"reason":"","evidence":[]}}',
                 ats_analysis TEXT NOT NULL DEFAULT '{"important_keywords":[],"matched_keywords":[],"missing_keywords":[],"keyword_suggestions":[]}',
                 upgraded_resume_bullets TEXT NOT NULL DEFAULT '[]',
+                rag_mode TEXT NOT NULL DEFAULT '',
                 rag_sources TEXT NOT NULL DEFAULT '[]',
                 notes TEXT
             )
@@ -168,6 +169,13 @@ def init_db() -> None:
             existing_columns=existing_columns,
             column_name="rag_sources",
             column_definition="rag_sources TEXT NOT NULL DEFAULT '[]'",
+        )
+        add_column_if_missing(
+            connection,
+            table_name="application_records",
+            existing_columns=existing_columns,
+            column_name="rag_mode",
+            column_definition="rag_mode TEXT NOT NULL DEFAULT ''",
         )
         connection.execute(
             """
@@ -381,6 +389,7 @@ def row_to_list_item(row: sqlite3.Row) -> dict[str, Any]:
         "resume_filename": row["resume_filename"],
         "application_status": row["application_status"] or "Saved",
         "match_score": row["match_score"],
+        "rag_mode": clean_text(row["rag_mode"]),
     }
 
 
@@ -406,6 +415,7 @@ def row_to_detail(row: sqlite3.Row) -> dict[str, Any]:
         "upgraded_resume_bullets": deserialize_upgraded_resume_bullets(
             row["upgraded_resume_bullets"]
         ),
+        "rag_mode": clean_text(row["rag_mode"]),
         "rag_sources": deserialize_rag_sources(row["rag_sources"]),
         "notes": row["notes"],
     }
@@ -442,10 +452,11 @@ def insert_application_record(
                 scoring_breakdown,
                 ats_analysis,
                 upgraded_resume_bullets,
+                rag_mode,
                 rag_sources,
                 notes
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 now,
@@ -468,6 +479,7 @@ def insert_application_record(
                 ),
                 serialize_json(analysis_result.get("ats_analysis"), default_ats_analysis()),
                 serialize_json(analysis_result.get("upgraded_resume_bullets"), []),
+                clean_text(analysis_result.get("rag_mode")),
                 serialize_json(analysis_result.get("rag_sources"), []),
                 None,
             ),
@@ -512,7 +524,8 @@ def list_application_records(
                 job_url,
                 resume_filename,
                 application_status,
-                match_score
+                match_score,
+                rag_mode
             FROM application_records
             {where_sql}
             ORDER BY created_at DESC, id DESC
@@ -785,6 +798,149 @@ def delete_knowledge_document(document_id: int) -> bool:
         return cursor.rowcount > 0
 
 
+def find_project_knowledge_document(
+    *,
+    title: str,
+    source_filename: str,
+) -> dict[str, Any] | None:
+    with get_connection() as connection:
+        row = connection.execute(
+            """
+            SELECT
+                id,
+                created_at,
+                updated_at,
+                title,
+                category,
+                source_filename,
+                content_preview,
+                chunk_count
+            FROM knowledge_documents
+            WHERE source_filename = ? OR title = ?
+            ORDER BY id ASC
+            LIMIT 1
+            """,
+            (source_filename, title),
+        ).fetchone()
+
+    return row_to_knowledge_list_item(row) if row else None
+
+
+def rebuild_project_knowledge_document(
+    *,
+    title: str,
+    category: str,
+    source_filename: str,
+    content: str,
+    chunks: list[str],
+) -> dict[str, Any]:
+    now = utc_now()
+    preview = content[:CONTENT_PREVIEW_CHARS]
+
+    with get_connection() as connection:
+        fts_available = ensure_knowledge_fts(connection)
+        existing_rows = connection.execute(
+            """
+            SELECT id
+            FROM knowledge_documents
+            WHERE source_filename = ? OR title = ?
+            ORDER BY id ASC
+            """,
+            (source_filename, title),
+        ).fetchall()
+        existing_ids = [int(row["id"]) for row in existing_rows]
+
+        if existing_ids:
+            document_id = existing_ids[0]
+            ids_to_clear = existing_ids
+            placeholders = ",".join("?" for _id in ids_to_clear)
+
+            try:
+                connection.execute(
+                    f"DELETE FROM knowledge_chunks_fts WHERE document_id IN ({placeholders})",
+                    [str(document_id) for document_id in ids_to_clear],
+                )
+            except sqlite3.OperationalError:
+                pass
+
+            connection.execute(
+                f"DELETE FROM knowledge_chunks WHERE document_id IN ({placeholders})",
+                ids_to_clear,
+            )
+
+            duplicate_ids = existing_ids[1:]
+            if duplicate_ids:
+                duplicate_placeholders = ",".join("?" for _id in duplicate_ids)
+                connection.execute(
+                    f"DELETE FROM knowledge_documents WHERE id IN ({duplicate_placeholders})",
+                    duplicate_ids,
+                )
+
+            connection.execute(
+                """
+                UPDATE knowledge_documents
+                SET updated_at = ?,
+                    title = ?,
+                    category = ?,
+                    source_filename = ?,
+                    content_preview = ?,
+                    chunk_count = ?
+                WHERE id = ?
+                """,
+                (now, title, category, source_filename, preview, len(chunks), document_id),
+            )
+        else:
+            cursor = connection.execute(
+                """
+                INSERT INTO knowledge_documents (
+                    created_at,
+                    updated_at,
+                    title,
+                    category,
+                    source_filename,
+                    content_preview,
+                    chunk_count
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (now, now, title, category, source_filename, preview, len(chunks)),
+            )
+            document_id = int(cursor.lastrowid)
+
+        for chunk_index, chunk in enumerate(chunks):
+            chunk_cursor = connection.execute(
+                """
+                INSERT INTO knowledge_chunks (
+                    document_id,
+                    chunk_index,
+                    content,
+                    token_estimate,
+                    created_at
+                )
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (document_id, chunk_index, chunk, estimate_tokens(chunk), now),
+            )
+            if fts_available:
+                insert_fts_row(
+                    connection,
+                    chunk_id=int(chunk_cursor.lastrowid),
+                    document_id=document_id,
+                    title=title,
+                    category=category,
+                    content=chunk,
+                )
+
+    return {
+        "id": document_id,
+        "title": title,
+        "category": category,
+        "source_filename": source_filename,
+        "chunk_count": len(chunks),
+        "updated_at": now,
+    }
+
+
 def tokenize_search_query(query: str) -> list[str]:
     tokens = re.findall(r"[A-Za-z0-9][A-Za-z0-9+#.\-]*|[\u4e00-\u9fff]+", query.lower())
     return [token for token in tokens if len(token) > 1]
@@ -801,7 +957,12 @@ def build_fts_query(query: str) -> str:
     return " OR ".join(quoted_tokens)
 
 
-def fts_search_knowledge_chunks(query: str, top_k: int) -> list[dict[str, Any]]:
+def fts_search_knowledge_chunks(
+    query: str,
+    top_k: int,
+    *,
+    document_id: int | None = None,
+) -> list[dict[str, Any]]:
     fts_query = build_fts_query(query)
     if not fts_query:
         return []
@@ -811,8 +972,15 @@ def fts_search_knowledge_chunks(query: str, top_k: int) -> list[dict[str, Any]]:
             return []
 
         try:
+            document_filter = ""
+            params: list[Any] = [fts_query]
+            if document_id is not None:
+                document_filter = "AND knowledge_chunks_fts.document_id = ?"
+                params.append(str(document_id))
+            params.append(top_k)
+
             rows = connection.execute(
-                """
+                f"""
                 SELECT
                     c.id AS chunk_id,
                     c.document_id,
@@ -827,10 +995,11 @@ def fts_search_knowledge_chunks(query: str, top_k: int) -> list[dict[str, Any]]:
                 JOIN knowledge_documents d
                     ON d.id = c.document_id
                 WHERE knowledge_chunks_fts MATCH ?
+                {document_filter}
                 ORDER BY rank ASC
                 LIMIT ?
                 """,
-                (fts_query, top_k),
+                params,
             ).fetchall()
         except sqlite3.OperationalError:
             return []
@@ -853,14 +1022,25 @@ def fts_search_knowledge_chunks(query: str, top_k: int) -> list[dict[str, Any]]:
     return items
 
 
-def fallback_search_knowledge_chunks(query: str, top_k: int) -> list[dict[str, Any]]:
+def fallback_search_knowledge_chunks(
+    query: str,
+    top_k: int,
+    *,
+    document_id: int | None = None,
+) -> list[dict[str, Any]]:
     tokens = tokenize_search_query(query)
     if not tokens:
         return []
 
     with get_connection() as connection:
+        document_filter = ""
+        params: list[Any] = []
+        if document_id is not None:
+            document_filter = "WHERE c.document_id = ?"
+            params.append(document_id)
+
         rows = connection.execute(
-            """
+            f"""
             SELECT
                 c.id AS chunk_id,
                 c.document_id,
@@ -871,7 +1051,9 @@ def fallback_search_knowledge_chunks(query: str, top_k: int) -> list[dict[str, A
             FROM knowledge_chunks c
             JOIN knowledge_documents d
                 ON d.id = c.document_id
-            """
+            {document_filter}
+            """,
+            params,
         ).fetchall()
 
     scored_items: list[dict[str, Any]] = []
@@ -913,8 +1095,13 @@ def fallback_search_knowledge_chunks(query: str, top_k: int) -> list[dict[str, A
     return scored_items[:top_k]
 
 
-def search_knowledge_chunks(query: str, top_k: int) -> tuple[list[dict[str, Any]], str]:
-    fts_items = fts_search_knowledge_chunks(query, top_k)
+def search_knowledge_chunks(
+    query: str,
+    top_k: int,
+    *,
+    document_id: int | None = None,
+) -> tuple[list[dict[str, Any]], str]:
+    fts_items = fts_search_knowledge_chunks(query, top_k, document_id=document_id)
     if fts_items:
         return fts_items, "fts5"
-    return fallback_search_knowledge_chunks(query, top_k), "fallback"
+    return fallback_search_knowledge_chunks(query, top_k, document_id=document_id), "fallback"
