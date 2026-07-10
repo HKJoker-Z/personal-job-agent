@@ -34,6 +34,47 @@ def clean_text(value: Any, fallback: str = "") -> str:
     return text or fallback
 
 
+def safe_float(value: Any) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def safe_int(value: Any) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def format_duration(
+    duration_ms: Any,
+    duration_us: Any = None,
+    *,
+    status: Any = "",
+    completed_zero_as_sub_ms: bool = True,
+) -> str:
+    clean_status = clean_text(status).lower()
+    if clean_status == "skipped":
+        return "Skipped"
+
+    parsed_us = safe_int(duration_us)
+    if parsed_us is not None and 0 < parsed_us < 1000:
+        return "<1 ms"
+
+    parsed_ms = safe_float(duration_ms)
+    if parsed_ms is None:
+        return "N/A"
+    if 0 < parsed_ms < 1:
+        return "<1 ms"
+    if parsed_ms == 0 and completed_zero_as_sub_ms and clean_status in {"completed", "failed"}:
+        return "<1 ms"
+    if parsed_ms < 1000:
+        return f"{parsed_ms:.2f} ms"
+    return f"{parsed_ms / 1000:.2f} s"
+
+
 def as_list(value: Any) -> list[str]:
     if not isinstance(value, list):
         return []
@@ -281,13 +322,27 @@ def add_agent_workflow(
         story.append(Spacer(1, 0.14 * inch))
         return
 
+    workflow_duration = record.get("workflow_duration_ms")
+    if workflow_duration not in (None, ""):
+        duration_text = format_duration(
+            workflow_duration,
+            record.get("workflow_duration_us"),
+            completed_zero_as_sub_ms=False,
+        )
+        story.append(Paragraph(f"Total workflow duration: {escape(duration_text)}", body_style))
+        story.append(Spacer(1, 0.06 * inch))
+
     for step in steps:
         item = as_dict(step)
         name = paragraph_text(item.get("name"), "Unnamed Step")
         status = paragraph_text(item.get("status"), "pending")
         message = paragraph_text(item.get("message"), "No message recorded.")
-        duration = clean_text(item.get("duration_ms"), "0")
-        story.append(Paragraph(f"<b>{name}</b> - {status} - {escape(duration)} ms", body_style))
+        duration = format_duration(
+            item.get("duration_ms"),
+            item.get("duration_us"),
+            status=item.get("status"),
+        )
+        story.append(Paragraph(f"<b>{name}</b> - {status} - {escape(duration)}", body_style))
         story.append(Paragraph(message, body_style))
         story.append(Spacer(1, 0.06 * inch))
 

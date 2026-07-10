@@ -1797,22 +1797,35 @@ async def analyze(
         )
 
     workflow.start_step("finalize_result", "Finalize Result")
-    result["workflow_id"] = context.workflow_id
+    try:
+        result["workflow_id"] = context.workflow_id
+        result["workflow_status"] = workflow.status()
+        result["application_id"] = context.application_id
+        result["saved_to_history"] = context.saved_to_history
+        result["next_action_decision"] = result.get("next_action_decision") or "pending"
+        result["next_action"] = result.get("next_action") or {}
+        result["rag_sources"] = result.get("rag_sources") or []
+        workflow.complete_step(
+            "finalize_result",
+            "Final API response prepared with workflow audit trail.",
+        )
+    except Exception:
+        workflow.fail_step("finalize_result", "Final API response preparation failed.")
+        raise
+
+    workflow.finish()
+    workflow_duration = workflow.workflow_duration()
     result["workflow_status"] = workflow.status()
-    result["application_id"] = context.application_id
-    result["saved_to_history"] = context.saved_to_history
-    result["next_action_decision"] = result.get("next_action_decision") or "pending"
-    workflow.complete_step(
-        "finalize_result",
-        "Final API response prepared with workflow audit trail.",
-    )
-    result["workflow_status"] = workflow.status()
+    result["workflow_duration_ms"] = workflow_duration["workflow_duration_ms"]
+    result["workflow_duration_us"] = workflow_duration["workflow_duration_us"]
     result["workflow_steps"] = workflow.to_list()
 
     if context.application_id is not None:
         update_application_workflow_steps(
             context.application_id,
             workflow_steps=result["workflow_steps"],
+            workflow_duration_ms=result["workflow_duration_ms"],
+            workflow_duration_us=result["workflow_duration_us"],
         )
 
     return result

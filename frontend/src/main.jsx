@@ -62,6 +62,33 @@ function displayConfidence(value) {
   return `${Math.round(Math.max(0, Math.min(1, confidence)) * 100)}%`;
 }
 
+function formatDuration(durationMs, durationUs, status = "") {
+  const normalizedStatus = displayText(status).toLowerCase();
+  if (normalizedStatus === "skipped") {
+    return "Skipped";
+  }
+
+  const parsedUs = Number(durationUs);
+  if (Number.isFinite(parsedUs) && parsedUs > 0 && parsedUs < 1000) {
+    return "<1 ms";
+  }
+
+  const parsedMs = Number(durationMs);
+  if (!Number.isFinite(parsedMs)) {
+    return "N/A";
+  }
+  if (parsedMs > 0 && parsedMs < 1) {
+    return "<1 ms";
+  }
+  if (parsedMs === 0 && ["completed", "failed"].includes(normalizedStatus)) {
+    return "<1 ms";
+  }
+  if (parsedMs < 1000) {
+    return `${parsedMs.toFixed(2)} ms`;
+  }
+  return `${(parsedMs / 1000).toFixed(2)} s`;
+}
+
 function isRagEnabled(value) {
   return displayRagMode(value).toLowerCase() === "project";
 }
@@ -418,29 +445,37 @@ function RagSourcesSection({ sources, ragMode, usedKnowledgeBase }) {
   );
 }
 
-function AgentWorkflowSection({ steps }) {
+function AgentWorkflowSection({ steps, workflowDurationMs, workflowDurationUs }) {
   const safeSteps = asArray(steps);
+  const hasWorkflowDuration = workflowDurationMs !== undefined && workflowDurationMs !== null;
 
   return (
     <section className="result-section workflow-section">
       <h3>Agent Workflow</h3>
       {safeSteps.length ? (
-        <div className="workflow-list">
-          {safeSteps.map((step, index) => {
-            const item = asObject(step);
-            const status = displayText(item.status, "pending");
-            return (
-              <article className="workflow-step" key={`${item.key || "step"}-${index}`}>
-                <div className="workflow-step-header">
-                  <strong>{displayText(item.name, "Unnamed Step")}</strong>
-                  <span className={`status-pill workflow-${status}`}>{status}</span>
-                </div>
-                <p>{displayText(item.message, "No message recorded.")}</p>
-                <p className="muted">{Number.parseInt(item.duration_ms, 10) || 0} ms</p>
-              </article>
-            );
-          })}
-        </div>
+        <>
+          {hasWorkflowDuration && (
+            <p className="muted">
+              Total workflow duration: {formatDuration(workflowDurationMs, workflowDurationUs, "completed")}
+            </p>
+          )}
+          <div className="workflow-list">
+            {safeSteps.map((step, index) => {
+              const item = asObject(step);
+              const status = displayText(item.status, "pending");
+              return (
+                <article className="workflow-step" key={`${item.key || "step"}-${index}`}>
+                  <div className="workflow-step-header">
+                    <strong>{displayText(item.name, "Unnamed Step")}</strong>
+                    <span className={`status-pill workflow-${status}`}>{status}</span>
+                  </div>
+                  <p>{displayText(item.message, "No message recorded.")}</p>
+                  <p className="muted">{formatDuration(item.duration_ms, item.duration_us, item.status)}</p>
+                </article>
+              );
+            })}
+          </div>
+        </>
       ) : (
         <p className="muted">No workflow audit trail is available for this older record.</p>
       )}
@@ -606,7 +641,11 @@ function AnalysisResult({ result }) {
         ragMode={result.rag_mode}
         usedKnowledgeBase={Boolean(result.used_knowledge_base)}
       />
-      <AgentWorkflowSection steps={result.workflow_steps} />
+      <AgentWorkflowSection
+        steps={result.workflow_steps}
+        workflowDurationMs={result.workflow_duration_ms}
+        workflowDurationUs={result.workflow_duration_us}
+      />
       <NextActionSection
         nextAction={result.next_action}
         decision={result.next_action_decision}
@@ -1138,7 +1177,11 @@ function HistoryPage() {
             ragMode={selectedRecord.rag_mode}
             usedKnowledgeBase={asArray(selectedRecord.rag_sources).length > 0}
           />
-          <AgentWorkflowSection steps={selectedRecord.workflow_steps} />
+          <AgentWorkflowSection
+            steps={selectedRecord.workflow_steps}
+            workflowDurationMs={selectedRecord.workflow_duration_ms}
+            workflowDurationUs={selectedRecord.workflow_duration_us}
+          />
           <NextActionSection
             nextAction={selectedRecord.next_action}
             decision={selectedRecord.next_action_decision}

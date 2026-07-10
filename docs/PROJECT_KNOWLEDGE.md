@@ -137,6 +137,9 @@ Version 1.6 added a custom lightweight orchestration layer for the Analyze workf
 - Added human-in-the-loop decision recording so the user can accept, dismiss, or complete a recommendation.
 - Persisted workflow steps, next-action recommendations, and user decisions in SQLite.
 - Displayed workflow data and recommendations in Analyze, History, and PDF reports.
+- Added high-resolution workflow timing with monotonic `perf_counter_ns`.
+- Recorded per-step and total workflow execution duration.
+- Improved workflow observability without artificial delays or fake minimum durations.
 - Preserved Project Knowledge RAG and RAG evidence reconciliation so RAG-supported skills are not incorrectly listed as missing.
 
 Skills demonstrated:

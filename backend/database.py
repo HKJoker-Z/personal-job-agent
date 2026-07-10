@@ -134,6 +134,8 @@ def init_db() -> None:
                 rag_sources TEXT NOT NULL DEFAULT '[]',
                 workflow_id TEXT,
                 workflow_steps TEXT NOT NULL DEFAULT '[]',
+                workflow_duration_ms REAL,
+                workflow_duration_us INTEGER,
                 next_action TEXT NOT NULL DEFAULT '{}',
                 next_action_decision TEXT NOT NULL DEFAULT 'pending',
                 next_action_decision_notes TEXT,
@@ -197,6 +199,20 @@ def init_db() -> None:
             existing_columns=existing_columns,
             column_name="workflow_steps",
             column_definition="workflow_steps TEXT NOT NULL DEFAULT '[]'",
+        )
+        add_column_if_missing(
+            connection,
+            table_name="application_records",
+            existing_columns=existing_columns,
+            column_name="workflow_duration_ms",
+            column_definition="workflow_duration_ms REAL",
+        )
+        add_column_if_missing(
+            connection,
+            table_name="application_records",
+            existing_columns=existing_columns,
+            column_name="workflow_duration_us",
+            column_definition="workflow_duration_us INTEGER",
         )
         add_column_if_missing(
             connection,
@@ -430,7 +446,8 @@ def deserialize_workflow_steps(value: Any) -> list[dict[str, Any]]:
                 "message": clean_text(item.get("message")),
                 "started_at": clean_text(item.get("started_at")),
                 "completed_at": clean_text(item.get("completed_at")),
-                "duration_ms": safe_int(item.get("duration_ms")),
+                "duration_ms": safe_float(item.get("duration_ms")),
+                "duration_us": safe_int(item.get("duration_us")),
             }
         )
     return steps
@@ -479,9 +496,16 @@ def clean_text(value: Any, fallback: str = "") -> str:
     return text or fallback
 
 
-def safe_int(value: Any, fallback: int = 0) -> int:
+def safe_int(value: Any, fallback: Any = 0) -> Any:
     try:
         return int(value)
+    except (TypeError, ValueError):
+        return fallback
+
+
+def safe_float(value: Any, fallback: Any = 0.0) -> Any:
+    try:
+        return float(value)
     except (TypeError, ValueError):
         return fallback
 
@@ -530,6 +554,8 @@ def row_to_detail(row: sqlite3.Row) -> dict[str, Any]:
         "rag_sources": deserialize_rag_sources(row["rag_sources"]),
         "workflow_id": clean_text(row["workflow_id"]),
         "workflow_steps": deserialize_workflow_steps(row["workflow_steps"]),
+        "workflow_duration_ms": safe_float(row["workflow_duration_ms"], None),
+        "workflow_duration_us": safe_int(row["workflow_duration_us"], None),
         "next_action": deserialize_next_action(row["next_action"]),
         "next_action_decision": clean_text(row["next_action_decision"], "pending"),
         "next_action_decision_notes": row["next_action_decision_notes"],
@@ -573,13 +599,15 @@ def insert_application_record(
                 rag_sources,
                 workflow_id,
                 workflow_steps,
+                workflow_duration_ms,
+                workflow_duration_us,
                 next_action,
                 next_action_decision,
                 next_action_decision_notes,
                 next_action_decided_at,
                 notes
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 now,
@@ -606,6 +634,8 @@ def insert_application_record(
                 serialize_json(analysis_result.get("rag_sources"), []),
                 clean_text(analysis_result.get("workflow_id")) or None,
                 serialize_json(analysis_result.get("workflow_steps"), []),
+                safe_float(analysis_result.get("workflow_duration_ms"), None),
+                safe_int(analysis_result.get("workflow_duration_us"), None),
                 serialize_json(analysis_result.get("next_action"), {}),
                 clean_text(analysis_result.get("next_action_decision"), "pending"),
                 clean_text(analysis_result.get("next_action_decision_notes")) or None,
@@ -715,16 +745,27 @@ def update_application_workflow_steps(
     application_id: int,
     *,
     workflow_steps: list[dict[str, Any]],
+    workflow_duration_ms: float | None = None,
+    workflow_duration_us: int | None = None,
 ) -> dict[str, Any] | None:
     now = utc_now()
     with get_connection() as connection:
         cursor = connection.execute(
             """
             UPDATE application_records
-            SET workflow_steps = ?, updated_at = ?
+            SET workflow_steps = ?,
+                workflow_duration_ms = ?,
+                workflow_duration_us = ?,
+                updated_at = ?
             WHERE id = ?
             """,
-            (serialize_json(workflow_steps, []), now, application_id),
+            (
+                serialize_json(workflow_steps, []),
+                workflow_duration_ms,
+                workflow_duration_us,
+                now,
+                application_id,
+            ),
         )
         if cursor.rowcount == 0:
             return None
