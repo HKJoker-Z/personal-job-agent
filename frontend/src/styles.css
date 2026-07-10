@@ -597,7 +597,8 @@ th {
 }
 
 .source-grid,
-.chunk-list {
+.chunk-list,
+.workflow-list {
   display: grid;
   gap: 12px;
 }
@@ -621,11 +622,68 @@ th {
 }
 
 .source-card,
-.chunk-card {
+.chunk-card,
+.workflow-step {
   border: 1px solid #e1e8f0;
   border-radius: 8px;
   padding: 14px;
   background: #fbfcfe;
+}
+
+.workflow-step-header,
+.next-action-summary {
+  display: grid;
+  gap: 10px;
+}
+
+.workflow-step-header {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  margin-bottom: 8px;
+}
+
+.next-action-summary {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin-bottom: 12px;
+}
+
+.next-action-summary div {
+  border: 1px solid #e1e8f0;
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: #fbfcfe;
+}
+
+.next-action-summary strong {
+  display: block;
+  margin-top: 4px;
+  overflow-wrap: anywhere;
+}
+
+.decision-panel {
+  display: grid;
+  gap: 12px;
+  margin-top: 14px;
+  border-top: 1px solid #e5ebf2;
+  padding-top: 14px;
+}
+
+.workflow-completed,
+.workflow-skipped {
+  border-color: #b9dfd6;
+}
+
+.workflow-failed {
+  border-color: #f2b8b5;
+  color: #8f1d18;
+  background: #fff7f6;
+}
+
+.workflow-running,
+.workflow-pending {
+  border-color: #bdd7ff;
+  color: #19579f;
+  background: #edf5ff;
 }
 
 .source-card-header {
@@ -714,6 +772,8 @@ th {
   .detail-grid,
   .rag-controls,
   .rag-summary,
+  .next-action-summary,
+  .workflow-step-header,
   .breakdown-grid,
   .ats-grid,
   .source-grid {

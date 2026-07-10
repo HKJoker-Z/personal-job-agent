@@ -3,8 +3,13 @@ import { createRoot } from "react-dom/client";
 import "./styles.css";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://101.34.61.52:8000";
-const APP_VERSION = "1.5.2";
+const APP_VERSION = "1.6";
 const APPLICATION_STATUSES = ["Saved", "Applied", "Interview", "Rejected", "Offer"];
+const NEXT_ACTION_DECISIONS = [
+  { value: "accepted", label: "Accept Recommendation" },
+  { value: "dismissed", label: "Dismiss" },
+  { value: "completed", label: "Mark Completed" },
+];
 const SCORING_DIMENSIONS = [
   { key: "skills_match", label: "Skills Match" },
   { key: "project_experience", label: "Project Experience" },
@@ -47,6 +52,14 @@ function displayRagMode(value) {
     return "Not recorded";
   }
   return cleanValue;
+}
+
+function displayConfidence(value) {
+  const confidence = Number(value);
+  if (!Number.isFinite(confidence)) {
+    return "0%";
+  }
+  return `${Math.round(Math.max(0, Math.min(1, confidence)) * 100)}%`;
 }
 
 function isRagEnabled(value) {
@@ -405,6 +418,150 @@ function RagSourcesSection({ sources, ragMode, usedKnowledgeBase }) {
   );
 }
 
+function AgentWorkflowSection({ steps }) {
+  const safeSteps = asArray(steps);
+
+  return (
+    <section className="result-section workflow-section">
+      <h3>Agent Workflow</h3>
+      {safeSteps.length ? (
+        <div className="workflow-list">
+          {safeSteps.map((step, index) => {
+            const item = asObject(step);
+            const status = displayText(item.status, "pending");
+            return (
+              <article className="workflow-step" key={`${item.key || "step"}-${index}`}>
+                <div className="workflow-step-header">
+                  <strong>{displayText(item.name, "Unnamed Step")}</strong>
+                  <span className={`status-pill workflow-${status}`}>{status}</span>
+                </div>
+                <p>{displayText(item.message, "No message recorded.")}</p>
+                <p className="muted">{Number.parseInt(item.duration_ms, 10) || 0} ms</p>
+              </article>
+            );
+          })}
+        </div>
+      ) : (
+        <p className="muted">No workflow audit trail is available for this older record.</p>
+      )}
+    </section>
+  );
+}
+
+function NextActionSection({ nextAction, decision, applicationId, canPersistDecision, onDecisionUpdated }) {
+  const action = asObject(nextAction);
+  const hasRecommendation = Boolean(action.action || action.label);
+  const [notes, setNotes] = useState("");
+  const [savingDecision, setSavingDecision] = useState("");
+  const [error, setError] = useState("");
+  const [localDecision, setLocalDecision] = useState(decision || "pending");
+
+  useEffect(() => {
+    setLocalDecision(decision || "pending");
+  }, [decision]);
+
+  async function updateDecision(nextDecision) {
+    if (!applicationId || savingDecision) {
+      return;
+    }
+
+    setSavingDecision(nextDecision);
+    setError("");
+    try {
+      const data = await requestJson(
+        `${API_BASE_URL}/api/applications/${applicationId}/next-action`,
+        {
+          method: "PATCH",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            decision: nextDecision,
+            notes,
+          }),
+        },
+        "Failed to update next-action decision.",
+      );
+      setLocalDecision(data.decision || nextDecision);
+      if (onDecisionUpdated) {
+        onDecisionUpdated(data);
+      }
+    } catch (err) {
+      setError(getRequestErrorMessage(err, "Failed to update next-action decision."));
+    } finally {
+      setSavingDecision("");
+    }
+  }
+
+  return (
+    <section className="result-section next-action-section">
+      <h3>Recommended Next Action</h3>
+      {hasRecommendation ? (
+        <>
+          <div className="next-action-summary">
+            <div>
+              <span className="label">Action</span>
+              <strong>{displayText(action.label, "No Recommendation")}</strong>
+            </div>
+            <div>
+              <span className="label">Priority</span>
+              <strong>{displayText(action.priority, "low")}</strong>
+            </div>
+            <div>
+              <span className="label">Rule-based confidence</span>
+              <strong>{displayConfidence(action.confidence)}</strong>
+            </div>
+            <div>
+              <span className="label">Decision</span>
+              <strong>{displayText(localDecision, "pending")}</strong>
+            </div>
+          </div>
+          <p>{displayText(action.reason, "No reason recorded.")}</p>
+          <ResultList title="Recommended Tasks" items={action.recommended_tasks} />
+          <ResultList title="Recommendation Evidence" items={action.evidence} />
+        </>
+      ) : (
+        <p className="muted">No next-action recommendation is available for this older record.</p>
+      )}
+
+      {hasRecommendation && canPersistDecision ? (
+        <div className="decision-panel">
+          <label>
+            Decision Notes
+            <textarea
+              rows="3"
+              value={notes}
+              onChange={(event) => setNotes(event.target.value)}
+              placeholder="Optional note about your decision"
+            />
+          </label>
+          <div className="action-row">
+            {NEXT_ACTION_DECISIONS.map((item) => (
+              <button
+                type="button"
+                key={item.value}
+                onClick={() => updateDecision(item.value)}
+                disabled={Boolean(savingDecision)}
+              >
+                {savingDecision === item.value ? "Saving..." : item.label}
+              </button>
+            ))}
+          </div>
+          {error && (
+            <div className="inline-error" role="alert">
+              {error}
+            </div>
+          )}
+        </div>
+      ) : (
+        hasRecommendation && (
+          <p className="muted">Save the analysis to history to record your decision.</p>
+        )
+      )}
+    </section>
+  );
+}
+
 function AnalysisResult({ result }) {
   const score = clampScore(result?.match_score);
   const savedToHistory = Boolean(result?.saved_to_history);
@@ -448,6 +605,13 @@ function AnalysisResult({ result }) {
         sources={result.rag_sources}
         ragMode={result.rag_mode}
         usedKnowledgeBase={Boolean(result.used_knowledge_base)}
+      />
+      <AgentWorkflowSection steps={result.workflow_steps} />
+      <NextActionSection
+        nextAction={result.next_action}
+        decision={result.next_action_decision}
+        applicationId={result.application_id}
+        canPersistDecision={Boolean(result.saved_to_history && result.application_id)}
       />
       <ExportActions applicationId={result.application_id} enabled={savedToHistory} />
 
@@ -617,8 +781,8 @@ function AnalyzePage() {
 
       {loading && (
         <section className="panel state-panel">
-          <strong>Analyzing...</strong>
-          <p className="muted">Parsing resume, reading job content, and calling the AI service.</p>
+          <strong>Agent workflow is running...</strong>
+          <p className="muted">The backend is executing the analysis workflow and will return an audit trail when it finishes.</p>
         </section>
       )}
 
@@ -772,6 +936,21 @@ function HistoryPage() {
     }
   }
 
+  function handleNextDecisionUpdated(data) {
+    setSelectedRecord((record) => {
+      if (!record) {
+        return record;
+      }
+      return {
+        ...record,
+        next_action_decision: data.decision || record.next_action_decision,
+        next_action_decision_notes: data.notes,
+        next_action_decided_at: data.decided_at,
+      };
+    });
+    loadApplications();
+  }
+
   return (
     <>
       <section className="panel history-panel">
@@ -847,6 +1026,8 @@ function HistoryPage() {
                   <th>Position</th>
                   <th>Score</th>
                   <th>Status</th>
+                  <th>Next Action</th>
+                  <th>Decision</th>
                   <th>Created</th>
                   <th>Actions</th>
                 </tr>
@@ -860,6 +1041,8 @@ function HistoryPage() {
                     <td>
                       <StatusBadge status={record.application_status} />
                     </td>
+                    <td>{displayText(record.next_action_label, "No Recommendation")}</td>
+                    <td>{displayText(record.next_action_decision, "pending")}</td>
                     <td>{formatDate(record.created_at)}</td>
                     <td>
                       <div className="action-row">
@@ -955,6 +1138,20 @@ function HistoryPage() {
             ragMode={selectedRecord.rag_mode}
             usedKnowledgeBase={asArray(selectedRecord.rag_sources).length > 0}
           />
+          <AgentWorkflowSection steps={selectedRecord.workflow_steps} />
+          <NextActionSection
+            nextAction={selectedRecord.next_action}
+            decision={selectedRecord.next_action_decision}
+            applicationId={selectedRecord.id}
+            canPersistDecision={Boolean(selectedRecord.id && asObject(selectedRecord.next_action).action)}
+            onDecisionUpdated={handleNextDecisionUpdated}
+          />
+          <section className="result-section">
+            <h3>Human Decision</h3>
+            <p>Decision: {displayText(selectedRecord.next_action_decision, "pending")}</p>
+            <p>Notes: {displayText(selectedRecord.next_action_decision_notes, "No notes recorded.")}</p>
+            <p>Decided at: {displayText(selectedRecord.next_action_decided_at, "Not decided")}</p>
+          </section>
           <ExportActions applicationId={selectedRecord.id} />
 
           <section className="result-section cover-letter-section">

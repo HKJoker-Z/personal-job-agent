@@ -18,9 +18,11 @@ from openai import OpenAI
 from pydantic import BaseModel
 from pypdf import PdfReader
 
+from agent_workflow import AgentWorkflow, WorkflowContext
 from database import (
     ALLOWED_APPLICATION_STATUSES,
     ALLOWED_KNOWLEDGE_CATEGORIES,
+    ALLOWED_NEXT_ACTION_DECISIONS,
     DB_PATH,
     create_knowledge_document,
     delete_application_record,
@@ -35,6 +37,8 @@ from database import (
     rebuild_project_knowledge_document,
     search_knowledge_chunks,
     update_application_record,
+    update_application_workflow_steps,
+    update_next_action_decision,
 )
 from export_utils import (
     build_analysis_report_pdf,
@@ -47,12 +51,13 @@ from knowledge_utils import (
     extract_knowledge_file_text,
     validate_knowledge_filename,
 )
+from recommendation_engine import generate_next_action
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 load_dotenv(ROOT_DIR / ".env")
 
 APP_NAME = "personal-job-agent"
-APP_VERSION = "1.5.2"
+APP_VERSION = "1.6"
 DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 DEEPSEEK_MODEL = "deepseek-chat"
 MAX_RESUME_TEXT_CHARS = 18000
@@ -64,9 +69,10 @@ PROJECT_KNOWLEDGE_TITLE = "Personal Job Application Agent Project Knowledge"
 PROJECT_KNOWLEDGE_CATEGORY = "Other"
 PROJECT_KNOWLEDGE_MAX_UPLOAD_BYTES = 2 * 1024 * 1024
 GENERIC_KNOWLEDGE_DISABLED_DETAIL = (
-    "Generic knowledge base upload is disabled in v1.5.2. "
+    "Generic knowledge base upload is disabled in v1.6. "
     "Use Project Knowledge RAG instead."
 )
+MAX_RESUME_UPLOAD_BYTES = 8 * 1024 * 1024
 JOB_URL_TIMEOUT_SECONDS = 10
 DEEPSEEK_TIMEOUT_SECONDS = 60
 SCORING_DIMENSIONS = (
@@ -204,6 +210,11 @@ class ApplicationUpdate(BaseModel):
     application_status: str | None = None
     notes: str | None = None
 
+
+class NextActionDecisionUpdate(BaseModel):
+    decision: str
+    notes: str | None = None
+
 allowed_origins = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
@@ -284,6 +295,9 @@ async def extract_resume_text(resume: UploadFile) -> str:
     if not file_bytes:
         logger.warning("Resume parsing failed error_type=EmptyUpload")
         raise HTTPException(status_code=400, detail="Uploaded resume file is empty.")
+    if len(file_bytes) > MAX_RESUME_UPLOAD_BYTES:
+        logger.warning("Resume parsing failed error_type=FileTooLarge")
+        raise HTTPException(status_code=400, detail="Resume file is too large. Maximum size is 8 MB.")
 
     try:
         if filename.endswith(".pdf"):
@@ -319,7 +333,7 @@ def fetch_job_text_from_url(job_url: str) -> str:
             job_url,
             timeout=JOB_URL_TIMEOUT_SECONDS,
             headers={
-                "User-Agent": "PersonalJobApplicationAgent/1.5.2 (+local MVP)",
+                "User-Agent": "PersonalJobApplicationAgent/1.6 (+local MVP)",
             },
         )
         response.raise_for_status()
@@ -861,6 +875,7 @@ def normalize_result(
     data: dict[str, Any],
     *,
     retrieved_rag_chunks: list[dict[str, Any]] | None = None,
+    apply_rag_corrections: bool = True,
 ) -> dict[str, Any]:
     retrieved_rag_chunks = retrieved_rag_chunks or []
     scoring_breakdown = normalize_scoring_breakdown(data.get("scoring_breakdown"))
@@ -874,13 +889,15 @@ def normalize_result(
         data.get("rag_sources"),
         retrieved_rag_chunks,
     )
-    rag_corrected_terms = apply_rag_supported_skill_corrections(
-        matched_skills=matched_skills,
-        missing_skills=missing_skills,
-        ats_analysis=ats_analysis,
-        scoring_breakdown=scoring_breakdown,
-        retrieved_chunks=retrieved_rag_chunks,
-    )
+    rag_corrected_terms: list[str] = []
+    if apply_rag_corrections:
+        rag_corrected_terms = apply_rag_supported_skill_corrections(
+            matched_skills=matched_skills,
+            missing_skills=missing_skills,
+            ats_analysis=ats_analysis,
+            scoring_breakdown=scoring_breakdown,
+            retrieved_chunks=retrieved_rag_chunks,
+        )
 
     match_reason = normalize_string(data.get("match_reason")).strip()
     weighted_reason = build_match_reason_fallback(scoring_breakdown, matched_skills, missing_skills)
@@ -912,11 +929,49 @@ def normalize_result(
     }
 
 
-def analyze_with_deepseek(
+def reconcile_result_with_rag_evidence(
+    result: dict[str, Any],
+    retrieved_rag_chunks: list[dict[str, Any]],
+) -> list[str]:
+    scoring_breakdown = result.get("scoring_breakdown")
+    ats_analysis = result.get("ats_analysis")
+    matched_skills = result.get("matched_skills")
+    missing_skills = result.get("missing_skills")
+    if not isinstance(scoring_breakdown, dict):
+        scoring_breakdown = default_scoring_breakdown()
+        result["scoring_breakdown"] = scoring_breakdown
+    if not isinstance(ats_analysis, dict):
+        ats_analysis = normalize_ats_analysis({})
+        result["ats_analysis"] = ats_analysis
+    if not isinstance(matched_skills, list):
+        matched_skills = []
+        result["matched_skills"] = matched_skills
+    if not isinstance(missing_skills, list):
+        missing_skills = []
+        result["missing_skills"] = missing_skills
+
+    corrected_terms = apply_rag_supported_skill_corrections(
+        matched_skills=matched_skills,
+        missing_skills=missing_skills,
+        ats_analysis=ats_analysis,
+        scoring_breakdown=scoring_breakdown,
+        retrieved_chunks=retrieved_rag_chunks,
+    )
+    if corrected_terms:
+        result["match_reason"] = (
+            f"{normalize_string(result.get('match_reason')).strip()}\n"
+            "Project Knowledge RAG evidence also supports: "
+            f"{', '.join(corrected_terms[:8])}."
+        ).strip()
+        result["match_score"] = calculate_weighted_match_score(scoring_breakdown)
+    return corrected_terms
+
+
+def call_deepseek_raw(
     resume_text: str,
     job_description: str,
     rag_chunks: list[dict[str, Any]] | None = None,
-) -> dict[str, Any]:
+) -> str:
     api_key = os.getenv("DEEPSEEK_API_KEY")
     if not api_key:
         logger.error("DeepSeek configuration failed error_type=MissingApiKey")
@@ -975,10 +1030,18 @@ def analyze_with_deepseek(
             detail="DeepSeek API response was empty. Please try again.",
         ) from exc
 
+    logger.info("DeepSeek call succeeded")
+    return content
+
+
+def analyze_with_deepseek(
+    resume_text: str,
+    job_description: str,
+    rag_chunks: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    content = call_deepseek_raw(resume_text, job_description, rag_chunks or [])
     parsed = parse_ai_json_response(content)
     result = normalize_result(parsed, retrieved_rag_chunks=rag_chunks or [])
-
-    logger.info("DeepSeek call succeeded")
     return result
 
 
@@ -1000,6 +1063,14 @@ def validate_application_status(value: str | None, *, required: bool) -> str | N
         )
 
     return status
+
+
+def validate_next_action_decision(value: str | None) -> str:
+    decision = (value or "").strip()
+    if decision not in ALLOWED_NEXT_ACTION_DECISIONS:
+        allowed = ", ".join(ALLOWED_NEXT_ACTION_DECISIONS)
+        raise HTTPException(status_code=400, detail=f"decision must be one of: {allowed}.")
+    return decision
 
 
 def validate_knowledge_category(value: str | None, *, required: bool) -> str | None:
@@ -1465,6 +1536,29 @@ def patch_application(application_id: int, payload: ApplicationUpdate) -> dict[s
     return updated_record
 
 
+@app.patch("/api/applications/{application_id}/next-action")
+def patch_next_action_decision(
+    application_id: int,
+    payload: NextActionDecisionUpdate,
+) -> dict[str, Any]:
+    decision = validate_next_action_decision(payload.decision)
+    updated_record = update_next_action_decision(
+        application_id,
+        decision=decision,
+        notes=payload.notes,
+    )
+    if updated_record is None:
+        raise HTTPException(status_code=404, detail="Application record not found.")
+
+    return {
+        "application_id": application_id,
+        "next_action": updated_record.get("next_action") or {},
+        "decision": updated_record.get("next_action_decision") or "pending",
+        "notes": updated_record.get("next_action_decision_notes") or "",
+        "decided_at": updated_record.get("next_action_decided_at"),
+    }
+
+
 @app.delete("/api/applications/{application_id}")
 def delete_application(application_id: int) -> dict[str, Any]:
     deleted = delete_application_record(application_id)
@@ -1484,82 +1578,241 @@ async def analyze(
     rag_mode: str | None = Form(None),
 ) -> dict[str, Any]:
     logger.info("Received analysis request")
+    workflow = AgentWorkflow()
+    context = WorkflowContext(workflow_id=workflow.workflow_id)
 
-    if resume is None:
-        logger.warning("Analyze request rejected error_type=MissingResume")
-        raise HTTPException(status_code=400, detail="Please upload a PDF or DOCX resume.")
+    workflow.start_step("validate_input", "Validate Input")
+    try:
+        if resume is None:
+            logger.warning("Analyze request rejected error_type=MissingResume")
+            raise HTTPException(status_code=400, detail="Please upload a PDF or DOCX resume.")
 
-    clean_job_text = (job_text or "").strip()
-    clean_job_url = (job_url or "").strip()
+        resume_filename = resume.filename or ""
+        clean_resume_filename = resume_filename.lower()
+        if not clean_resume_filename.endswith((".pdf", ".docx")):
+            logger.warning("Analyze request rejected error_type=UnsupportedResumeType")
+            raise HTTPException(status_code=400, detail="Resume must be a PDF or DOCX file.")
 
-    if not clean_job_text and not clean_job_url:
-        logger.warning("Analyze request rejected error_type=MissingJobInput")
-        raise HTTPException(
-            status_code=400,
-            detail="Please provide either job description text or a job URL.",
+        upload_size = getattr(resume, "size", None)
+        if isinstance(upload_size, int) and upload_size > MAX_RESUME_UPLOAD_BYTES:
+            logger.warning("Analyze request rejected error_type=ResumeTooLarge")
+            raise HTTPException(
+                status_code=400,
+                detail="Resume file is too large. Maximum size is 8 MB.",
+            )
+
+        clean_job_text = (job_text or "").strip()
+        clean_job_url = (job_url or "").strip()
+        if not clean_job_text and not clean_job_url:
+            logger.warning("Analyze request rejected error_type=MissingJobInput")
+            raise HTTPException(
+                status_code=400,
+                detail="Please provide either job description text or a job URL.",
+            )
+
+        context.resume_filename = resume_filename or None
+        context.job_url = clean_job_url or None
+        context.rag_mode = resolve_rag_mode(use_knowledge_base, rag_mode)
+        context.rag_top_k = clamp_rag_top_k(rag_top_k)
+        workflow.complete_step(
+            "validate_input",
+            f"Input accepted. RAG mode: {context.rag_mode}; top_k: {context.rag_top_k}.",
         )
+    except Exception as exc:
+        workflow.fail_step("validate_input", "Input validation failed.")
+        raise
 
-    resume_text = await extract_resume_text(resume)
-    logger.info("Resume parsing succeeded characters=%s", len(resume_text))
+    workflow.start_step("parse_resume", "Parse Resume")
+    try:
+        resume_text = await extract_resume_text(resume)
+        resume_text, resume_was_truncated = truncate_text(resume_text, MAX_RESUME_TEXT_CHARS)
+        context.resume_text = resume_text
+        logger.info("Resume parsing succeeded characters=%s", len(resume_text))
+        if resume_was_truncated:
+            logger.info("Resume text truncated characters=%s", MAX_RESUME_TEXT_CHARS)
+        workflow.complete_step(
+            "parse_resume",
+            f"Resume text extracted successfully from {context.resume_filename or 'uploaded file'}.",
+        )
+    except Exception:
+        workflow.fail_step("parse_resume", "Resume parsing failed.")
+        raise
 
-    if clean_job_text:
-        job_description = clean_job_text
-        logger.info("JD text received characters=%s", len(job_description))
-    elif clean_job_url:
-        job_description = fetch_job_text_from_url(clean_job_url)
-        logger.info("JD fetch succeeded characters=%s", len(job_description))
+    workflow.start_step("acquire_job_description", "Acquire Job Description")
+    try:
+        if clean_job_text:
+            job_description = clean_job_text
+            source_message = "Used pasted job description text."
+            logger.info("JD text received characters=%s", len(job_description))
+        else:
+            job_description = fetch_job_text_from_url(clean_job_url)
+            source_message = "Fetched job description from the provided URL."
+            logger.info("JD fetch succeeded characters=%s", len(job_description))
 
-    resume_text, resume_was_truncated = truncate_text(resume_text, MAX_RESUME_TEXT_CHARS)
-    job_description, jd_was_truncated = truncate_text(job_description, MAX_JOB_TEXT_CHARS)
+        job_description, jd_was_truncated = truncate_text(job_description, MAX_JOB_TEXT_CHARS)
+        context.job_text = job_description
+        if jd_was_truncated:
+            logger.info("JD text truncated characters=%s", MAX_JOB_TEXT_CHARS)
+        workflow.complete_step("acquire_job_description", source_message)
+    except Exception:
+        workflow.fail_step("acquire_job_description", "Could not acquire job description.")
+        raise
 
-    if resume_was_truncated:
-        logger.info("Resume text truncated characters=%s", MAX_RESUME_TEXT_CHARS)
-    if jd_was_truncated:
-        logger.info("JD text truncated characters=%s", MAX_JOB_TEXT_CHARS)
-
-    rag_chunks: list[dict[str, Any]] = []
-    clean_rag_top_k = clamp_rag_top_k(rag_top_k)
-    resolved_rag_mode = resolve_rag_mode(use_knowledge_base, rag_mode)
     logger.info(
         "Analyze RAG settings rag_mode=%s use_knowledge_base=%s rag_top_k=%s",
-        resolved_rag_mode,
+        context.rag_mode,
         use_knowledge_base,
-        clean_rag_top_k,
+        context.rag_top_k,
     )
-    if resolved_rag_mode == "project":
-        retrieval_query = build_knowledge_retrieval_query(job_description, resume_text)
-        rag_chunks, retrieval_method = search_project_knowledge(
-            retrieval_query,
-            clean_rag_top_k,
+    if context.rag_mode == "off":
+        workflow.skip_step(
+            "retrieve_project_evidence",
+            "Retrieve Project Knowledge",
+            "Project Knowledge RAG is off for this analysis.",
         )
+    else:
+        workflow.start_step("retrieve_project_evidence", "Retrieve Project Knowledge")
+        try:
+            retrieval_query = build_knowledge_retrieval_query(
+                context.job_text,
+                context.resume_text,
+            )
+            rag_chunks, retrieval_method = search_project_knowledge(
+                retrieval_query,
+                context.rag_top_k,
+            )
+            context.retrieved_chunks = rag_chunks
+            context.rag_sources = build_default_rag_sources(rag_chunks)
+            if not rag_chunks:
+                workflow.add_warning()
+            workflow.complete_step(
+                "retrieve_project_evidence",
+                (
+                    f"Retrieved {len(rag_chunks)} Project Knowledge source(s) "
+                    f"using {retrieval_method}."
+                ),
+            )
+        except Exception:
+            workflow.fail_step(
+                "retrieve_project_evidence",
+                "Project Knowledge retrieval failed.",
+            )
+            raise
         logger.info(
             "Project Knowledge retrieval completed result_count=%s retrieval_method=%s chunk_ids=%s titles=%s",
-            len(rag_chunks),
-            retrieval_method,
-            [chunk.get("chunk_id") for chunk in rag_chunks],
-            [chunk.get("document_title") for chunk in rag_chunks],
+            len(context.retrieved_chunks),
+            retrieval_method if context.retrieved_chunks else "none",
+            [chunk.get("chunk_id") for chunk in context.retrieved_chunks],
+            [chunk.get("document_title") for chunk in context.retrieved_chunks],
         )
 
-    result = analyze_with_deepseek(resume_text, job_description, rag_chunks)
-    result["rag_mode"] = resolved_rag_mode
-    result["used_knowledge_base"] = bool(resolved_rag_mode == "project" and rag_chunks)
-    if not result["used_knowledge_base"]:
-        result["rag_sources"] = []
+    workflow.start_step("run_llm_analysis", "Run LLM Analysis")
+    try:
+        context.llm_raw_response = call_deepseek_raw(
+            context.resume_text,
+            context.job_text,
+            context.retrieved_chunks,
+        )
+        workflow.complete_step("run_llm_analysis", "DeepSeek returned a JSON response.")
+    except Exception:
+        workflow.fail_step("run_llm_analysis", "LLM analysis failed.")
+        raise
 
-    application_id: int | None = None
-    saved_to_history = False
+    workflow.start_step("validate_structured_output", "Validate Structured Output")
+    try:
+        parsed = parse_ai_json_response(context.llm_raw_response)
+        result = normalize_result(
+            parsed,
+            retrieved_rag_chunks=context.retrieved_chunks,
+            apply_rag_corrections=False,
+        )
+        workflow.complete_step(
+            "validate_structured_output",
+            "LLM JSON parsed and normalized successfully.",
+        )
+    except Exception:
+        workflow.fail_step(
+            "validate_structured_output",
+            "Structured output validation failed.",
+        )
+        raise
+
+    workflow.start_step("reconcile_evidence", "Reconcile Evidence")
+    try:
+        corrected_terms = reconcile_result_with_rag_evidence(result, context.retrieved_chunks)
+        result["rag_mode"] = context.rag_mode
+        result["used_knowledge_base"] = bool(
+            context.rag_mode == "project" and context.retrieved_chunks
+        )
+        if not result["used_knowledge_base"]:
+            result["rag_sources"] = []
+        workflow.complete_step(
+            "reconcile_evidence",
+            (
+                f"Reconciled Project Knowledge evidence; corrected {len(corrected_terms)} "
+                "RAG-supported term(s)."
+            ),
+        )
+    except Exception:
+        workflow.fail_step("reconcile_evidence", "Evidence reconciliation failed.")
+        raise
+
+    workflow.start_step("recommend_next_action", "Recommend Next Action")
+    try:
+        context.next_action = generate_next_action(result)
+        result["next_action"] = context.next_action
+        result["next_action_decision"] = "pending"
+        workflow.complete_step(
+            "recommend_next_action",
+            f"Recommended next action: {context.next_action.get('label', 'No Recommendation')}.",
+        )
+    except Exception:
+        workflow.fail_step("recommend_next_action", "Next-action recommendation failed.")
+        raise
 
     if save_to_history:
-        application_id = insert_application_record(
-            result,
-            job_url=clean_job_url or None,
-            resume_filename=resume.filename or None,
+        workflow.start_step("save_application", "Save Application")
+        try:
+            result["workflow_id"] = context.workflow_id
+            result["workflow_steps"] = workflow.to_list()
+            context.application_id = insert_application_record(
+                result,
+                job_url=context.job_url,
+                resume_filename=context.resume_filename,
+            )
+            context.saved_to_history = True
+            workflow.complete_step(
+                "save_application",
+                f"Application record saved with ID {context.application_id}.",
+            )
+            logger.info("Analysis saved to history application_id=%s", context.application_id)
+        except Exception:
+            workflow.fail_step("save_application", "Could not save application record.")
+            raise
+    else:
+        workflow.skip_step(
+            "save_application",
+            "Save Application",
+            "Save to history was disabled for this analysis.",
         )
-        saved_to_history = True
-        logger.info("Analysis saved to history application_id=%s", application_id)
 
-    return {
-        **result,
-        "application_id": application_id,
-        "saved_to_history": saved_to_history,
-    }
+    workflow.start_step("finalize_result", "Finalize Result")
+    result["workflow_id"] = context.workflow_id
+    result["workflow_status"] = workflow.status()
+    result["application_id"] = context.application_id
+    result["saved_to_history"] = context.saved_to_history
+    result["next_action_decision"] = result.get("next_action_decision") or "pending"
+    workflow.complete_step(
+        "finalize_result",
+        "Final API response prepared with workflow audit trail.",
+    )
+    result["workflow_status"] = workflow.status()
+    result["workflow_steps"] = workflow.to_list()
+
+    if context.application_id is not None:
+        update_application_workflow_steps(
+            context.application_id,
+            workflow_steps=result["workflow_steps"],
+        )
+
+    return result

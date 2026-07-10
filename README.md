@@ -1,10 +1,10 @@
 # Personal Job Application Agent
 
-Current version: v1.5.2
+Current version: v1.6
 
-Personal Job Application Agent is a local-first, full-stack AI job application assistant. It parses a PDF or DOCX resume, accepts pasted job description text or one user-provided job URL, uses the DeepSeek API to generate explainable Resume-JD matching results, retrieves evidence from a curated Project Knowledge RAG source, creates an English cover letter, tracks saved applications in SQLite, and exports application materials as DOCX/PDF files.
+Personal Job Application Agent is a local-first, full-stack AI job application assistant. It parses a PDF or DOCX resume, accepts pasted job description text or one user-provided job URL, uses the DeepSeek API to generate explainable Resume-JD matching results, retrieves evidence from a curated Project Knowledge RAG source, creates an English cover letter, recommends the next application action, tracks saved applications in SQLite, and exports application materials as DOCX/PDF files.
 
-Version 1.5.2 intentionally simplifies RAG to Project Knowledge only. The goal is not to build a general-purpose document knowledge base. The goal is to use a curated, auditable project evidence file to support AI job applications for AI, GenAI, LLM application, RAG, and agentic AI related roles.
+Version 1.6 adds a custom lightweight agent workflow orchestration layer. The synchronous Analyze API now executes explicit backend workflow steps, returns a real execution audit trail, generates a deterministic next-action recommendation, and lets the user record a human-in-the-loop decision. The project still uses Project Knowledge RAG only; it does not use LangGraph, CrewAI, AutoGen, MCP, or fake real-time streaming.
 
 ## Core Features
 
@@ -20,6 +20,11 @@ Version 1.5.2 intentionally simplifies RAG to Project Knowledge only. The goal i
 - RAG-enhanced analysis with top-k Project Knowledge evidence injection
 - RAG Mode and RAG Sources in Analyze results and History Detail
 - RAG Mode and RAG Sources in PDF analysis reports
+- Custom Agent Workflow Orchestration for the Analyze pipeline
+- Workflow IDs and real execution audit trails
+- Deterministic next-action recommendation
+- Human-in-the-loop decision recording for recommendations
+- Workflow and recommendation display in Analyze, History, and PDF reports
 - Explainable scoring breakdown across skills, projects, education, work experience, and keyword match
 - Backend-controlled weighted match score calculation
 - ATS keyword analysis
@@ -29,7 +34,7 @@ Version 1.5.2 intentionally simplifies RAG to Project Knowledge only. The goal i
 - DOCX cover letter export
 - PDF analysis report export
 
-Version 1.5.2 removes the generic knowledge base upload UI and disables generic `/api/knowledge/*` endpoints with HTTP `410 Gone`.
+Version 1.5.2 removed the generic knowledge base upload UI and disabled generic `/api/knowledge/*` endpoints with HTTP `410 Gone`. Version 1.6 keeps that Project Knowledge-only RAG design.
 
 ## Why Project Knowledge RAG Only
 
@@ -65,7 +70,7 @@ Project Knowledge RAG keeps retrieval focused on a single curated evidence file:
 - URL extraction: `requests`, `beautifulsoup4`
 - Version control: Git/GitHub
 
-No external vector database is used in v1.5.2.
+No external vector database is used in v1.6.
 
 ## Project Structure
 
@@ -76,8 +81,12 @@ No external vector database is used in v1.5.2.
 │   │   └── app.db            # generated locally, not committed
 │   ├── database.py
 │   ├── export_utils.py
+│   ├── agent_workflow.py
+│   ├── recommendation_engine.py
 │   ├── knowledge_utils.py
 │   ├── main.py
+│   ├── test_agent_workflow.py
+│   ├── test_recommendation_engine.py
 │   └── requirements.txt
 ├── docs/
 │   └── PROJECT_KNOWLEDGE.md  # curated Project Knowledge RAG source
@@ -149,7 +158,7 @@ Expected response:
 {
   "status": "ok",
   "service": "personal-job-agent",
-  "version": "1.5.2"
+  "version": "1.6"
 }
 ```
 
@@ -197,7 +206,7 @@ backend/data/app.db
 
 The backend creates `backend/data/` and `app.db` automatically. Database files are ignored by Git.
 
-Application history stores normalized AI analysis results, scoring breakdowns, ATS analysis, upgraded resume bullets, RAG mode, RAG source metadata, status, and notes. It does not store uploaded resume files or complete `resume_text`.
+Application history stores normalized AI analysis results, scoring breakdowns, ATS analysis, upgraded resume bullets, RAG mode, RAG source metadata, workflow IDs, workflow step audit trails, next-action recommendations, human decisions, status, and notes. It does not store uploaded resume files or complete `resume_text`.
 
 Project Knowledge RAG uses the existing v1.5 tables:
 
@@ -209,7 +218,7 @@ The tables remain in place to avoid breaking existing local databases, but the p
 
 ## RAG Retrieval
 
-Version 1.5.2 uses Project Knowledge RAG only:
+Version 1.6 uses Project Knowledge RAG only:
 
 - The only recommended RAG source is `docs/PROJECT_KNOWLEDGE.md`.
 - The backend chunks the file and indexes it in SQLite.
@@ -217,7 +226,53 @@ Version 1.5.2 uses Project Knowledge RAG only:
 - If FTS5 is unavailable, the backend falls back to lightweight keyword scoring over chunk content, title, and category.
 - Only top-k relevant chunks are sent to DeepSeek during analysis.
 - The entire Project Knowledge file is never sent to the LLM.
-- Generic `/api/knowledge/*` endpoints are disabled in v1.5.2 and return `410 Gone`.
+- Generic `/api/knowledge/*` endpoints are disabled in v1.6 and return `410 Gone`.
+
+## Agent Workflow Orchestration
+
+Version 1.6 decomposes `POST /api/analyze` into real backend workflow steps:
+
+1. Validate Input
+2. Parse Resume
+3. Acquire Job Description
+4. Retrieve Project Knowledge
+5. Run LLM Analysis
+6. Validate Structured Output
+7. Reconcile Evidence
+8. Recommend Next Action
+9. Save Application
+10. Finalize Result
+
+Each step records a stable key, display name, status, safe message, start time, completion time, and measured `duration_ms`. Steps can be `pending`, `running`, `completed`, `skipped`, or `failed`.
+
+The current workflow is synchronous. Version 1.6 returns an execution audit trail after the synchronous workflow completes. The UI may show a loading message while the request is running, but it does not simulate fake step progress with timers and it does not provide real-time streaming.
+
+This is a custom lightweight orchestration layer, not LangGraph, CrewAI, AutoGen, MCP, or an asynchronous distributed task queue.
+
+## Next-Action Recommendation
+
+The backend generates a deterministic recommendation without making an additional DeepSeek call:
+
+- `apply_now`: high match score and no critical missing requirements.
+- `improve_resume_first`: strong or moderate match where resume wording or limited gaps should be addressed first.
+- `upskill_first`: meaningful technical gaps remain before applying.
+- `save_for_later`: weak but not irrelevant fit.
+- `skip`: very low fit or major core requirement gaps.
+
+The recommendation includes an action, label, priority, rule-based confidence indicator, reason, recommended tasks, and evidence. The confidence value is an explainable rule indicator from `0.0` to `1.0`; it is not a trained model probability and does not predict hiring outcome.
+
+Critical missing skills are identified from missing skills, ATS missing keywords, important JD keywords, scoring, and retrieved Project Knowledge evidence. If a skill is supported by the resume or Project Knowledge evidence, it should not be treated as critical missing.
+
+## Human-in-the-Loop Decision
+
+The Agent recommends the next action, but the user decides. Saved records can store one of these decision states:
+
+- `pending`
+- `accepted`
+- `dismissed`
+- `completed`
+
+The Agent does not automatically submit job applications, change the user's resume, or modify application status based on the recommendation.
 
 ## Troubleshooting / Validation
 
@@ -290,6 +345,11 @@ Response includes all analysis fields plus:
 - `rag_mode`
 - `used_knowledge_base`
 - `rag_sources`
+- `workflow_id`
+- `workflow_status`
+- `workflow_steps`
+- `next_action`
+- `next_action_decision`
 
 ### `GET /api/project-knowledge/status`
 
@@ -362,7 +422,7 @@ curl "http://localhost:8000/api/project-knowledge/search?query=RAG%20FastAPI%20D
 
 ### Generic Knowledge Endpoints
 
-The following generic knowledge endpoints are disabled in v1.5.2 and return `410 Gone`:
+The following generic knowledge endpoints are disabled in v1.6 and return `410 Gone`:
 
 - `GET /api/knowledge/documents`
 - `POST /api/knowledge/documents`
@@ -374,18 +434,51 @@ Response:
 
 ```json
 {
-  "detail": "Generic knowledge base upload is disabled in v1.5.2. Use Project Knowledge RAG instead."
+  "detail": "Generic knowledge base upload is disabled in v1.6. Use Project Knowledge RAG instead."
 }
 ```
 
 ### Application History and Export APIs
 
-- `GET /api/applications`: returns historical application records without heavy detail fields.
-- `GET /api/applications/{id}`: returns one full application record, including RAG mode and RAG sources.
+- `GET /api/applications`: returns historical application records without heavy detail fields, plus lightweight next-action label and decision data.
+- `GET /api/applications/{id}`: returns one full application record, including RAG mode, RAG sources, workflow steps, next action, and human decision data.
 - `PATCH /api/applications/{id}`: updates application status and optional notes.
+- `PATCH /api/applications/{id}/next-action`: records the user's decision for the Agent recommendation.
 - `DELETE /api/applications/{id}`: deletes one historical application record.
 - `GET /api/applications/{id}/cover-letter.docx`: exports the saved cover letter as DOCX.
-- `GET /api/applications/{id}/report.pdf`: exports a full PDF report, including RAG Mode and RAG Sources.
+- `GET /api/applications/{id}/report.pdf`: exports a full PDF report, including RAG Mode, RAG Sources, Agent Workflow, Recommended Next Action, and Human Decision.
+
+### `PATCH /api/applications/{id}/next-action`
+
+Records a human-in-the-loop decision for the recommendation.
+
+Request:
+
+```json
+{
+  "decision": "accepted",
+  "notes": "I will tailor the resume before applying."
+}
+```
+
+Allowed decisions:
+
+- `pending`
+- `accepted`
+- `dismissed`
+- `completed`
+
+Response:
+
+```json
+{
+  "application_id": 6,
+  "next_action": {},
+  "decision": "accepted",
+  "notes": "I will tailor the resume before applying.",
+  "decided_at": "2026-07-10T00:00:00+00:00"
+}
+```
 
 ## Security and Responsible AI
 
@@ -398,19 +491,21 @@ Response:
 - Full `resume_text` is not stored in `application_records`.
 - The DeepSeek API key is never printed.
 - Backend logs record steps and counts, not full resume content, full JD content, knowledge chunk content, cover letter content, or report content.
+- Workflow step messages are short, safe status messages and do not contain full resumes, full JDs, full Project Knowledge chunks, or API keys.
 - Job descriptions and Project Knowledge content are treated as untrusted data in the prompt.
 - The system instructs the LLM not to fabricate user experience.
 - Cover letters must be grounded in the resume and retrieved Project Knowledge evidence.
 
-## Version 1.5.2 Core Changes
+## Version 1.6 Core Changes
 
-- Simplified RAG to Project Knowledge only.
-- Removed generic knowledge base upload UI.
-- Disabled generic `/api/knowledge/*` endpoints.
-- Added `docs/PROJECT_KNOWLEDGE.md` as the curated skill evidence base.
-- Added a dedicated Project Knowledge upload/replace endpoint.
-- Analyze supports `project` and `off` RAG modes.
-- Project Knowledge rebuild/search/status APIs remain available.
+- Added custom Agent Workflow Orchestration for `POST /api/analyze`.
+- Added workflow IDs and backend execution audit trails.
+- Broke analysis into explicit steps for validation, resume parsing, JD acquisition, Project Knowledge retrieval, LLM analysis, structured output validation, evidence reconciliation, recommendation, saving, and finalization.
+- Added deterministic next-action recommendation without an extra LLM call.
+- Added human-in-the-loop recommendation decisions.
+- Persisted workflow, recommendation, and decision data in SQLite.
+- Displayed workflow and recommendations in Analyze, History Detail, and PDF reports.
+- Kept Version 1.5.2 Project Knowledge RAG only behavior.
 
 ## Version History
 
@@ -420,10 +515,10 @@ Response:
 - v1.4: DOCX/PDF export and product polish
 - v1.5: RAG Knowledge Base
 - v1.5.2: Project Knowledge RAG Only
+- v1.6: Agent workflow orchestration and next-action recommendation
 
 ## Roadmap
 
-- v1.6: Agent workflow and orchestration
 - v1.7: AI security and prompt injection mitigation
 - v1.8: Monitoring and evaluation
 - v1.9: Docker and cloud deployment

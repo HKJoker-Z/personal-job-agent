@@ -9,6 +9,7 @@ from typing import Any
 DB_PATH = Path(__file__).resolve().parent / "data" / "app.db"
 
 ALLOWED_APPLICATION_STATUSES = ("Saved", "Applied", "Interview", "Rejected", "Offer")
+ALLOWED_NEXT_ACTION_DECISIONS = ("pending", "accepted", "dismissed", "completed")
 ALLOWED_KNOWLEDGE_CATEGORIES = (
     "Resume",
     "Project Experience",
@@ -131,6 +132,12 @@ def init_db() -> None:
                 upgraded_resume_bullets TEXT NOT NULL DEFAULT '[]',
                 rag_mode TEXT NOT NULL DEFAULT '',
                 rag_sources TEXT NOT NULL DEFAULT '[]',
+                workflow_id TEXT,
+                workflow_steps TEXT NOT NULL DEFAULT '[]',
+                next_action TEXT NOT NULL DEFAULT '{}',
+                next_action_decision TEXT NOT NULL DEFAULT 'pending',
+                next_action_decision_notes TEXT,
+                next_action_decided_at TEXT,
                 notes TEXT
             )
             """
@@ -176,6 +183,48 @@ def init_db() -> None:
             existing_columns=existing_columns,
             column_name="rag_mode",
             column_definition="rag_mode TEXT NOT NULL DEFAULT ''",
+        )
+        add_column_if_missing(
+            connection,
+            table_name="application_records",
+            existing_columns=existing_columns,
+            column_name="workflow_id",
+            column_definition="workflow_id TEXT",
+        )
+        add_column_if_missing(
+            connection,
+            table_name="application_records",
+            existing_columns=existing_columns,
+            column_name="workflow_steps",
+            column_definition="workflow_steps TEXT NOT NULL DEFAULT '[]'",
+        )
+        add_column_if_missing(
+            connection,
+            table_name="application_records",
+            existing_columns=existing_columns,
+            column_name="next_action",
+            column_definition="next_action TEXT NOT NULL DEFAULT '{}'",
+        )
+        add_column_if_missing(
+            connection,
+            table_name="application_records",
+            existing_columns=existing_columns,
+            column_name="next_action_decision",
+            column_definition="next_action_decision TEXT NOT NULL DEFAULT 'pending'",
+        )
+        add_column_if_missing(
+            connection,
+            table_name="application_records",
+            existing_columns=existing_columns,
+            column_name="next_action_decision_notes",
+            column_definition="next_action_decision_notes TEXT",
+        )
+        add_column_if_missing(
+            connection,
+            table_name="application_records",
+            existing_columns=existing_columns,
+            column_name="next_action_decided_at",
+            column_definition="next_action_decided_at TEXT",
         )
         connection.execute(
             """
@@ -364,6 +413,64 @@ def deserialize_rag_sources(value: Any) -> list[dict[str, Any]]:
     return sources
 
 
+def deserialize_workflow_steps(value: Any) -> list[dict[str, Any]]:
+    parsed = deserialize_json(value, [])
+    if not isinstance(parsed, list):
+        return []
+
+    steps: list[dict[str, Any]] = []
+    for item in parsed:
+        if not isinstance(item, dict):
+            continue
+        steps.append(
+            {
+                "key": clean_text(item.get("key")),
+                "name": clean_text(item.get("name")),
+                "status": clean_text(item.get("status"), "pending"),
+                "message": clean_text(item.get("message")),
+                "started_at": clean_text(item.get("started_at")),
+                "completed_at": clean_text(item.get("completed_at")),
+                "duration_ms": safe_int(item.get("duration_ms")),
+            }
+        )
+    return steps
+
+
+def default_next_action() -> dict[str, Any]:
+    return {
+        "action": "",
+        "label": "No Recommendation",
+        "priority": "low",
+        "confidence": 0.0,
+        "reason": "No next-action recommendation is available for this record.",
+        "recommended_tasks": [],
+        "evidence": [],
+        "critical_missing_skills": [],
+    }
+
+
+def deserialize_next_action(value: Any) -> dict[str, Any]:
+    parsed = deserialize_json(value, {})
+    if not isinstance(parsed, dict) or not parsed:
+        return default_next_action()
+
+    try:
+        confidence = float(parsed.get("confidence") or 0.0)
+    except (TypeError, ValueError):
+        confidence = 0.0
+
+    return {
+        "action": clean_text(parsed.get("action")),
+        "label": clean_text(parsed.get("label"), "No Recommendation"),
+        "priority": clean_text(parsed.get("priority"), "low"),
+        "confidence": max(0.0, min(1.0, confidence)),
+        "reason": clean_text(parsed.get("reason")),
+        "recommended_tasks": normalize_string_list(parsed.get("recommended_tasks")),
+        "evidence": normalize_string_list(parsed.get("evidence")),
+        "critical_missing_skills": normalize_string_list(parsed.get("critical_missing_skills")),
+    }
+
+
 def clean_text(value: Any, fallback: str = "") -> str:
     if value is None:
         return fallback
@@ -380,6 +487,7 @@ def safe_int(value: Any, fallback: int = 0) -> int:
 
 
 def row_to_list_item(row: sqlite3.Row) -> dict[str, Any]:
+    next_action = deserialize_next_action(row["next_action"])
     return {
         "id": row["id"],
         "created_at": row["created_at"],
@@ -391,6 +499,8 @@ def row_to_list_item(row: sqlite3.Row) -> dict[str, Any]:
         "application_status": row["application_status"] or "Saved",
         "match_score": row["match_score"],
         "rag_mode": clean_text(row["rag_mode"]),
+        "next_action_label": next_action.get("label") or "No Recommendation",
+        "next_action_decision": clean_text(row["next_action_decision"], "pending"),
     }
 
 
@@ -418,6 +528,12 @@ def row_to_detail(row: sqlite3.Row) -> dict[str, Any]:
         ),
         "rag_mode": clean_text(row["rag_mode"]),
         "rag_sources": deserialize_rag_sources(row["rag_sources"]),
+        "workflow_id": clean_text(row["workflow_id"]),
+        "workflow_steps": deserialize_workflow_steps(row["workflow_steps"]),
+        "next_action": deserialize_next_action(row["next_action"]),
+        "next_action_decision": clean_text(row["next_action_decision"], "pending"),
+        "next_action_decision_notes": row["next_action_decision_notes"],
+        "next_action_decided_at": row["next_action_decided_at"],
         "notes": row["notes"],
     }
 
@@ -455,9 +571,15 @@ def insert_application_record(
                 upgraded_resume_bullets,
                 rag_mode,
                 rag_sources,
+                workflow_id,
+                workflow_steps,
+                next_action,
+                next_action_decision,
+                next_action_decision_notes,
+                next_action_decided_at,
                 notes
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 now,
@@ -482,6 +604,12 @@ def insert_application_record(
                 serialize_json(analysis_result.get("upgraded_resume_bullets"), []),
                 clean_text(analysis_result.get("rag_mode")),
                 serialize_json(analysis_result.get("rag_sources"), []),
+                clean_text(analysis_result.get("workflow_id")) or None,
+                serialize_json(analysis_result.get("workflow_steps"), []),
+                serialize_json(analysis_result.get("next_action"), {}),
+                clean_text(analysis_result.get("next_action_decision"), "pending"),
+                clean_text(analysis_result.get("next_action_decision_notes")) or None,
+                clean_text(analysis_result.get("next_action_decided_at")) or None,
                 None,
             ),
         )
@@ -526,7 +654,9 @@ def list_application_records(
                 resume_filename,
                 application_status,
                 match_score,
-                rag_mode
+                rag_mode,
+                next_action,
+                next_action_decision
             FROM application_records
             {where_sql}
             ORDER BY created_at DESC, id DESC
@@ -575,6 +705,52 @@ def update_application_record(
 
     with get_connection() as connection:
         cursor = connection.execute(sql, params)
+        if cursor.rowcount == 0:
+            return None
+
+    return get_application_record(application_id)
+
+
+def update_application_workflow_steps(
+    application_id: int,
+    *,
+    workflow_steps: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    now = utc_now()
+    with get_connection() as connection:
+        cursor = connection.execute(
+            """
+            UPDATE application_records
+            SET workflow_steps = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (serialize_json(workflow_steps, []), now, application_id),
+        )
+        if cursor.rowcount == 0:
+            return None
+
+    return get_application_record(application_id)
+
+
+def update_next_action_decision(
+    application_id: int,
+    *,
+    decision: str,
+    notes: str | None,
+) -> dict[str, Any] | None:
+    now = utc_now()
+    with get_connection() as connection:
+        cursor = connection.execute(
+            """
+            UPDATE application_records
+            SET next_action_decision = ?,
+                next_action_decision_notes = ?,
+                next_action_decided_at = ?,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (decision, notes, now, now, application_id),
+        )
         if cursor.rowcount == 0:
             return None
 

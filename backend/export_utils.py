@@ -266,6 +266,103 @@ def add_rag_sources(
     story.append(Spacer(1, 0.06 * inch))
 
 
+def add_agent_workflow(
+    story: list[Any],
+    record: dict[str, Any],
+    heading_style: ParagraphStyle,
+    body_style: ParagraphStyle,
+) -> None:
+    add_heading(story, "Agent Workflow", heading_style)
+    steps = record.get("workflow_steps")
+    if not isinstance(steps, list) or not steps:
+        story.append(
+            Paragraph("No workflow audit trail is available for this older record.", body_style)
+        )
+        story.append(Spacer(1, 0.14 * inch))
+        return
+
+    for step in steps:
+        item = as_dict(step)
+        name = paragraph_text(item.get("name"), "Unnamed Step")
+        status = paragraph_text(item.get("status"), "pending")
+        message = paragraph_text(item.get("message"), "No message recorded.")
+        duration = clean_text(item.get("duration_ms"), "0")
+        story.append(Paragraph(f"<b>{name}</b> - {status} - {escape(duration)} ms", body_style))
+        story.append(Paragraph(message, body_style))
+        story.append(Spacer(1, 0.06 * inch))
+
+    story.append(Spacer(1, 0.06 * inch))
+
+
+def add_next_action(
+    story: list[Any],
+    record: dict[str, Any],
+    heading_style: ParagraphStyle,
+    body_style: ParagraphStyle,
+) -> None:
+    add_heading(story, "Recommended Next Action", heading_style)
+    next_action = as_dict(record.get("next_action"))
+    if not next_action or not clean_text(next_action.get("action")):
+        story.append(Paragraph("No next-action recommendation is available.", body_style))
+        story.append(Spacer(1, 0.14 * inch))
+        return
+
+    label = paragraph_text(next_action.get("label"), "No Recommendation")
+    priority = paragraph_text(next_action.get("priority"), "low")
+    confidence = clean_text(next_action.get("confidence"), "0")
+    reason = paragraph_text(next_action.get("reason"), "No reason recorded.")
+    story.append(Paragraph(f"<b>{label}</b>", body_style))
+    story.append(Paragraph(f"Priority: {priority}", body_style))
+    story.append(Paragraph(f"Rule-based confidence: {escape(confidence)}", body_style))
+    story.append(Paragraph(f"Reason: {reason}", body_style))
+
+    tasks = as_list(next_action.get("recommended_tasks"))
+    story.append(Paragraph("<b>Recommended Tasks</b>", body_style))
+    if tasks:
+        for task in tasks:
+            story.append(Paragraph(f"- {paragraph_text(task)}", body_style))
+    else:
+        story.append(Paragraph("No tasks recorded.", body_style))
+
+    evidence = as_list(next_action.get("evidence"))
+    story.append(Paragraph("<b>Evidence</b>", body_style))
+    if evidence:
+        for item in evidence:
+            story.append(Paragraph(f"- {paragraph_text(item)}", body_style))
+    else:
+        story.append(Paragraph("No evidence recorded.", body_style))
+
+    story.append(Spacer(1, 0.14 * inch))
+
+
+def add_human_decision(
+    story: list[Any],
+    record: dict[str, Any],
+    heading_style: ParagraphStyle,
+    body_style: ParagraphStyle,
+) -> None:
+    add_heading(story, "Human Decision", heading_style)
+    story.append(
+        Paragraph(
+            f"Decision: {paragraph_text(record.get('next_action_decision'), 'pending')}",
+            body_style,
+        )
+    )
+    story.append(
+        Paragraph(
+            f"Notes: {paragraph_text(record.get('next_action_decision_notes'), 'No notes recorded.')}",
+            body_style,
+        )
+    )
+    story.append(
+        Paragraph(
+            f"Decided at: {paragraph_text(record.get('next_action_decided_at'), 'Not decided')}",
+            body_style,
+        )
+    )
+    story.append(Spacer(1, 0.14 * inch))
+
+
 def build_analysis_report_pdf(record: dict[str, Any]) -> BytesIO:
     buffer = BytesIO()
     document = SimpleDocTemplate(
@@ -327,6 +424,9 @@ def build_analysis_report_pdf(record: dict[str, Any]) -> BytesIO:
     )
     add_upgraded_bullets(story, record, heading_style, body_style)
     add_rag_sources(story, record, heading_style, body_style)
+    add_agent_workflow(story, record, heading_style, body_style)
+    add_next_action(story, record, heading_style, body_style)
+    add_human_decision(story, record, heading_style, body_style)
     add_paragraph_block(
         story,
         "Cover Letter",
