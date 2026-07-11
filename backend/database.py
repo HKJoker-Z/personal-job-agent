@@ -1,4 +1,5 @@
 import json
+import os
 import re
 import sqlite3
 from datetime import datetime, timezone
@@ -8,7 +9,9 @@ from typing import Any
 from security_utils import normalized_security_scan
 
 
-DB_PATH = Path(__file__).resolve().parent / "data" / "app.db"
+BACKEND_DIR = Path(__file__).resolve().parent
+DEFAULT_DATABASE_PATH = (BACKEND_DIR / "data" / "app.db").resolve(strict=False)
+ALLOWED_APP_ENVS = ("development", "production", "test")
 
 ALLOWED_APPLICATION_STATUSES = ("Saved", "Applied", "Interview", "Rejected", "Offer")
 ALLOWED_NEXT_ACTION_DECISIONS = ("pending", "accepted", "dismissed", "completed")
@@ -40,9 +43,43 @@ def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+def get_app_env() -> str:
+    """Return the supported runtime environment without caching environment state."""
+    app_env = os.getenv("APP_ENV", "development").strip().lower() or "development"
+    if app_env not in ALLOWED_APP_ENVS:
+        raise RuntimeError("APP_ENV must be development, production, or test.")
+    return app_env
+
+
+def get_database_path() -> Path:
+    """Resolve the configured SQLite database path relative to this module when needed."""
+    configured_path = os.getenv("APP_DATABASE_PATH", "").strip()
+    if not configured_path:
+        return DEFAULT_DATABASE_PATH
+    path = Path(configured_path).expanduser()
+    if not path.is_absolute():
+        path = BACKEND_DIR / path
+    return path.resolve(strict=False)
+
+
+def is_default_application_database(path: Path) -> bool:
+    """Identify the real application database, including an existing symlink to it."""
+    return path.expanduser().resolve(strict=False) == DEFAULT_DATABASE_PATH
+
+
+def assert_safe_test_database(path: Path, app_env: str) -> None:
+    """Fail closed so tests can never silently write the user's application database."""
+    if app_env == "test" and is_default_application_database(path):
+        raise RuntimeError(
+            "APP_ENV=test requires APP_DATABASE_PATH to point to a non-default temporary SQLite database."
+        )
+
+
 def get_connection() -> sqlite3.Connection:
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    connection = sqlite3.connect(DB_PATH)
+    database_path = get_database_path()
+    assert_safe_test_database(database_path, get_app_env())
+    database_path.parent.mkdir(parents=True, exist_ok=True)
+    connection = sqlite3.connect(database_path)
     connection.row_factory = sqlite3.Row
     return connection
 

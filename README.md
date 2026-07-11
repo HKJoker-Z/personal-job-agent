@@ -1,10 +1,10 @@
 # Personal Job Application Agent
 
-Current version: v1.8
+Current version: v1.8.1
 
 Personal Job Application Agent is a local-first, full-stack AI job application assistant. It parses a PDF or DOCX resume, accepts pasted job description text or one user-provided job URL, applies deterministic AI security checks, uses the DeepSeek API to generate explainable Resume-JD matching results, retrieves evidence from a curated Project Knowledge RAG source, creates an English cover letter, recommends the next application action, tracks saved applications in SQLite, records local AI monitoring metadata, runs offline behavioral evaluations, and exports application materials as DOCX/PDF files.
 
-Version 1.8 adds local SQLite AI monitoring, workflow latency metrics, LLM latency monitoring, RAG effectiveness metrics, security monitoring, recommendation outcome monitoring, sanitized workflow trace lookup, evaluation history, and an offline deterministic Behavioral Evaluation Suite. Monitoring stores sanitized metadata and counts only; it does not store raw resumes, job descriptions, prompts, RAG chunks, model responses, or detected secret values. The project still uses Project Knowledge RAG only; it does not use LangGraph, CrewAI, AutoGen, MCP, OpenTelemetry, Langfuse, Prometheus, Grafana, external AI firewall products, or fake real-time streaming.
+Version 1.8.1 adds explicit monitoring and evaluation data lifecycle controls plus temporary SQLite isolation for automated tests. Monitoring stores sanitized metadata and counts only; it does not store raw resumes, job descriptions, prompts, RAG chunks, model responses, or detected secret values. The project still uses Project Knowledge RAG only; it does not use LangGraph, CrewAI, AutoGen, MCP, OpenTelemetry, Langfuse, Prometheus, Grafana, external AI firewall products, or fake real-time streaming.
 
 ## Core Features
 
@@ -38,6 +38,11 @@ Version 1.8 adds local SQLite AI monitoring, workflow latency metrics, LLM laten
 - Offline behavioral evaluation suite
 - Evaluation history
 - Monitoring dashboard
+- Clear-all and filtered monitoring cleanup
+- Workflow-specific monitoring trace deletion
+- Evaluation-history cleanup
+- Admin-token-protected destructive APIs with local-only default
+- Temporary SQLite databases and fail-fast test/real-data isolation
 - Workflow IDs and real execution audit trails
 - Deterministic next-action recommendation
 - Human-in-the-loop decision recording for recommendations
@@ -105,6 +110,8 @@ No external vector database or external observability vendor is used in v1.8.
 │   ├── safe_prompt.py
 │   ├── monitoring_service.py
 │   ├── evaluation_service.py
+│   ├── data_management_service.py
+│   ├── test_support.py
 │   ├── knowledge_utils.py
 │   ├── evals/
 │   │   ├── cases.json
@@ -116,10 +123,13 @@ No external vector database or external observability vendor is used in v1.8.
 │   ├── test_safe_prompt.py
 │   ├── test_monitoring_service.py
 │   ├── test_evaluation_service.py
+│   ├── test_data_management_service.py
+│   ├── test_database_isolation.py
 │   └── requirements.txt
 ├── docs/
 │   ├── PROJECT_KNOWLEDGE.md  # curated Project Knowledge RAG source
-│   └── MONITORING_AND_EVALUATION.md
+│   ├── MONITORING_AND_EVALUATION.md
+│   └── MONITORING_DATA_MANAGEMENT.md
 ├── frontend/
 │   ├── index.html
 │   ├── package.json
@@ -136,7 +146,13 @@ Create a `.env` file in the project root:
 
 ```bash
 DEEPSEEK_API_KEY=your_deepseek_api_key_here
+APP_ENV=development
+APP_DATABASE_PATH=
+MONITORING_ADMIN_TOKEN=
+MONITORING_ALLOW_REMOTE_ADMIN=false
 ```
+
+`APP_DATABASE_PATH` is optional; the default is the local `backend/data/app.db` path resolved from backend code. `APP_ENV` supports `development`, `production`, and `test`. In `test`, the default app database is refused and tests must supply a temporary database path. `MONITORING_ADMIN_TOKEN` enables destructive monitoring/evaluation cleanup APIs. Keep it only in `.env`; never embed it in frontend code. Remote destructive access is disabled by default. If you enable it, place the API behind HTTPS or a protected reverse proxy.
 
 Optional frontend API base URL:
 
@@ -246,6 +262,8 @@ Version 1.8 monitoring tables store local metadata only:
 - `evaluation_results`: safe case check summaries.
 
 Monitoring tables do not store raw resumes, raw job descriptions, full prompts, full model outputs, RAG chunk content, detected secret values, or prompt injection attack text. Monitoring persistence is best effort and does not fail the primary Analyze request.
+
+Version 1.8.1 cleanup can permanently delete `analysis_metrics`, `analysis_step_metrics`, `evaluation_runs`, and `evaluation_results`. It does not delete `application_records`, application workflow history, Project Knowledge, `knowledge_documents`, `knowledge_chunks`, `knowledge_chunks_fts`, or `backend/evals/cases.json`. See [Monitoring Data Management](docs/MONITORING_DATA_MANAGEMENT.md) for lifecycle, authorization, and isolation details.
 
 Project Knowledge RAG uses the existing v1.5 tables:
 
@@ -448,10 +466,16 @@ Version 1.8 adds metadata-only monitoring endpoints:
 - `GET /api/monitoring/recommendations?days=30`
 - `GET /api/monitoring/traces?days=30&limit=50&offset=0`
 - `GET /api/monitoring/traces/{workflow_id}`
+- `GET /api/monitoring/data-management/status`
+- `POST /api/monitoring/data/preview`
+- `DELETE /api/monitoring/data`
+- `DELETE /api/monitoring/traces/{workflow_id}`
 
 Monitoring APIs return workflow metrics, latency summaries, RAG hit metrics, security finding code distributions, recommendation outcomes, and sanitized trace metadata. They do not return resumes, job descriptions, prompts, model responses, RAG chunk content, detected secret values, or original attack text.
 
 Workflow P50 and P95 use nearest-rank percentile over non-skipped, non-null durations. If a denominator is zero, rate fields return `0`.
+
+Data-management preview and deletion APIs require `X-Monitoring-Admin-Token`; deletion is disabled unless `MONITORING_ADMIN_TOKEN` is configured. All cleanup is permanent. Application history and Project Knowledge are preserved. Remote destructive APIs should only be enabled behind HTTPS or a protected reverse proxy.
 
 ### Evaluation APIs
 
@@ -461,6 +485,8 @@ Version 1.8 adds offline Behavioral Evaluation APIs:
 - `POST /api/evaluations/run`
 - `GET /api/evaluations/runs?limit=20&offset=0`
 - `GET /api/evaluations/runs/{run_id}`
+- `POST /api/evaluations/data/preview`
+- `DELETE /api/evaluations/data`
 
 Request:
 
@@ -632,6 +658,16 @@ Response:
 - The system instructs the LLM not to fabricate user experience.
 - Cover letters must be grounded in the resume and retrieved Project Knowledge evidence.
 
+## Version 1.8.1 Core Changes
+
+- Added monitoring data lifecycle management with clear-all and filtered cleanup.
+- Added workflow-specific trace deletion and evaluation-history cleanup.
+- Added transaction-safe child-before-parent deletion.
+- Added admin-token protection and local-only destructive operations by default.
+- Added configurable database paths and temporary SQLite databases for automated tests.
+- Added fail-fast safeguards preventing `APP_ENV=test` from writing to `app.db`.
+- Added Data Management controls to the React Monitoring dashboard.
+
 ## Version 1.8 Core Changes
 
 - Added local SQLite monitoring for Analyze workflows.
@@ -656,6 +692,7 @@ Response:
 - v1.6: Agent workflow orchestration and next-action recommendation
 - v1.7: AI Security and Prompt Injection Mitigation
 - v1.8: AI Monitoring and Behavioral Evaluation
+- v1.8.1: Monitoring Data Management and Test Isolation
 
 ## Roadmap
 

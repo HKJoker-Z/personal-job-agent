@@ -3,7 +3,7 @@ import { createRoot } from "react-dom/client";
 import "./styles.css";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://101.34.61.52:8000";
-const APP_VERSION = "1.8";
+const APP_VERSION = "1.8.1";
 const APPLICATION_STATUSES = ["Saved", "Applied", "Interview", "Rejected", "Offer"];
 const NEXT_ACTION_DECISIONS = [
   { value: "accepted", label: "Accept Recommendation" },
@@ -1421,6 +1421,24 @@ function MonitoringPage() {
   const [traceLoadingId, setTraceLoadingId] = useState("");
   const [evaluationRun, setEvaluationRun] = useState(null);
   const [evaluationRunning, setEvaluationRunning] = useState(false);
+  const [adminToken, setAdminToken] = useState("");
+  const [managementPreview, setManagementPreview] = useState(null);
+  const [managementBusy, setManagementBusy] = useState("");
+  const [managementError, setManagementError] = useState("");
+  const [managementMessage, setManagementMessage] = useState("");
+  const [monitoringCleanupMode, setMonitoringCleanupMode] = useState("all");
+  const [monitoringDateFrom, setMonitoringDateFrom] = useState("");
+  const [monitoringDateTo, setMonitoringDateTo] = useState("");
+  const [monitoringOutcomes, setMonitoringOutcomes] = useState([]);
+  const [monitoringSecurityStatuses, setMonitoringSecurityStatuses] = useState([]);
+  const [monitoringRiskLevels, setMonitoringRiskLevels] = useState([]);
+  const [monitoringConfirmation, setMonitoringConfirmation] = useState("");
+  const [evaluationCleanupMode, setEvaluationCleanupMode] = useState("all");
+  const [evaluationDateFrom, setEvaluationDateFrom] = useState("");
+  const [evaluationDateTo, setEvaluationDateTo] = useState("");
+  const [evaluationStatuses, setEvaluationStatuses] = useState([]);
+  const [evaluationConfirmation, setEvaluationConfirmation] = useState("");
+  const [traceConfirmation, setTraceConfirmation] = useState("");
 
   async function loadMonitoring() {
     if (loading) {
@@ -1440,6 +1458,7 @@ function MonitoringPage() {
         traces,
         evaluationStatus,
         evaluationRuns,
+        dataManagementStatus,
       ] = await Promise.all([
         requestJson(`${API_BASE_URL}/api/monitoring/status`, undefined, "Failed to load monitoring status."),
         requestJson(`${API_BASE_URL}/api/monitoring/overview?${params}`, undefined, "Failed to load monitoring overview."),
@@ -1450,6 +1469,7 @@ function MonitoringPage() {
         requestJson(`${API_BASE_URL}/api/monitoring/traces?${params}&limit=20`, undefined, "Failed to load traces."),
         requestJson(`${API_BASE_URL}/api/evaluations/status`, undefined, "Failed to load evaluation status."),
         requestJson(`${API_BASE_URL}/api/evaluations/runs?limit=1&offset=0`, undefined, "Failed to load evaluation runs."),
+        requestJson(`${API_BASE_URL}/api/monitoring/data-management/status`, undefined, "Failed to load data management status."),
       ]);
       setData({
         status,
@@ -1461,6 +1481,7 @@ function MonitoringPage() {
         traces,
         evaluationStatus,
         evaluationRuns,
+        dataManagementStatus,
       });
       const latestRun = asArray(evaluationRuns.items)[0] || null;
       if (latestRun && !evaluationRun) {
@@ -1524,6 +1545,151 @@ function MonitoringPage() {
     }
   }
 
+  function toggleSelection(setter, value) {
+    setter((current) => (current.includes(value) ? current.filter((item) => item !== value) : [...current, value]));
+  }
+
+  function dataManagementHeaders() {
+    return {
+      "Content-Type": "application/json",
+      "X-Monitoring-Admin-Token": adminToken,
+    };
+  }
+
+  function managementErrorMessage(err, fallback) {
+    const payload = getRequestErrorPayload(err);
+    const errorCode = displayText(payload?.error_code, "");
+    return errorCode ? `${getRequestErrorMessage(err, fallback)} (${errorCode})` : getRequestErrorMessage(err, fallback);
+  }
+
+  function monitoringPayload(includeConfirmation = false) {
+    const payload = {
+      mode: monitoringCleanupMode,
+      date_from: monitoringCleanupMode === "filtered" ? monitoringDateFrom || null : null,
+      date_to: monitoringCleanupMode === "filtered" ? monitoringDateTo || null : null,
+      outcomes: monitoringCleanupMode === "filtered" ? monitoringOutcomes : [],
+      security_statuses: monitoringCleanupMode === "filtered" ? monitoringSecurityStatuses : [],
+      risk_levels: monitoringCleanupMode === "filtered" ? monitoringRiskLevels : [],
+    };
+    return includeConfirmation ? { ...payload, confirmation: monitoringConfirmation } : payload;
+  }
+
+  function evaluationPayload(includeConfirmation = false) {
+    const payload = {
+      mode: evaluationCleanupMode,
+      date_from: evaluationCleanupMode === "filtered" ? evaluationDateFrom || null : null,
+      date_to: evaluationCleanupMode === "filtered" ? evaluationDateTo || null : null,
+      statuses: evaluationCleanupMode === "filtered" ? evaluationStatuses : [],
+    };
+    return includeConfirmation ? { ...payload, confirmation: evaluationConfirmation } : payload;
+  }
+
+  async function previewManagement(kind, url, payload) {
+    if (!adminToken || managementBusy) {
+      return;
+    }
+    setManagementBusy(`${kind}-preview`);
+    setManagementError("");
+    setManagementMessage("");
+    try {
+      const preview = await requestJson(
+        `${API_BASE_URL}${url}`,
+        { method: "POST", headers: dataManagementHeaders(), body: JSON.stringify(payload) },
+        "Failed to preview cleanup.",
+      );
+      setManagementPreview({ kind, data: preview });
+    } catch (err) {
+      setManagementPreview(null);
+      setManagementError(managementErrorMessage(err, "Failed to preview cleanup."));
+    } finally {
+      setManagementBusy("");
+    }
+  }
+
+  async function deleteManagedData(kind, url, payload, setConfirmation, successMessage) {
+    if (!adminToken || managementBusy) {
+      return;
+    }
+    if (!window.confirm("This permanent cleanup cannot be undone. Continue?")) {
+      return;
+    }
+    setManagementBusy(`${kind}-delete`);
+    setManagementError("");
+    setManagementMessage("");
+    try {
+      const result = await requestJson(
+        `${API_BASE_URL}${url}`,
+        { method: "DELETE", headers: dataManagementHeaders(), body: JSON.stringify(payload) },
+        "Failed to delete data.",
+      );
+      setManagementMessage(successMessage(result));
+      setSelectedTrace(null);
+      if (kind.startsWith("evaluation")) {
+        setEvaluationRun(null);
+      }
+      await loadMonitoring();
+    } catch (err) {
+      setManagementError(managementErrorMessage(err, "Failed to delete data."));
+    } finally {
+      setAdminToken("");
+      setConfirmation("");
+      setMonitoringConfirmation("");
+      setEvaluationConfirmation("");
+      setTraceConfirmation("");
+      setManagementPreview(null);
+      setManagementBusy("");
+    }
+  }
+
+  async function deleteSelectedTrace() {
+    if (!selectedTrace?.workflow_id || !adminToken || managementBusy || traceConfirmation !== "DELETE TRACE") {
+      return;
+    }
+    if (!window.confirm("Delete this trace metadata permanently? Application history will be preserved.")) {
+      return;
+    }
+    setManagementBusy("trace-delete");
+    setManagementError("");
+    setManagementMessage("");
+    try {
+      const result = await requestJson(
+        `${API_BASE_URL}/api/monitoring/traces/${encodeURIComponent(selectedTrace.workflow_id)}`,
+        {
+          method: "DELETE",
+          headers: dataManagementHeaders(),
+          body: JSON.stringify({ confirmation: traceConfirmation, notes: null }),
+        },
+        "Failed to delete trace metadata.",
+      );
+      setManagementMessage(`Deleted trace metadata: ${result.analysis_metrics_deleted || 0} analysis and ${result.analysis_step_metrics_deleted || 0} step metrics.`);
+      setSelectedTrace(null);
+      await loadMonitoring();
+    } catch (err) {
+      setManagementError(managementErrorMessage(err, "Failed to delete trace metadata."));
+    } finally {
+      setAdminToken("");
+      setTraceConfirmation("");
+      setMonitoringConfirmation("");
+      setEvaluationConfirmation("");
+      setManagementBusy("");
+    }
+  }
+
+  useEffect(() => {
+    setManagementPreview(null);
+  }, [
+    monitoringCleanupMode,
+    monitoringDateFrom,
+    monitoringDateTo,
+    monitoringOutcomes,
+    monitoringSecurityStatuses,
+    monitoringRiskLevels,
+    evaluationCleanupMode,
+    evaluationDateFrom,
+    evaluationDateTo,
+    evaluationStatuses,
+  ]);
+
   const overview = asObject(data?.overview);
   const workflowItems = asArray(data?.workflowSteps?.items);
   const rag = asObject(data?.rag);
@@ -1535,6 +1701,19 @@ function MonitoringPage() {
   const findingCodes = asObject(security.finding_codes);
   const latestRun = evaluationRun || asArray(data?.evaluationRuns?.items)[0] || null;
   const latestResults = asArray(latestRun?.results);
+  const dataManagementStatus = asObject(data?.dataManagementStatus);
+  const destructiveOperationsAllowed = Boolean(dataManagementStatus.data_management_enabled)
+    && (Boolean(dataManagementStatus.request_is_local) || Boolean(dataManagementStatus.remote_admin_allowed));
+  const monitoringPreviewKind = monitoringCleanupMode === "all" ? "monitoring-all" : "monitoring-filtered";
+  const evaluationPreviewKind = evaluationCleanupMode === "all" ? "evaluation-all" : "evaluation-filtered";
+  const monitoringPreview = managementPreview?.kind === monitoringPreviewKind ? asObject(managementPreview.data) : null;
+  const evaluationPreview = managementPreview?.kind === evaluationPreviewKind ? asObject(managementPreview.data) : null;
+  const monitoringConfirmationText = monitoringCleanupMode === "all"
+    ? "DELETE ALL MONITORING DATA"
+    : "DELETE FILTERED MONITORING DATA";
+  const evaluationConfirmationText = evaluationCleanupMode === "all"
+    ? "DELETE EVALUATION HISTORY"
+    : "DELETE FILTERED EVALUATION HISTORY";
 
   return (
     <>
@@ -1579,6 +1758,184 @@ function MonitoringPage() {
 
       {data && (
         <>
+          <section className="panel results-panel data-management-panel">
+            <div className="section-heading-row">
+              <div>
+                <span className="eyebrow">Danger zone</span>
+                <h3>Data Management</h3>
+              </div>
+              <span className="status-pill security-blocked">Permanent cleanup</span>
+            </div>
+            <p className="muted">
+              Monitoring cleanup deletes monitoring and trace metadata only. It does not delete application history or Project Knowledge.
+            </p>
+            <div className="metrics-grid">
+              <MetricCard label="Admin Token" value={dataManagementStatus.admin_token_configured ? "Configured" : "Not configured"} />
+              <MetricCard label="Remote Administration" value={dataManagementStatus.remote_admin_allowed ? "Allowed" : "Disabled"} />
+              <MetricCard label="Current Request" value={dataManagementStatus.request_is_local ? "Local" : "Remote"} />
+              <MetricCard label="Test Database Isolation" value={dataManagementStatus.test_database_isolation ? "Enabled" : "Unavailable"} />
+            </div>
+            {!dataManagementStatus.data_management_enabled && (
+              <div className="inline-error" role="alert">
+                Data management is disabled until MONITORING_ADMIN_TOKEN is configured on the backend.
+              </div>
+            )}
+            {!dataManagementStatus.remote_admin_allowed && !dataManagementStatus.request_is_local && (
+              <div className="inline-error" role="alert">
+                Remote destructive operations are disabled. Use the API locally through SSH, or explicitly enable remote administration behind HTTPS.
+              </div>
+            )}
+            <label className="admin-token-field">
+              Administrator Token
+              <input
+                type="password"
+                value={adminToken}
+                onChange={(event) => setAdminToken(event.target.value)}
+                autoComplete="off"
+                placeholder="Enter token for preview or deletion"
+              />
+            </label>
+            <p className="muted">The token is held in this page's memory only and is cleared after every deletion attempt.</p>
+            {managementError && <div className="inline-error" role="alert">{managementError}</div>}
+            {managementMessage && <div className="history-message">{managementMessage}</div>}
+
+            <div className="cleanup-grid">
+              <article className="cleanup-card">
+                <h4>Monitoring Cleanup</h4>
+                <p>Delete analysis and step metadata. Application history, Project Knowledge, and evaluation history are preserved.</p>
+                <label>
+                  Cleanup Scope
+                  <select value={monitoringCleanupMode} onChange={(event) => setMonitoringCleanupMode(event.target.value)}>
+                    <option value="all">Clear all monitoring data</option>
+                    <option value="filtered">Delete filtered monitoring data</option>
+                  </select>
+                </label>
+                {monitoringCleanupMode === "filtered" && (
+                  <div className="cleanup-filters">
+                    <label>Date From<input type="date" value={monitoringDateFrom} onChange={(event) => setMonitoringDateFrom(event.target.value)} /></label>
+                    <label>Date To<input type="date" value={monitoringDateTo} onChange={(event) => setMonitoringDateTo(event.target.value)} /></label>
+                    <fieldset>
+                      <legend>Outcome</legend>
+                      {["completed", "completed_with_warnings", "failed", "blocked"].map((value) => (
+                        <label className="checkbox-label" key={value}>
+                          <input type="checkbox" checked={monitoringOutcomes.includes(value)} onChange={() => toggleSelection(setMonitoringOutcomes, value)} />{value}
+                        </label>
+                      ))}
+                    </fieldset>
+                    <fieldset>
+                      <legend>Security Status</legend>
+                      {["passed", "passed_with_warnings", "blocked", "not_available"].map((value) => (
+                        <label className="checkbox-label" key={value}>
+                          <input type="checkbox" checked={monitoringSecurityStatuses.includes(value)} onChange={() => toggleSelection(setMonitoringSecurityStatuses, value)} />{value}
+                        </label>
+                      ))}
+                    </fieldset>
+                    <fieldset>
+                      <legend>Risk Level</legend>
+                      {["low", "medium", "high", "critical"].map((value) => (
+                        <label className="checkbox-label" key={value}>
+                          <input type="checkbox" checked={monitoringRiskLevels.includes(value)} onChange={() => toggleSelection(setMonitoringRiskLevels, value)} />{value}
+                        </label>
+                      ))}
+                    </fieldset>
+                  </div>
+                )}
+                <button
+                  type="button"
+                  onClick={() => previewManagement(monitoringPreviewKind, "/api/monitoring/data/preview", monitoringPayload())}
+                  disabled={!destructiveOperationsAllowed || !adminToken || Boolean(managementBusy)}
+                >
+                  {managementBusy === `${monitoringPreviewKind}-preview` ? "Previewing..." : "Preview Monitoring Cleanup"}
+                </button>
+                {monitoringPreview && (
+                  <div className="cleanup-preview">
+                    <strong>Preview</strong>
+                    <span>Analyses: {monitoringPreview.analysis_metrics_count ?? 0}</span>
+                    <span>Step metrics: {monitoringPreview.analysis_step_metrics_count ?? 0}</span>
+                    <span>Affected workflows: {monitoringPreview.affected_workflow_count ?? 0}</span>
+                  </div>
+                )}
+                <label>
+                  Type {monitoringConfirmationText} to confirm
+                  <input value={monitoringConfirmation} onChange={(event) => setMonitoringConfirmation(event.target.value)} />
+                </label>
+                <button
+                  type="button"
+                  className="danger-button"
+                  onClick={() => deleteManagedData(
+                    monitoringPreviewKind,
+                    "/api/monitoring/data",
+                    monitoringPayload(true),
+                    setMonitoringConfirmation,
+                    (result) => `Deleted ${result.analysis_metrics_deleted || 0} analyses and ${result.analysis_step_metrics_deleted || 0} step metrics.`,
+                  )}
+                  disabled={!destructiveOperationsAllowed || !adminToken || Boolean(managementBusy) || !monitoringPreview || !(monitoringPreview.analysis_metrics_count > 0) || monitoringConfirmation !== monitoringConfirmationText}
+                >
+                  {managementBusy === `${monitoringPreviewKind}-delete` ? "Deleting..." : "Delete Monitoring Data"}
+                </button>
+              </article>
+
+              <article className="cleanup-card">
+                <h4>Evaluation History Cleanup</h4>
+                <p>Delete evaluation runs and results. Offline cases remain available and can be run again.</p>
+                <label>
+                  Cleanup Scope
+                  <select value={evaluationCleanupMode} onChange={(event) => setEvaluationCleanupMode(event.target.value)}>
+                    <option value="all">Clear all evaluation history</option>
+                    <option value="filtered">Delete filtered evaluation history</option>
+                  </select>
+                </label>
+                {evaluationCleanupMode === "filtered" && (
+                  <div className="cleanup-filters">
+                    <label>Date From<input type="date" value={evaluationDateFrom} onChange={(event) => setEvaluationDateFrom(event.target.value)} /></label>
+                    <label>Date To<input type="date" value={evaluationDateTo} onChange={(event) => setEvaluationDateTo(event.target.value)} /></label>
+                    <fieldset>
+                      <legend>Run Status</legend>
+                      {["running", "completed", "completed_with_failures", "failed"].map((value) => (
+                        <label className="checkbox-label" key={value}>
+                          <input type="checkbox" checked={evaluationStatuses.includes(value)} onChange={() => toggleSelection(setEvaluationStatuses, value)} />{value}
+                        </label>
+                      ))}
+                    </fieldset>
+                  </div>
+                )}
+                <button
+                  type="button"
+                  onClick={() => previewManagement(evaluationPreviewKind, "/api/evaluations/data/preview", evaluationPayload())}
+                  disabled={!destructiveOperationsAllowed || !adminToken || Boolean(managementBusy)}
+                >
+                  {managementBusy === `${evaluationPreviewKind}-preview` ? "Previewing..." : "Preview Evaluation Cleanup"}
+                </button>
+                {evaluationPreview && (
+                  <div className="cleanup-preview">
+                    <strong>Preview</strong>
+                    <span>Evaluation runs: {evaluationPreview.evaluation_runs_count ?? 0}</span>
+                    <span>Evaluation results: {evaluationPreview.evaluation_results_count ?? 0}</span>
+                    <span>Evaluation cases are preserved.</span>
+                  </div>
+                )}
+                <label>
+                  Type {evaluationConfirmationText} to confirm
+                  <input value={evaluationConfirmation} onChange={(event) => setEvaluationConfirmation(event.target.value)} />
+                </label>
+                <button
+                  type="button"
+                  className="danger-button"
+                  onClick={() => deleteManagedData(
+                    evaluationPreviewKind,
+                    "/api/evaluations/data",
+                    evaluationPayload(true),
+                    setEvaluationConfirmation,
+                    (result) => `Deleted ${result.evaluation_runs_deleted || 0} evaluation runs and ${result.evaluation_results_deleted || 0} results.`,
+                  )}
+                  disabled={!destructiveOperationsAllowed || !adminToken || Boolean(managementBusy) || !evaluationPreview || !(evaluationPreview.evaluation_runs_count > 0) || evaluationConfirmation !== evaluationConfirmationText}
+                >
+                  {managementBusy === `${evaluationPreviewKind}-delete` ? "Deleting..." : "Delete Evaluation History"}
+                </button>
+              </article>
+            </div>
+          </section>
+
           <section className="panel results-panel">
             <div className="section-heading-row">
               <h3>Overview</h3>
@@ -1735,7 +2092,7 @@ function MonitoringPage() {
                 </table>
               </div>
             ) : (
-              <p className="muted">No trace metadata found for this period.</p>
+              <p className="muted">No monitoring traces are available.</p>
             )}
           </section>
 
@@ -1770,6 +2127,22 @@ function MonitoringPage() {
                 <MetricCard label="Security Risk" value={displayText(selectedTrace.security?.risk_level, "not_available")} />
                 <MetricCard label="Error Stage" value={displayText(selectedTrace.error_stage, "None")} />
                 <MetricCard label="Error Code" value={displayText(selectedTrace.error_code, "None")} />
+              </div>
+              <div className="trace-delete-panel">
+                <h4>Delete Trace Metadata</h4>
+                <p className="muted">Workflow ID: {selectedTrace.workflow_id}. Application history remains preserved.</p>
+                <label>
+                  Type DELETE TRACE to confirm
+                  <input value={traceConfirmation} onChange={(event) => setTraceConfirmation(event.target.value)} />
+                </label>
+                <button
+                  type="button"
+                  className="danger-button"
+                  onClick={deleteSelectedTrace}
+                  disabled={!destructiveOperationsAllowed || !adminToken || Boolean(managementBusy) || traceConfirmation !== "DELETE TRACE"}
+                >
+                  {managementBusy === "trace-delete" ? "Deleting..." : "Delete Trace Metadata"}
+                </button>
               </div>
             </section>
           )}
@@ -1822,7 +2195,7 @@ function MonitoringPage() {
                 </table>
               </div>
             ) : (
-              <p className="muted">No evaluation case results loaded yet.</p>
+              <p className="muted">No evaluation runs are available. Run the offline evaluation suite to create a new result.</p>
             )}
           </section>
         </>

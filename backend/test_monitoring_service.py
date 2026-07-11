@@ -1,12 +1,9 @@
 import json
-import tempfile
 import unittest
-from pathlib import Path
 from unittest.mock import patch
 
 import database
 import monitoring_service
-from database import init_db
 from monitoring_service import (
     build_analysis_metric,
     get_overview,
@@ -20,18 +17,16 @@ from monitoring_service import (
     persist_analysis_metrics_best_effort,
     record_step_metrics,
 )
+from test_support import temporary_test_database
 
 
 class MonitoringServiceTest(unittest.TestCase):
     def setUp(self):
-        self.tmpdir = tempfile.TemporaryDirectory()
-        self.original_db_path = database.DB_PATH
-        database.DB_PATH = Path(self.tmpdir.name) / "app.db"
-        init_db()
+        self.database_context = temporary_test_database()
+        self.database_path = self.database_context.__enter__()
 
     def tearDown(self):
-        database.DB_PATH = self.original_db_path
-        self.tmpdir.cleanup()
+        self.database_context.__exit__(None, None, None)
 
     def metric(self, workflow_id="wf-1", outcome="completed", **overrides):
         params = {

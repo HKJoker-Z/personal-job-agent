@@ -766,6 +766,74 @@ th {
   margin-top: 12px;
 }
 
+.data-management-panel {
+  border-color: #e3c0bd;
+}
+
+.admin-token-field {
+  max-width: 480px;
+  margin-top: 14px;
+}
+
+.cleanup-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.cleanup-card,
+.trace-delete-panel {
+  display: grid;
+  gap: 12px;
+  border: 1px solid #e3c0bd;
+  border-radius: 8px;
+  padding: 16px;
+  background: #fff9f8;
+}
+
+.cleanup-card h4,
+.trace-delete-panel h4,
+.cleanup-card p,
+.trace-delete-panel p {
+  margin: 0;
+}
+
+.cleanup-filters {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.cleanup-filters fieldset {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  border: 1px solid #d8e0ea;
+  border-radius: 6px;
+  padding: 10px;
+}
+
+.cleanup-filters legend {
+  color: #526071;
+  padding: 0 4px;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.cleanup-preview {
+  display: grid;
+  gap: 4px;
+  border: 1px solid #d8c2a5;
+  border-radius: 6px;
+  padding: 10px 12px;
+  color: #695a05;
+  background: #fff9d6;
+}
+
+.trace-delete-panel {
+  margin-top: 16px;
+}
+
 .metric-card {
   border: 1px solid #e1e8f0;
   border-radius: 8px;
@@ -893,6 +961,11 @@ th {
   .source-grid,
   .security-grid,
   .metrics-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .cleanup-grid,
+  .cleanup-filters {
     grid-template-columns: 1fr;
   }
 
