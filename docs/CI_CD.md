@@ -7,6 +7,7 @@
 - Python compilation and all backend unittest suites with a temporary test database
 - React dependency installation and production build
 - Backend and frontend Docker builds plus non-root/sensitive-path checks
+- An isolated `pja-v19-smoke` Compose run that verifies readiness and SQLite/Project Knowledge persistence across restart and rebuild
 - Docker Compose configuration validation with test-only configuration
 - Shell syntax validation
 - Repository checks for tracked databases, runtime data, build output, environment files, and obvious credentials

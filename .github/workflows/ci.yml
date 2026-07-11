@@ -74,6 +74,13 @@ jobs:
       - run: docker build --file frontend/Dockerfile --tag personal-job-agent-frontend:local .
       - run: scripts/verify-images.sh personal-job-agent-backend:local personal-job-agent-frontend:local
 
+  docker-smoke:
+    needs: docker-build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: scripts/docker-smoke.sh
+
   compose-validation:
     runs-on: ubuntu-latest
     steps:
