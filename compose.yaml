@@ -42,7 +42,7 @@ services:
       context: .
       dockerfile: frontend/Dockerfile
     ports:
-      - "${PUBLIC_HTTP_PORT:-8080}:8080"
+      - "0.0.0.0:${PUBLIC_HTTP_PORT:-8080}:8080"
     depends_on:
       backend:
         condition: service_healthy

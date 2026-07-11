@@ -245,6 +245,8 @@ Expected response:
 
 ## Docker Compose Production-Style Quick Start
 
+The Version 1.9 production URL is `http://SERVER_IP:8080`; its health endpoint is `http://SERVER_IP:8080/api/health`. Port 8080 is the React/Nginx entry point. Backend port 8000 stays inside the Compose network, while Vite port 5173 is development-only. Install and start Docker Engine plus Docker Compose before continuing, and allow inbound TCP 8080 in the cloud security group when deploying to a public server. Do not expose ports 8000 or 5173.
+
 Bootstrap persistent host directories and create an ignored production configuration:
 
 ```bash
@@ -255,18 +257,21 @@ cp .env.production.example .env.production
 Set the required production values, then validate and build:
 
 ```bash
-APP_ENV_FILE=.env.production docker compose --env-file .env.production config --quiet
-APP_ENV_FILE=.env.production docker compose --env-file .env.production build
+APP_ENV_FILE=.env.production docker compose --env-file .env.production \
+  -f compose.yaml -f compose.prod.yaml config --quiet
+APP_ENV_FILE=.env.production docker compose --env-file .env.production \
+  -f compose.yaml -f compose.prod.yaml build
 ```
 
 Start only when the container topology is intentionally being deployed:
 
 ```bash
-APP_ENV_FILE=.env.production docker compose --env-file .env.production up -d
+APP_ENV_FILE=.env.production docker compose --env-file .env.production \
+  -f compose.yaml -f compose.prod.yaml up -d
 scripts/health-check.sh http://127.0.0.1:8080
 ```
 
-The backend has no host port. Nginx is the only published service and forwards `/api` internally. Read `docs/DEPLOYMENT.md` before Ubuntu deployment. Version 1.9 does not automatically configure firewall, DNS, HTTPS, or system services.
+The backend has no host port. Nginx is the only published service and forwards same-origin `/api` requests internally. After changing `.env.production`, recreate the containers. Troubleshoot with `docker compose ps`, `docker compose logs --tail=200 backend frontend`, and `curl http://127.0.0.1:8080/api/health`. Read `docs/DEPLOYMENT.md` before Ubuntu deployment. Version 1.9 does not automatically configure cloud firewalls, DNS, HTTPS, or system services.
 
 ## Database
 

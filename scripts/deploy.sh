@@ -18,28 +18,61 @@ while [[ $# -gt 0 ]]; do
   shift
 done
 
-command -v docker >/dev/null || { printf '%s\n' 'Docker is required but was not found.' >&2; exit 1; }
-docker compose version >/dev/null || { printf '%s\n' 'Docker Compose v2 is required.' >&2; exit 1; }
+command -v docker >/dev/null || {
+  printf '%s\n' 'Docker Engine was not found. Install Docker Engine and the Compose plugin first.' >&2
+  exit 1
+}
 [[ -f "${ENV_FILE}" ]] || { printf '%s\n' 'Production env file was not found.' >&2; exit 1; }
 export APP_ENV_FILE="${ENV_FILE}"
 
-"${ROOT_DIR}/scripts/bootstrap-runtime.sh"
-APP_ENV_FILE="${ENV_FILE}" docker compose --project-directory "${ROOT_DIR}" --env-file "${ENV_FILE}" config --quiet
+docker_command=(docker)
+if docker info >/dev/null 2>&1; then
+  :
+elif command -v sudo >/dev/null && sudo -n docker info >/dev/null 2>&1; then
+  docker_command=(sudo env "APP_ENV_FILE=${ENV_FILE}" docker)
+else
+  printf '%s\n' 'Docker daemon is unavailable or this user cannot access it. Start Docker and retry with sudo access.' >&2
+  exit 1
+fi
+"${docker_command[@]}" compose version >/dev/null || {
+  printf '%s\n' 'Docker Compose v2 is required.' >&2
+  exit 1
+}
+
+run_privileged() {
+  if [[ "${EUID}" -eq 0 ]]; then
+    "$@"
+  elif command -v sudo >/dev/null && sudo -n true >/dev/null 2>&1; then
+    sudo "$@"
+  else
+    "$@"
+  fi
+}
+
+run_privileged "${ROOT_DIR}/scripts/bootstrap-runtime.sh"
+compose=(
+  "${docker_command[@]}" compose
+  --project-directory "${ROOT_DIR}"
+  --env-file "${ENV_FILE}"
+  -f compose.yaml
+  -f compose.prod.yaml
+)
+APP_ENV_FILE="${ENV_FILE}" "${compose[@]}" config --quiet
 
 printf '%s\n' 'Production-style deployment can restart containers. It does not provide zero-downtime guarantees.'
 read -r -p 'Type DEPLOY VERSION 1.9 to continue: ' confirmation
 [[ "${confirmation}" == "DEPLOY VERSION 1.9" ]] || { printf '%s\n' 'Deployment cancelled.'; exit 2; }
 
 if [[ -f "${ROOT_DIR}/runtime/data/app.db" && -f "${ROOT_DIR}/runtime/project-knowledge/PROJECT_KNOWLEDGE.md" ]]; then
-  "${ROOT_DIR}/scripts/backup.sh"
+  run_privileged "${ROOT_DIR}/scripts/backup.sh"
 fi
 
-compose=(docker compose --project-directory "${ROOT_DIR}" --env-file "${ENV_FILE}")
 if [[ "${MODE}" == "pull" ]]; then
-  "${compose[@]}" -f compose.yaml -f compose.prod.yaml pull
-  "${compose[@]}" -f compose.yaml -f compose.prod.yaml up -d --no-build
+  "${compose[@]}" pull
+  "${compose[@]}" up -d --no-build
 else
-  "${compose[@]}" up -d --build
+  "${compose[@]}" build
+  "${compose[@]}" up -d --no-build
 fi
 
 published_address="$("${compose[@]}" port frontend 8080 | tail -n 1)"

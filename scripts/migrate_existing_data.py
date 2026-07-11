@@ -46,6 +46,8 @@ def migrate(confirm: bool) -> int:
     try:
         sqlite_backup(source_db, db_tmp)
         shutil.copyfile(source_knowledge, knowledge_tmp)
+        os.chmod(db_tmp, 0o600)
+        os.chmod(knowledge_tmp, 0o640)
         os.replace(db_tmp, target_db)
         os.replace(knowledge_tmp, target_knowledge)
     finally:
