@@ -64,12 +64,30 @@ from security_utils import (
     scan_project_chunks,
     security_status_from_scan,
 )
+from monitoring_service import (
+    build_analysis_metric,
+    get_overview as get_monitoring_overview,
+    get_rag_metrics,
+    get_recommendation_metrics,
+    get_security_metrics,
+    get_trace_detail,
+    get_workflow_step_performance,
+    list_traces,
+    monitoring_status,
+    persist_analysis_metrics_best_effort,
+)
+from evaluation_service import (
+    evaluation_status,
+    get_evaluation_run,
+    list_evaluation_runs,
+    run_evaluation_suite,
+)
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 load_dotenv(ROOT_DIR / ".env")
 
 APP_NAME = "personal-job-agent"
-APP_VERSION = "1.7"
+APP_VERSION = "1.8"
 DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 DEEPSEEK_MODEL = "deepseek-chat"
 MAX_RESUME_TEXT_CHARS = 18000
@@ -81,7 +99,7 @@ PROJECT_KNOWLEDGE_TITLE = "Personal Job Application Agent Project Knowledge"
 PROJECT_KNOWLEDGE_CATEGORY = "Other"
 PROJECT_KNOWLEDGE_MAX_UPLOAD_BYTES = 2 * 1024 * 1024
 GENERIC_KNOWLEDGE_DISABLED_DETAIL = (
-    "Generic knowledge base upload is disabled in v1.7. "
+    "Generic knowledge base upload is disabled in v1.8. "
     "Use Project Knowledge RAG instead."
 )
 MAX_RESUME_UPLOAD_BYTES = 8 * 1024 * 1024
@@ -226,6 +244,11 @@ class ApplicationUpdate(BaseModel):
 class NextActionDecisionUpdate(BaseModel):
     decision: str
     notes: str | None = None
+
+
+class EvaluationRunRequest(BaseModel):
+    suite_name: str = "default"
+    mode: str = "offline"
 
 allowed_origins = [
     "http://localhost:5173",
@@ -1264,22 +1287,111 @@ def raise_security_blocked(
     *,
     status_code: int = 422,
     message: str = "Sensitive credential-like content was detected. Remove secrets before analysis.",
+    error_code: str = "CREDENTIAL_LIKE_CONTENT_DETECTED",
+    error_stage: str = "scan_untrusted_input",
 ) -> None:
-    workflow.finish()
+    context.security_scan = normalized_security_scan(context.security_scan or empty_security_scan())
+    context.security_status = "blocked"
+    record_analysis_observation(
+        workflow,
+        context,
+        outcome="blocked",
+        error_code=error_code,
+        error_stage=error_stage,
+    )
     duration = workflow.workflow_duration()
     raise HTTPException(
         status_code=status_code,
         detail={
             "message": message,
-            "security_status": "blocked",
-            "security_scan": normalized_security_scan(context.security_scan),
             "workflow_id": context.workflow_id,
+            "security_status": "blocked",
+            "error_code": error_code,
+            "security_scan": normalized_security_scan(context.security_scan),
             "workflow_status": workflow.status(),
             "workflow_steps": workflow.to_list(),
             "workflow_duration_ms": duration["workflow_duration_ms"],
             "workflow_duration_us": duration["workflow_duration_us"],
         },
     )
+
+
+def record_analysis_observation(
+    workflow: AgentWorkflow,
+    context: WorkflowContext,
+    *,
+    outcome: str,
+    result: dict[str, Any] | None = None,
+    error_code: str | None = None,
+    error_stage: str | None = None,
+) -> None:
+    workflow.finish()
+    workflow_duration = workflow.workflow_duration()
+    steps = workflow.to_list()
+    result = result or {}
+    security_scan = normalized_security_scan(
+        result.get("security_scan") or context.security_scan or empty_security_scan()
+    )
+    security_status = (
+        result.get("security_status")
+        or context.security_status
+        or security_status_from_scan(security_scan)
+    )
+    rag_sources = result.get("rag_sources")
+    rag_source_count = len(rag_sources) if isinstance(rag_sources, list) else len(context.rag_sources)
+    next_action = result.get("next_action") or context.next_action or {}
+    next_action_code = next_action.get("action") if isinstance(next_action, dict) else None
+    metric = build_analysis_metric(
+        workflow_id=context.workflow_id,
+        workflow_status=workflow.status(),
+        workflow_duration_ms=workflow_duration["workflow_duration_ms"],
+        workflow_duration_us=workflow_duration["workflow_duration_us"],
+        workflow_steps=steps,
+        outcome=outcome,
+        rag_mode=context.rag_mode,
+        rag_source_count=rag_source_count,
+        rag_reconciliation_count=context.rag_reconciliation_count,
+        security_scan=security_scan,
+        security_status=security_status,
+        json_parse_success=context.json_parse_success,
+        saved_to_history=context.saved_to_history,
+        application_id=context.application_id,
+        next_action=next_action_code,
+        error_code=error_code,
+        error_stage=error_stage,
+        source_type=context.source_type,
+    )
+    persist_analysis_metrics_best_effort(metric, steps)
+
+
+def fail_analysis_and_raise(
+    workflow: AgentWorkflow,
+    context: WorkflowContext,
+    *,
+    step_key: str,
+    message: str,
+    error_code: str,
+    exc: Exception,
+) -> None:
+    workflow.fail_step(step_key, message)
+    record_analysis_observation(
+        workflow,
+        context,
+        outcome="failed",
+        error_code=error_code,
+        error_stage=step_key,
+    )
+    if isinstance(exc, HTTPException):
+        message = exc.detail if isinstance(exc.detail, str) else "Request failed."
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail={
+                "message": message,
+                "workflow_id": context.workflow_id,
+                "error_code": error_code,
+            },
+        ) from exc
+    raise exc
 
 
 @app.get("/")
@@ -1310,6 +1422,97 @@ def get_security_policy() -> dict[str, Any]:
             "The system cannot guarantee complete prompt injection prevention.",
         ],
     }
+
+
+@app.get("/api/monitoring/status")
+def get_monitoring_status() -> dict[str, Any]:
+    return monitoring_status()
+
+
+@app.get("/api/monitoring/overview")
+def get_monitoring_overview_endpoint(days: int = Query(30, ge=1, le=365)) -> dict[str, Any]:
+    return get_monitoring_overview(days)
+
+
+@app.get("/api/monitoring/workflow-steps")
+def get_monitoring_workflow_steps(days: int = Query(30, ge=1, le=365)) -> dict[str, Any]:
+    return get_workflow_step_performance(days)
+
+
+@app.get("/api/monitoring/rag")
+def get_monitoring_rag(days: int = Query(30, ge=1, le=365)) -> dict[str, Any]:
+    return get_rag_metrics(days)
+
+
+@app.get("/api/monitoring/security")
+def get_monitoring_security(days: int = Query(30, ge=1, le=365)) -> dict[str, Any]:
+    return get_security_metrics(days)
+
+
+@app.get("/api/monitoring/recommendations")
+def get_monitoring_recommendations(days: int = Query(30, ge=1, le=365)) -> dict[str, Any]:
+    return get_recommendation_metrics(days)
+
+
+@app.get("/api/monitoring/traces")
+def get_monitoring_traces(
+    days: int = Query(30, ge=1, le=365),
+    limit: int = Query(50, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    outcome: str | None = Query(None),
+    security_status: str | None = Query(None),
+    risk_level: str | None = Query(None),
+) -> dict[str, Any]:
+    return list_traces(
+        days=days,
+        limit=limit,
+        offset=offset,
+        outcome=outcome,
+        security_status=security_status,
+        risk_level=risk_level,
+    )
+
+
+@app.get("/api/monitoring/traces/{workflow_id}")
+def get_monitoring_trace_detail(workflow_id: str) -> dict[str, Any]:
+    trace = get_trace_detail(workflow_id)
+    if trace is None:
+        raise HTTPException(status_code=404, detail="Workflow trace not found.")
+    return trace
+
+
+@app.get("/api/evaluations/status")
+def get_evaluations_status() -> dict[str, Any]:
+    return evaluation_status()
+
+
+@app.post("/api/evaluations/run")
+def post_evaluation_run(payload: EvaluationRunRequest) -> dict[str, Any]:
+    if payload.mode != "offline":
+        raise HTTPException(
+            status_code=400,
+            detail="Live LLM evaluation is not supported in Version 1.8.",
+        )
+    try:
+        return run_evaluation_suite(payload.suite_name, payload.mode)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/evaluations/runs")
+def get_evaluation_runs_endpoint(
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+) -> dict[str, Any]:
+    return list_evaluation_runs(limit=limit, offset=offset)
+
+
+@app.get("/api/evaluations/runs/{run_id}")
+def get_evaluation_run_endpoint(run_id: str) -> dict[str, Any]:
+    run = get_evaluation_run(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Evaluation run not found.")
+    return run
 
 
 @app.get("/api/project-knowledge/status")
@@ -1553,6 +1756,7 @@ async def analyze(
 
         context.resume_filename = resume_filename or None
         context.job_url = clean_job_url or None
+        context.source_type = "text" if clean_job_text else "url"
         context.rag_mode = resolve_rag_mode(use_knowledge_base, rag_mode)
         context.rag_top_k = clamp_rag_top_k(rag_top_k)
         workflow.complete_step(
@@ -1560,8 +1764,14 @@ async def analyze(
             f"Input accepted. RAG mode: {context.rag_mode}; top_k: {context.rag_top_k}.",
         )
     except Exception as exc:
-        workflow.fail_step("validate_input", "Input validation failed.")
-        raise
+        fail_analysis_and_raise(
+            workflow,
+            context,
+            step_key="validate_input",
+            message="Input validation failed.",
+            error_code="INPUT_VALIDATION_FAILED",
+            exc=exc,
+        )
 
     workflow.start_step("parse_resume", "Parse Resume")
     try:
@@ -1575,9 +1785,15 @@ async def analyze(
             "parse_resume",
             f"Resume text extracted successfully from {context.resume_filename or 'uploaded file'}.",
         )
-    except Exception:
-        workflow.fail_step("parse_resume", "Resume parsing failed.")
-        raise
+    except Exception as exc:
+        fail_analysis_and_raise(
+            workflow,
+            context,
+            step_key="parse_resume",
+            message="Resume parsing failed.",
+            error_code="RESUME_PARSING_FAILED",
+            exc=exc,
+        )
 
     workflow.start_step("acquire_job_description", "Acquire Job Description")
     try:
@@ -1595,9 +1811,15 @@ async def analyze(
         if jd_was_truncated:
             logger.info("JD text truncated characters=%s", MAX_JOB_TEXT_CHARS)
         workflow.complete_step("acquire_job_description", source_message)
-    except Exception:
-        workflow.fail_step("acquire_job_description", "Could not acquire job description.")
-        raise
+    except Exception as exc:
+        fail_analysis_and_raise(
+            workflow,
+            context,
+            step_key="acquire_job_description",
+            message="Could not acquire job description.",
+            error_code="JOB_DESCRIPTION_ACQUISITION_FAILED",
+            exc=exc,
+        )
 
     workflow.start_step("scan_untrusted_input", "Scan Untrusted Input")
     try:
@@ -1628,9 +1850,15 @@ async def analyze(
         )
     except HTTPException:
         raise
-    except Exception:
-        workflow.fail_step("scan_untrusted_input", "Security scanning failed.")
-        raise
+    except Exception as exc:
+        fail_analysis_and_raise(
+            workflow,
+            context,
+            step_key="scan_untrusted_input",
+            message="Security scanning failed.",
+            error_code="UNTRUSTED_INPUT_SCAN_FAILED",
+            exc=exc,
+        )
 
     logger.info(
         "Analyze RAG settings rag_mode=%s use_knowledge_base=%s rag_top_k=%s",
@@ -1666,12 +1894,15 @@ async def analyze(
                     f"using {retrieval_method}."
                 ),
             )
-        except Exception:
-            workflow.fail_step(
-                "retrieve_project_evidence",
-                "Project Knowledge retrieval failed.",
+        except Exception as exc:
+            fail_analysis_and_raise(
+                workflow,
+                context,
+                step_key="retrieve_project_evidence",
+                message="Project Knowledge retrieval failed.",
+                error_code="PROJECT_KNOWLEDGE_RETRIEVAL_FAILED",
+                exc=exc,
             )
-            raise
         logger.info(
             "Project Knowledge retrieval completed result_count=%s retrieval_method=%s chunk_ids=%s titles=%s",
             len(context.retrieved_chunks),
@@ -1710,7 +1941,12 @@ async def analyze(
                     after_key="scan_project_evidence",
                     message="Skipped because security scanning blocked the request.",
                 )
-                raise_security_blocked(workflow, context)
+                raise_security_blocked(
+                    workflow,
+                    context,
+                    error_code="PROJECT_KNOWLEDGE_CREDENTIAL_LIKE_CONTENT_DETECTED",
+                    error_stage="scan_project_evidence",
+                )
             workflow.complete_step(
                 "scan_project_evidence",
                 (
@@ -1720,9 +1956,15 @@ async def analyze(
             )
         except HTTPException:
             raise
-        except Exception:
-            workflow.fail_step("scan_project_evidence", "Project evidence security scan failed.")
-            raise
+        except Exception as exc:
+            fail_analysis_and_raise(
+                workflow,
+                context,
+                step_key="scan_project_evidence",
+                message="Project evidence security scan failed.",
+                error_code="PROJECT_EVIDENCE_SCAN_FAILED",
+                exc=exc,
+            )
 
     workflow.start_step("build_safe_prompt", "Build Safe Prompt")
     try:
@@ -1735,9 +1977,15 @@ async def analyze(
             "build_safe_prompt",
             "Safe prompt built with isolated untrusted data sections.",
         )
-    except Exception:
-        workflow.fail_step("build_safe_prompt", "Safe prompt construction failed.")
-        raise
+    except Exception as exc:
+        fail_analysis_and_raise(
+            workflow,
+            context,
+            step_key="build_safe_prompt",
+            message="Safe prompt construction failed.",
+            error_code="SAFE_PROMPT_BUILD_FAILED",
+            exc=exc,
+        )
 
     workflow.start_step("run_llm_analysis", "Run LLM Analysis")
     try:
@@ -1748,9 +1996,15 @@ async def analyze(
             analysis_prompt=context.safe_prompt,
         )
         workflow.complete_step("run_llm_analysis", "DeepSeek returned a JSON response.")
-    except Exception:
-        workflow.fail_step("run_llm_analysis", "LLM analysis failed.")
-        raise
+    except Exception as exc:
+        fail_analysis_and_raise(
+            workflow,
+            context,
+            step_key="run_llm_analysis",
+            message="LLM analysis failed.",
+            error_code="LLM_ANALYSIS_FAILED",
+            exc=exc,
+        )
 
     workflow.start_step("scan_llm_output", "Scan LLM Output")
     try:
@@ -1773,6 +2027,8 @@ async def analyze(
                 context,
                 status_code=502,
                 message="LLM output failed security validation. Please try again.",
+                error_code="LLM_OUTPUT_SECURITY_VALIDATION_FAILED",
+                error_stage="scan_llm_output",
             )
         context.llm_raw_response = sanitized_output
         workflow.complete_step(
@@ -1781,9 +2037,15 @@ async def analyze(
         )
     except HTTPException:
         raise
-    except Exception:
-        workflow.fail_step("scan_llm_output", "LLM output security scanning failed.")
-        raise
+    except Exception as exc:
+        fail_analysis_and_raise(
+            workflow,
+            context,
+            step_key="scan_llm_output",
+            message="LLM output security scanning failed.",
+            error_code="LLM_OUTPUT_SCAN_FAILED",
+            exc=exc,
+        )
 
     workflow.start_step("validate_structured_output", "Validate Structured Output")
     try:
@@ -1793,20 +2055,26 @@ async def analyze(
             retrieved_rag_chunks=context.retrieved_chunks,
             apply_rag_corrections=False,
         )
+        context.json_parse_success = True
         workflow.complete_step(
             "validate_structured_output",
             "LLM JSON parsed and normalized successfully.",
         )
-    except Exception:
-        workflow.fail_step(
-            "validate_structured_output",
-            "Structured output validation failed.",
+    except Exception as exc:
+        context.json_parse_success = False
+        fail_analysis_and_raise(
+            workflow,
+            context,
+            step_key="validate_structured_output",
+            message="Structured output validation failed.",
+            error_code="STRUCTURED_OUTPUT_VALIDATION_FAILED",
+            exc=exc,
         )
-        raise
 
     workflow.start_step("reconcile_evidence", "Reconcile Evidence")
     try:
         corrected_terms = reconcile_result_with_rag_evidence(result, context.retrieved_chunks)
+        context.rag_reconciliation_count = len(corrected_terms)
         result["rag_mode"] = context.rag_mode
         result["used_knowledge_base"] = bool(
             context.rag_mode == "project" and context.retrieved_chunks
@@ -1825,9 +2093,15 @@ async def analyze(
                 "RAG-supported term(s)."
             ),
         )
-    except Exception:
-        workflow.fail_step("reconcile_evidence", "Evidence reconciliation failed.")
-        raise
+    except Exception as exc:
+        fail_analysis_and_raise(
+            workflow,
+            context,
+            step_key="reconcile_evidence",
+            message="Evidence reconciliation failed.",
+            error_code="EVIDENCE_RECONCILIATION_FAILED",
+            exc=exc,
+        )
 
     workflow.start_step("recommend_next_action", "Recommend Next Action")
     try:
@@ -1838,9 +2112,15 @@ async def analyze(
             "recommend_next_action",
             f"Recommended next action: {context.next_action.get('label', 'No Recommendation')}.",
         )
-    except Exception:
-        workflow.fail_step("recommend_next_action", "Next-action recommendation failed.")
-        raise
+    except Exception as exc:
+        fail_analysis_and_raise(
+            workflow,
+            context,
+            step_key="recommend_next_action",
+            message="Next-action recommendation failed.",
+            error_code="NEXT_ACTION_RECOMMENDATION_FAILED",
+            exc=exc,
+        )
 
     context.security_scan = normalized_security_scan(context.security_scan or empty_security_scan())
     context.security_status = security_status_from_scan(context.security_scan)
@@ -1864,9 +2144,15 @@ async def analyze(
                 f"Application record saved with ID {context.application_id}.",
             )
             logger.info("Analysis saved to history application_id=%s", context.application_id)
-        except Exception:
-            workflow.fail_step("save_application", "Could not save application record.")
-            raise
+        except Exception as exc:
+            fail_analysis_and_raise(
+                workflow,
+                context,
+                step_key="save_application",
+                message="Could not save application record.",
+                error_code="APPLICATION_SAVE_FAILED",
+                exc=exc,
+            )
     else:
         workflow.skip_step(
             "save_application",
@@ -1892,9 +2178,15 @@ async def analyze(
             "finalize_result",
             "Final API response prepared with workflow audit trail.",
         )
-    except Exception:
-        workflow.fail_step("finalize_result", "Final API response preparation failed.")
-        raise
+    except Exception as exc:
+        fail_analysis_and_raise(
+            workflow,
+            context,
+            step_key="finalize_result",
+            message="Final API response preparation failed.",
+            error_code="FINAL_RESULT_PREPARATION_FAILED",
+            exc=exc,
+        )
 
     workflow.finish()
     workflow_duration = workflow.workflow_duration()
@@ -1910,5 +2202,12 @@ async def analyze(
             workflow_duration_ms=result["workflow_duration_ms"],
             workflow_duration_us=result["workflow_duration_us"],
         )
+
+    record_analysis_observation(
+        workflow,
+        context,
+        outcome=workflow.status(),
+        result=result,
+    )
 
     return result

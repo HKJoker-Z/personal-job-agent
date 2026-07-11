@@ -320,6 +320,133 @@ def init_db() -> None:
             """
         )
         ensure_knowledge_fts(connection)
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS analysis_metrics (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                workflow_id TEXT UNIQUE NOT NULL,
+                created_at TEXT NOT NULL,
+                completed_at TEXT,
+                outcome TEXT NOT NULL,
+                workflow_status TEXT,
+                workflow_duration_ms REAL,
+                workflow_duration_us INTEGER,
+                llm_duration_ms REAL,
+                rag_retrieval_duration_ms REAL,
+                rag_mode TEXT,
+                rag_source_count INTEGER NOT NULL DEFAULT 0,
+                rag_hit INTEGER NOT NULL DEFAULT 0,
+                rag_reconciliation_count INTEGER NOT NULL DEFAULT 0,
+                security_status TEXT,
+                security_risk_level TEXT,
+                prompt_injection_detected INTEGER NOT NULL DEFAULT 0,
+                sensitive_data_detected INTEGER NOT NULL DEFAULT 0,
+                output_leakage_detected INTEGER NOT NULL DEFAULT 0,
+                pii_email_redaction_count INTEGER NOT NULL DEFAULT 0,
+                pii_phone_redaction_count INTEGER NOT NULL DEFAULT 0,
+                pii_address_redaction_count INTEGER NOT NULL DEFAULT 0,
+                security_finding_codes TEXT,
+                json_parse_success INTEGER,
+                saved_to_history INTEGER NOT NULL DEFAULT 0,
+                application_id INTEGER,
+                next_action TEXT,
+                error_code TEXT,
+                error_stage TEXT,
+                source_type TEXT
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_analysis_metrics_created_at
+            ON analysis_metrics(created_at)
+            """
+        )
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_analysis_metrics_outcome
+            ON analysis_metrics(outcome)
+            """
+        )
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_analysis_metrics_security
+            ON analysis_metrics(security_status, security_risk_level)
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS analysis_step_metrics (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                workflow_id TEXT NOT NULL,
+                step_key TEXT NOT NULL,
+                status TEXT NOT NULL,
+                duration_ms REAL,
+                duration_us INTEGER,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_analysis_step_metrics_workflow_step
+            ON analysis_step_metrics(workflow_id, step_key)
+            """
+        )
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_analysis_step_metrics_created_at
+            ON analysis_step_metrics(created_at)
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS evaluation_runs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_id TEXT UNIQUE NOT NULL,
+                suite_name TEXT NOT NULL,
+                suite_version TEXT NOT NULL,
+                mode TEXT NOT NULL,
+                status TEXT NOT NULL,
+                started_at TEXT NOT NULL,
+                completed_at TEXT,
+                duration_ms REAL,
+                total_cases INTEGER NOT NULL DEFAULT 0,
+                passed_cases INTEGER NOT NULL DEFAULT 0,
+                failed_cases INTEGER NOT NULL DEFAULT 0,
+                error_cases INTEGER NOT NULL DEFAULT 0,
+                pass_rate REAL NOT NULL DEFAULT 0
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_evaluation_runs_started_at
+            ON evaluation_runs(started_at)
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS evaluation_results (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_id TEXT NOT NULL,
+                case_id TEXT NOT NULL,
+                case_name TEXT NOT NULL,
+                category TEXT NOT NULL,
+                status TEXT NOT NULL,
+                duration_ms REAL,
+                checks_json TEXT,
+                failure_summary TEXT,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_evaluation_results_run_id
+            ON evaluation_results(run_id)
+            """
+        )
 
 
 def serialize_list(value: Any) -> str:

@@ -1,10 +1,10 @@
 # Personal Job Application Agent
 
-Current version: v1.7
+Current version: v1.8
 
-Personal Job Application Agent is a local-first, full-stack AI job application assistant. It parses a PDF or DOCX resume, accepts pasted job description text or one user-provided job URL, applies deterministic AI security checks, uses the DeepSeek API to generate explainable Resume-JD matching results, retrieves evidence from a curated Project Knowledge RAG source, creates an English cover letter, recommends the next application action, tracks saved applications in SQLite, and exports application materials as DOCX/PDF files.
+Personal Job Application Agent is a local-first, full-stack AI job application assistant. It parses a PDF or DOCX resume, accepts pasted job description text or one user-provided job URL, applies deterministic AI security checks, uses the DeepSeek API to generate explainable Resume-JD matching results, retrieves evidence from a curated Project Knowledge RAG source, creates an English cover letter, recommends the next application action, tracks saved applications in SQLite, records local AI monitoring metadata, runs offline behavioral evaluations, and exports application materials as DOCX/PDF files.
 
-Version 1.7 adds a defense-in-depth AI security layer for prompt injection mitigation, secret detection, PII minimization, safe prompt construction, LLM output leakage scanning, and security audit trails. The controls are deterministic heuristic rules that reduce risk but cannot guarantee complete prompt injection prevention. The project still uses Project Knowledge RAG only; it does not use LangGraph, CrewAI, AutoGen, MCP, external AI firewall products, or fake real-time streaming.
+Version 1.8 adds local SQLite AI monitoring, workflow latency metrics, LLM latency monitoring, RAG effectiveness metrics, security monitoring, recommendation outcome monitoring, sanitized workflow trace lookup, evaluation history, and an offline deterministic Behavioral Evaluation Suite. Monitoring stores sanitized metadata and counts only; it does not store raw resumes, job descriptions, prompts, RAG chunks, model responses, or detected secret values. The project still uses Project Knowledge RAG only; it does not use LangGraph, CrewAI, AutoGen, MCP, OpenTelemetry, Langfuse, Prometheus, Grafana, external AI firewall products, or fake real-time streaming.
 
 ## Core Features
 
@@ -28,6 +28,16 @@ Version 1.7 adds a defense-in-depth AI security layer for prompt injection mitig
 - LLM output leakage scanning
 - Security audit trail in Analyze, History Detail, and PDF reports
 - Security policy endpoint
+- Local SQLite AI monitoring
+- Workflow latency metrics
+- LLM latency monitoring
+- RAG effectiveness metrics
+- Security monitoring
+- Recommendation outcome monitoring
+- Sanitized workflow trace explorer
+- Offline behavioral evaluation suite
+- Evaluation history
+- Monitoring dashboard
 - Workflow IDs and real execution audit trails
 - Deterministic next-action recommendation
 - Human-in-the-loop decision recording for recommendations
@@ -41,7 +51,7 @@ Version 1.7 adds a defense-in-depth AI security layer for prompt injection mitig
 - DOCX cover letter export
 - PDF analysis report export
 
-Version 1.5.2 removed the generic knowledge base upload UI and disabled generic `/api/knowledge/*` endpoints with HTTP `410 Gone`. Version 1.7 keeps that Project Knowledge-only RAG design.
+Version 1.5.2 removed the generic knowledge base upload UI and disabled generic `/api/knowledge/*` endpoints with HTTP `410 Gone`. Version 1.8 keeps that Project Knowledge-only RAG design.
 
 ## Why Project Knowledge RAG Only
 
@@ -75,9 +85,10 @@ Project Knowledge RAG keeps retrieval focused on a single curated evidence file:
 - DOCX export: `python-docx`
 - PDF export: `reportlab`
 - URL extraction: `requests`, `beautifulsoup4`
+- Local monitoring and evaluation: SQLite, FastAPI, React, Python standard library
 - Version control: Git/GitHub
 
-No external vector database is used in v1.7.
+No external vector database or external observability vendor is used in v1.8.
 
 ## Project Structure
 
@@ -92,15 +103,23 @@ No external vector database is used in v1.7.
 │   ├── recommendation_engine.py
 │   ├── security_utils.py
 │   ├── safe_prompt.py
+│   ├── monitoring_service.py
+│   ├── evaluation_service.py
 │   ├── knowledge_utils.py
+│   ├── evals/
+│   │   ├── cases.json
+│   │   └── README.md
 │   ├── main.py
 │   ├── test_agent_workflow.py
 │   ├── test_recommendation_engine.py
 │   ├── test_security_utils.py
 │   ├── test_safe_prompt.py
+│   ├── test_monitoring_service.py
+│   ├── test_evaluation_service.py
 │   └── requirements.txt
 ├── docs/
-│   └── PROJECT_KNOWLEDGE.md  # curated Project Knowledge RAG source
+│   ├── PROJECT_KNOWLEDGE.md  # curated Project Knowledge RAG source
+│   └── MONITORING_AND_EVALUATION.md
 ├── frontend/
 │   ├── index.html
 │   ├── package.json
@@ -169,7 +188,7 @@ Expected response:
 {
   "status": "ok",
   "service": "personal-job-agent",
-  "version": "1.7"
+  "version": "1.8"
 }
 ```
 
@@ -219,6 +238,15 @@ The backend creates `backend/data/` and `app.db` automatically. Database files a
 
 Application history stores normalized AI analysis results, scoring breakdowns, ATS analysis, upgraded resume bullets, RAG mode, RAG source metadata, workflow IDs, workflow step audit trails, security audit metadata, next-action recommendations, human decisions, status, and notes. It does not store uploaded resume files or complete `resume_text`.
 
+Version 1.8 monitoring tables store local metadata only:
+
+- `analysis_metrics`: one metadata row per Analyze workflow ID.
+- `analysis_step_metrics`: step status and duration without step messages.
+- `evaluation_runs`: offline Behavioral Evaluation Suite run summaries.
+- `evaluation_results`: safe case check summaries.
+
+Monitoring tables do not store raw resumes, raw job descriptions, full prompts, full model outputs, RAG chunk content, detected secret values, or prompt injection attack text. Monitoring persistence is best effort and does not fail the primary Analyze request.
+
 Project Knowledge RAG uses the existing v1.5 tables:
 
 - `knowledge_documents` stores Project Knowledge metadata and content previews.
@@ -229,7 +257,7 @@ The tables remain in place to avoid breaking existing local databases, but the p
 
 ## RAG Retrieval
 
-Version 1.7 uses Project Knowledge RAG only:
+Version 1.8 uses Project Knowledge RAG only:
 
 - The only recommended RAG source is `docs/PROJECT_KNOWLEDGE.md`.
 - The backend chunks the file and indexes it in SQLite.
@@ -237,11 +265,11 @@ Version 1.7 uses Project Knowledge RAG only:
 - If FTS5 is unavailable, the backend falls back to lightweight keyword scoring over chunk content, title, and category.
 - Only top-k relevant chunks are sent to DeepSeek during analysis.
 - The entire Project Knowledge file is never sent to the LLM.
-- Generic `/api/knowledge/*` endpoints are disabled in v1.7 and return `410 Gone`.
+- Generic `/api/knowledge/*` endpoints are disabled in v1.8 and return `410 Gone`.
 
 ## AI Security Layer
 
-Version 1.7 adds deterministic security controls around the RAG-powered analysis workflow:
+Version 1.8 includes deterministic security controls around the RAG-powered analysis workflow:
 
 - Prompt injection mitigation scans untrusted resume, JD, job URL content, and Project Knowledge chunks for instruction override, system prompt extraction, data exfiltration, role manipulation, tool or command manipulation, and indirect instruction priority patterns.
 - Prompt injection findings do not automatically block ordinary analysis. Suspicious instruction segments are replaced with `[REMOVED_SUSPICIOUS_INSTRUCTION]`, the workflow continues, and the result is marked `passed_with_warnings`.
@@ -252,11 +280,11 @@ Version 1.7 adds deterministic security controls around the RAG-powered analysis
 - LLM output scanning redacts credential-like content before returning output. If an internal security marker appears in model output, the response is blocked as internal instruction leakage.
 - Security findings use stable codes, categories, severity, source, and safe messages. Full malicious text, secrets, full resumes, full JDs, and full Project Knowledge chunks are not stored in findings.
 
-These controls are heuristic and pattern-based. They reduce risk but cannot guarantee complete protection against every prompt injection attack, and they may produce false positives or false negatives. PII redaction is best-effort. Version 1.7 does not claim formal security certification, penetration testing coverage, SOC 2, ISO 27001, or a third-party AI firewall.
+These controls are heuristic and pattern-based. They reduce risk but cannot guarantee complete protection against every prompt injection attack, and they may produce false positives or false negatives. PII redaction is best-effort. Version 1.8 does not claim formal security certification, penetration testing coverage, SOC 2, ISO 27001, or a third-party AI firewall.
 
 ## Agent Workflow Orchestration
 
-Version 1.7 decomposes `POST /api/analyze` into real backend workflow steps:
+Version 1.8 decomposes `POST /api/analyze` into real backend workflow steps:
 
 1. Validate Input
 2. Parse Resume
@@ -275,7 +303,7 @@ Version 1.7 decomposes `POST /api/analyze` into real backend workflow steps:
 
 Each step records a stable key, display name, status, safe message, start time, completion time, and measured `duration_ms`. Steps can be `pending`, `running`, `completed`, `skipped`, or `failed`.
 
-The current workflow is synchronous. Version 1.7 returns an execution audit trail after the synchronous workflow completes. The UI may show a loading message while the request is running, but it does not simulate fake step progress with timers and it does not provide real-time streaming.
+The current workflow is synchronous. Version 1.8 returns an execution audit trail after the synchronous workflow completes. The UI may show a loading message while the request is running, but it does not simulate fake step progress with timers and it does not provide real-time streaming.
 
 This is a custom lightweight orchestration layer, not LangGraph, CrewAI, AutoGen, MCP, or an asynchronous distributed task queue.
 
@@ -408,6 +436,43 @@ Example response:
 }
 ```
 
+### Monitoring APIs
+
+Version 1.8 adds metadata-only monitoring endpoints:
+
+- `GET /api/monitoring/status`
+- `GET /api/monitoring/overview?days=30`
+- `GET /api/monitoring/workflow-steps?days=30`
+- `GET /api/monitoring/rag?days=30`
+- `GET /api/monitoring/security?days=30`
+- `GET /api/monitoring/recommendations?days=30`
+- `GET /api/monitoring/traces?days=30&limit=50&offset=0`
+- `GET /api/monitoring/traces/{workflow_id}`
+
+Monitoring APIs return workflow metrics, latency summaries, RAG hit metrics, security finding code distributions, recommendation outcomes, and sanitized trace metadata. They do not return resumes, job descriptions, prompts, model responses, RAG chunk content, detected secret values, or original attack text.
+
+Workflow P50 and P95 use nearest-rank percentile over non-skipped, non-null durations. If a denominator is zero, rate fields return `0`.
+
+### Evaluation APIs
+
+Version 1.8 adds offline Behavioral Evaluation APIs:
+
+- `GET /api/evaluations/status`
+- `POST /api/evaluations/run`
+- `GET /api/evaluations/runs?limit=20&offset=0`
+- `GET /api/evaluations/runs/{run_id}`
+
+Request:
+
+```json
+{
+  "suite_name": "default",
+  "mode": "offline"
+}
+```
+
+Only `offline` mode is supported. Live LLM evaluation is not supported in Version 1.8 and does not call DeepSeek. Evaluation pass rate measures deterministic behavioral and rule compliance checks. It is not model accuracy, hiring success probability, or real-world accuracy.
+
 ### `GET /api/project-knowledge/status`
 
 Returns whether `docs/PROJECT_KNOWLEDGE.md` exists and whether it is indexed.
@@ -479,7 +544,7 @@ curl "http://localhost:8000/api/project-knowledge/search?query=RAG%20FastAPI%20D
 
 ### Generic Knowledge Endpoints
 
-The following generic knowledge endpoints are disabled in v1.7 and return `410 Gone`:
+The following generic knowledge endpoints are disabled in v1.8 and return `410 Gone`:
 
 - `GET /api/knowledge/documents`
 - `POST /api/knowledge/documents`
@@ -491,7 +556,7 @@ Response:
 
 ```json
 {
-  "detail": "Generic knowledge base upload is disabled in v1.7. Use Project Knowledge RAG instead."
+  "detail": "Generic knowledge base upload is disabled in v1.8. Use Project Knowledge RAG instead."
 }
 ```
 
@@ -557,23 +622,28 @@ Response:
 - PII redaction is best-effort and is applied to the LLM-bound copy of resume text.
 - LLM output is scanned for credential-like content and internal marker leakage before returning.
 - Security findings do not store full malicious content, full resume text, full JD text, full Project Knowledge chunks, or detected secret values.
+- Monitoring stores sanitized metadata and counts only.
+- Monitoring does not store raw prompts or private inputs.
+- No additional DeepSeek calls are used for monitoring.
+- Offline evaluation does not call external LLMs.
+- Evaluation measures deterministic behavior and rule compliance, not model accuracy or hiring success probability.
 - Detection uses deterministic heuristic rules. It reduces risk but cannot guarantee complete protection against every prompt injection attack.
-- Version 1.7 does not claim formal security certification.
+- Version 1.8 does not claim formal security certification, distributed tracing, production APM, OpenTelemetry, Langfuse, Prometheus, or Grafana integration.
 - The system instructs the LLM not to fabricate user experience.
 - Cover letters must be grounded in the resume and retrieved Project Knowledge evidence.
 
-## Version 1.7 Core Changes
+## Version 1.8 Core Changes
 
-- Added deterministic prompt injection detection.
-- Added secret and credential scanning.
-- Added PII minimization before LLM calls.
-- Added safe prompt construction with untrusted data isolation.
-- Added LLM output leakage scanning.
-- Added AI security workflow steps to `POST /api/analyze`.
-- Added persisted security audit trails.
-- Displayed security status and findings in Analyze, History Detail, and PDF reports.
-- Added `/api/security/policy`.
-- Kept Version 1.6 workflow, Project Knowledge RAG, History, Export, and next-action recommendation behavior.
+- Added local SQLite monitoring for Analyze workflows.
+- Added step-level workflow latency metrics.
+- Added LLM, RAG, security, and recommendation monitoring.
+- Added privacy-aware metadata-only traces.
+- Added trace lookup by workflow ID.
+- Added an offline deterministic Behavioral Evaluation Suite.
+- Added evaluation run and result history.
+- Added a React Monitoring dashboard.
+- Added monitoring and evaluation unit tests.
+- Kept Version 1.7 AI security, Project Knowledge RAG, History, Export, and next-action recommendation behavior.
 
 ## Version History
 
@@ -585,9 +655,9 @@ Response:
 - v1.5.2: Project Knowledge RAG Only
 - v1.6: Agent workflow orchestration and next-action recommendation
 - v1.7: AI Security and Prompt Injection Mitigation
+- v1.8: AI Monitoring and Behavioral Evaluation
 
 ## Roadmap
 
-- v1.8: Monitoring and evaluation
-- v1.9: Docker and cloud deployment
-- v2.0: MCP server integration
+- v1.9: Docker, CI/CD, and Cloud Deployment
+- v2.0: MCP Server Integration
