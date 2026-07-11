@@ -1,10 +1,6 @@
 import json
-import tempfile
 import unittest
-from pathlib import Path
 
-import database
-from database import init_db
 from evaluation_service import (
     FAILURE_SUMMARY_LIMIT,
     load_evaluation_suite,
@@ -15,6 +11,7 @@ from evaluation_service import (
     safe_failure_summary,
     validate_suite_schema,
 )
+from test_support import temporary_test_database
 
 
 TEST_ONLY_FAKE_SECRET = "sk-test-only-1234567890abcdef123456"
@@ -22,15 +19,12 @@ TEST_ONLY_FAKE_SECRET = "sk-test-only-1234567890abcdef123456"
 
 class EvaluationServiceTest(unittest.TestCase):
     def setUp(self):
-        self.tmpdir = tempfile.TemporaryDirectory()
-        self.original_db_path = database.DB_PATH
-        database.DB_PATH = Path(self.tmpdir.name) / "app.db"
-        init_db()
+        self.database_context = temporary_test_database()
+        self.database_path = self.database_context.__enter__()
         self.suite = load_evaluation_suite("default")
 
     def tearDown(self):
-        database.DB_PATH = self.original_db_path
-        self.tmpdir.cleanup()
+        self.database_context.__exit__(None, None, None)
 
     def case_by_id(self, case_id):
         return next(case for case in self.suite["cases"] if case["id"] == case_id)

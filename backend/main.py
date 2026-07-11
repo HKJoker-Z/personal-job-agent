@@ -10,7 +10,7 @@ import requests
 from bs4 import BeautifulSoup
 from docx import Document
 from dotenv import load_dotenv
-from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
+from fastapi import FastAPI, File, Form, Header, HTTPException, Query, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
@@ -23,7 +23,6 @@ from database import (
     ALLOWED_APPLICATION_STATUSES,
     ALLOWED_KNOWLEDGE_CATEGORIES,
     ALLOWED_NEXT_ACTION_DECISIONS,
-    DB_PATH,
     create_knowledge_document,
     delete_application_record,
     delete_knowledge_document,
@@ -39,6 +38,16 @@ from database import (
     update_application_record,
     update_application_workflow_steps,
     update_next_action_decision,
+)
+from data_management_service import (
+    DataManagementError,
+    authorize_destructive_request,
+    data_management_status,
+    delete_evaluation_data,
+    delete_monitoring_data,
+    delete_trace,
+    preview_evaluation_deletion,
+    preview_monitoring_deletion,
 )
 from export_utils import (
     build_analysis_report_pdf,
@@ -87,7 +96,7 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 load_dotenv(ROOT_DIR / ".env")
 
 APP_NAME = "personal-job-agent"
-APP_VERSION = "1.8"
+APP_VERSION = "1.8.1"
 DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 DEEPSEEK_MODEL = "deepseek-chat"
 MAX_RESUME_TEXT_CHARS = 18000
@@ -233,7 +242,7 @@ logger = logging.getLogger(APP_NAME)
 
 app = FastAPI(title="Personal Job Application Agent API", version=APP_VERSION)
 init_db()
-logger.info("SQLite database initialized path=%s", DB_PATH)
+logger.info("SQLite database initialized")
 
 
 class ApplicationUpdate(BaseModel):
@@ -249,6 +258,29 @@ class NextActionDecisionUpdate(BaseModel):
 class EvaluationRunRequest(BaseModel):
     suite_name: str = "default"
     mode: str = "offline"
+
+
+class MonitoringDataManagementRequest(BaseModel):
+    mode: str
+    date_from: str | None = None
+    date_to: str | None = None
+    outcomes: list[str] = []
+    security_statuses: list[str] = []
+    risk_levels: list[str] = []
+    confirmation: str | None = None
+
+
+class TraceDeletionRequest(BaseModel):
+    confirmation: str
+    notes: str | None = None
+
+
+class EvaluationDataManagementRequest(BaseModel):
+    mode: str
+    date_from: str | None = None
+    date_to: str | None = None
+    statuses: list[str] = []
+    confirmation: str | None = None
 
 allowed_origins = [
     "http://localhost:5173",
@@ -1429,6 +1461,54 @@ def get_monitoring_status() -> dict[str, Any]:
     return monitoring_status()
 
 
+def request_client_host(request: Request) -> str | None:
+    return request.client.host if request.client else None
+
+
+def model_payload(model: BaseModel) -> dict[str, Any]:
+    if hasattr(model, "model_dump"):
+        return model.model_dump()  # Pydantic v2
+    return model.dict()  # Pydantic v1
+
+
+def raise_data_management_error(exc: DataManagementError) -> None:
+    raise HTTPException(
+        status_code=exc.status_code,
+        detail={"message": exc.message, "error_code": exc.error_code},
+    ) from exc
+
+
+@app.get("/api/monitoring/data-management/status")
+def get_data_management_status(request: Request) -> dict[str, Any]:
+    return data_management_status(request_client_host(request))
+
+
+@app.post("/api/monitoring/data/preview")
+def post_monitoring_data_preview(
+    payload: MonitoringDataManagementRequest,
+    request: Request,
+    admin_token: str | None = Header(default=None, alias="X-Monitoring-Admin-Token"),
+) -> dict[str, Any]:
+    try:
+        authorize_destructive_request(admin_token, request_client_host(request))
+        return preview_monitoring_deletion(model_payload(payload))
+    except DataManagementError as exc:
+        raise_data_management_error(exc)
+
+
+@app.delete("/api/monitoring/data")
+def delete_monitoring_data_endpoint(
+    payload: MonitoringDataManagementRequest,
+    request: Request,
+    admin_token: str | None = Header(default=None, alias="X-Monitoring-Admin-Token"),
+) -> dict[str, Any]:
+    try:
+        authorize_destructive_request(admin_token, request_client_host(request))
+        return delete_monitoring_data(model_payload(payload))
+    except DataManagementError as exc:
+        raise_data_management_error(exc)
+
+
 @app.get("/api/monitoring/overview")
 def get_monitoring_overview_endpoint(days: int = Query(30, ge=1, le=365)) -> dict[str, Any]:
     return get_monitoring_overview(days)
@@ -1481,9 +1561,49 @@ def get_monitoring_trace_detail(workflow_id: str) -> dict[str, Any]:
     return trace
 
 
+@app.delete("/api/monitoring/traces/{workflow_id}")
+def delete_monitoring_trace_endpoint(
+    workflow_id: str,
+    payload: TraceDeletionRequest,
+    request: Request,
+    admin_token: str | None = Header(default=None, alias="X-Monitoring-Admin-Token"),
+) -> dict[str, Any]:
+    try:
+        authorize_destructive_request(admin_token, request_client_host(request))
+        return delete_trace(workflow_id, model_payload(payload))
+    except DataManagementError as exc:
+        raise_data_management_error(exc)
+
+
 @app.get("/api/evaluations/status")
 def get_evaluations_status() -> dict[str, Any]:
     return evaluation_status()
+
+
+@app.post("/api/evaluations/data/preview")
+def post_evaluation_data_preview(
+    payload: EvaluationDataManagementRequest,
+    request: Request,
+    admin_token: str | None = Header(default=None, alias="X-Monitoring-Admin-Token"),
+) -> dict[str, Any]:
+    try:
+        authorize_destructive_request(admin_token, request_client_host(request))
+        return preview_evaluation_deletion(model_payload(payload))
+    except DataManagementError as exc:
+        raise_data_management_error(exc)
+
+
+@app.delete("/api/evaluations/data")
+def delete_evaluation_data_endpoint(
+    payload: EvaluationDataManagementRequest,
+    request: Request,
+    admin_token: str | None = Header(default=None, alias="X-Monitoring-Admin-Token"),
+) -> dict[str, Any]:
+    try:
+        authorize_destructive_request(admin_token, request_client_host(request))
+        return delete_evaluation_data(model_payload(payload))
+    except DataManagementError as exc:
+        raise_data_management_error(exc)
 
 
 @app.post("/api/evaluations/run")

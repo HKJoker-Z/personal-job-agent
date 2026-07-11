@@ -212,6 +212,38 @@ Skills demonstrated:
 - FastAPI metrics APIs
 - Full-stack monitoring dashboard
 
+### Version 1.8.1 - Monitoring Data Management and Test Isolation
+
+- Added monitoring data lifecycle controls.
+- Added clear-all and filtered monitoring cleanup.
+- Added workflow-specific trace deletion.
+- Added evaluation-history cleanup.
+- Added transactional parent-child deletion.
+- Added admin-token protection for destructive APIs.
+- Disabled remote destructive operations by default.
+- Added configurable SQLite database paths.
+- Isolated automated tests from the application database.
+- Added fail-fast safeguards preventing test writes to `app.db`.
+- Added frontend Data Management controls with explicit confirmation.
+
+Skills demonstrated:
+
+- Data lifecycle management
+- Test and real-data isolation
+- Safe destructive API design
+- Transactional database operations
+- SQLite test infrastructure
+- Environment-based configuration
+- Administrative authorization
+- Secure token handling
+- Privacy-aware retention controls
+- Full-stack operational tooling
+
+Resume bullets:
+
+- Implemented secure monitoring data lifecycle controls with transactional cleanup, scoped deletion, admin-token authorization, and preservation of application and RAG data.
+- Isolated automated tests from the application database using temporary SQLite instances and fail-fast safeguards that prevent test metrics from contaminating real monitoring data.
+
 ## 3. Technical Stack
 
 - React: Builds the frontend user interface for Analyze, History, and Project Knowledge workflows.
