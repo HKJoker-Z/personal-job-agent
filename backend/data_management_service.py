@@ -10,6 +10,7 @@ from datetime import date, datetime, time, timedelta, timezone
 from typing import Any
 
 from database import get_connection
+from config import load_config
 
 
 MONITORING_OUTCOMES = ("completed", "completed_with_warnings", "failed", "blocked")
@@ -343,7 +344,7 @@ def delete_evaluation_data(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def remote_admin_allowed() -> bool:
-    return os.getenv("MONITORING_ALLOW_REMOTE_ADMIN", "false").strip().lower() in {"1", "true", "yes"}
+    return load_config(validate_production=False).monitoring_allow_remote_admin
 
 
 def is_loopback_request(client_host: str | None) -> bool:
@@ -371,7 +372,7 @@ def authorize_destructive_request(admin_token: str | None, client_host: str | No
 def data_management_status(client_host: str | None) -> dict[str, Any]:
     configured_token = os.getenv("MONITORING_ADMIN_TOKEN", "")
     return {
-        "version": "1.8.1",
+        "version": "1.9",
         "data_management_enabled": bool(configured_token),
         "admin_token_configured": bool(configured_token),
         "remote_admin_allowed": remote_admin_allowed(),

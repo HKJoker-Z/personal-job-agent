@@ -244,6 +244,46 @@ Resume bullets:
 - Implemented secure monitoring data lifecycle controls with transactional cleanup, scoped deletion, admin-token authorization, and preservation of application and RAG data.
 - Isolated automated tests from the application database using temporary SQLite instances and fail-fast safeguards that prevent test metrics from contaminating real monitoring data.
 
+### Version 1.9 - Containerized Deployment, CI/CD, and Production Hardening
+
+- Containerized the FastAPI backend.
+- Added a multi-stage React and Nginx frontend image.
+- Added same-origin API reverse proxying.
+- Added Docker Compose production topology.
+- Persisted SQLite and Project Knowledge runtime data.
+- Added production configuration validation.
+- Added liveness and readiness checks.
+- Added request IDs and privacy-aware structured logging.
+- Added SQLite-safe backup and restore workflows.
+- Added existing-data migration tooling.
+- Added GitHub Actions CI.
+- Added GHCR image publishing configuration.
+- Added Ubuntu deployment and production-security documentation.
+
+Skills demonstrated:
+
+- Docker
+- Docker Compose
+- Container security
+- Nginx reverse proxy
+- CI/CD
+- GitHub Actions
+- GitHub Container Registry
+- Production configuration
+- Health and readiness probes
+- Persistent storage
+- SQLite backup and restore
+- Release engineering
+- Deployment automation
+- Production hardening
+- Operational documentation
+
+Resume bullets:
+
+- Containerized a React and FastAPI AI application with Docker Compose and Nginx, implementing persistent SQLite storage, Project Knowledge persistence, health checks, and production configuration validation.
+- Built GitHub Actions pipelines for Python regression tests, React production builds, Docker image validation, Compose configuration checks, and versioned GHCR image publishing.
+- Developed safe deployment, SQLite backup, restore, and existing-data migration workflows for repeatable Ubuntu server operations.
+
 ## 3. Technical Stack
 
 - React: Builds the frontend user interface for Analyze, History, and Project Knowledge workflows.

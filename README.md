@@ -1,10 +1,10 @@
 # Personal Job Application Agent
 
-Current version: v1.8.1
+Current version: v1.9
 
 Personal Job Application Agent is a local-first, full-stack AI job application assistant. It parses a PDF or DOCX resume, accepts pasted job description text or one user-provided job URL, applies deterministic AI security checks, uses the DeepSeek API to generate explainable Resume-JD matching results, retrieves evidence from a curated Project Knowledge RAG source, creates an English cover letter, recommends the next application action, tracks saved applications in SQLite, records local AI monitoring metadata, runs offline behavioral evaluations, and exports application materials as DOCX/PDF files.
 
-Version 1.8.1 adds explicit monitoring and evaluation data lifecycle controls plus temporary SQLite isolation for automated tests. Monitoring stores sanitized metadata and counts only; it does not store raw resumes, job descriptions, prompts, RAG chunks, model responses, or detected secret values. The project still uses Project Knowledge RAG only; it does not use LangGraph, CrewAI, AutoGen, MCP, OpenTelemetry, Langfuse, Prometheus, Grafana, external AI firewall products, or fake real-time streaming.
+Version 1.9 adds containerized deployment, persistent runtime storage, production configuration validation, health/readiness checks, privacy-aware request logging, SQLite-safe backup/restore tooling, GitHub Actions CI, and versioned GHCR publishing configuration. It remains a single-instance SQLite deployment model and does not claim Kubernetes, high availability, zero downtime, distributed tracing, or automatic cloud deployment.
 
 ## Core Features
 
@@ -55,6 +55,15 @@ Version 1.8.1 adds explicit monitoring and evaluation data lifecycle controls pl
 - SQLite application history tracking
 - DOCX cover letter export
 - PDF analysis report export
+- Dockerized non-root FastAPI backend
+- Multi-stage React/Nginx frontend with same-origin `/api` proxying
+- Docker Compose production topology with persistent SQLite and Project Knowledge storage
+- Production Trusted Hosts, strict CORS, and API docs disabled by default
+- Lightweight health and detailed readiness endpoints
+- Request IDs and privacy-aware structured JSON logging
+- SQLite-safe backup, verified restore, and existing-data migration workflows
+- GitHub Actions CI and semantic-tag GHCR image publishing configuration
+- Ubuntu deployment and production security documentation
 
 Version 1.5.2 removed the generic knowledge base upload UI and disabled generic `/api/knowledge/*` endpoints with HTTP `410 Gone`. Version 1.8 keeps that Project Knowledge-only RAG design.
 
@@ -92,6 +101,8 @@ Project Knowledge RAG keeps retrieval focused on a single curated evidence file:
 - URL extraction: `requests`, `beautifulsoup4`
 - Local monitoring and evaluation: SQLite, FastAPI, React, Python standard library
 - Version control: Git/GitHub
+- Containers: Docker, Docker Compose, non-root Nginx
+- CI/CD: GitHub Actions and GitHub Container Registry
 
 No external vector database or external observability vendor is used in v1.8.
 
@@ -103,6 +114,11 @@ No external vector database or external observability vendor is used in v1.8.
 │   ├── data/
 │   │   └── app.db            # generated locally, not committed
 │   ├── database.py
+│   ├── config.py
+│   ├── readiness.py
+│   ├── logging_utils.py
+│   ├── project_knowledge_runtime.py
+│   ├── Dockerfile
 │   ├── export_utils.py
 │   ├── agent_workflow.py
 │   ├── recommendation_engine.py
@@ -129,13 +145,23 @@ No external vector database or external observability vendor is used in v1.8.
 ├── docs/
 │   ├── PROJECT_KNOWLEDGE.md  # curated Project Knowledge RAG source
 │   ├── MONITORING_AND_EVALUATION.md
-│   └── MONITORING_DATA_MANAGEMENT.md
+│   ├── MONITORING_DATA_MANAGEMENT.md
+│   ├── DEPLOYMENT.md
+│   ├── BACKUP_AND_RESTORE.md
+│   ├── PRODUCTION_SECURITY.md
+│   └── CI_CD.md
 ├── frontend/
+│   ├── Dockerfile
+│   ├── nginx.conf
 │   ├── index.html
 │   ├── package.json
 │   └── src/
 │       ├── main.jsx
 │       └── styles.css
+├── scripts/
+├── compose.yaml
+├── compose.prod.yaml
+├── .dockerignore
 ├── .gitignore
 └── README.md
 ```
@@ -148,17 +174,24 @@ Create a `.env` file in the project root:
 DEEPSEEK_API_KEY=your_deepseek_api_key_here
 APP_ENV=development
 APP_DATABASE_PATH=
+PROJECT_KNOWLEDGE_PATH=
+ALLOWED_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
+TRUSTED_HOSTS=localhost,127.0.0.1
+MAX_UPLOAD_SIZE_MB=8
+REQUEST_TIMEOUT_SECONDS=60
+ENABLE_API_DOCS=true
+LOG_LEVEL=INFO
 MONITORING_ADMIN_TOKEN=
 MONITORING_ALLOW_REMOTE_ADMIN=false
 ```
 
-`APP_DATABASE_PATH` is optional; the default is the local `backend/data/app.db` path resolved from backend code. `APP_ENV` supports `development`, `production`, and `test`. In `test`, the default app database is refused and tests must supply a temporary database path. `MONITORING_ADMIN_TOKEN` enables destructive monitoring/evaluation cleanup APIs. Keep it only in `.env`; never embed it in frontend code. Remote destructive access is disabled by default. If you enable it, place the API behind HTTPS or a protected reverse proxy.
+`APP_DATABASE_PATH` and `PROJECT_KNOWLEDGE_PATH` are optional in development. `APP_ENV=test` refuses the default application database. Production requires a configured DeepSeek key and explicit trusted hosts, rejects wildcard hosts/origins, disables API docs by default, and keeps remote destructive administration disabled by default.
 
 Optional frontend API base URL:
 
 ```bash
 cd frontend
-printf 'VITE_API_BASE_URL=http://127.0.0.1:8000\n' > .env.local
+printf 'VITE_BACKEND_PROXY_TARGET=http://127.0.0.1:8000\n' > .env.local
 ```
 
 Do not commit `.env`, `.env.local`, or any `*.env` file.
@@ -180,7 +213,7 @@ Frontend:
 ```bash
 cd frontend
 npm install
-npm run dev -- --host 0.0.0.0 --port 5173
+npm run dev
 ```
 
 Local URLs:
@@ -204,43 +237,36 @@ Expected response:
 {
   "status": "ok",
   "service": "personal-job-agent",
-  "version": "1.8"
+  "version": "1.9"
 }
 ```
 
-## Public Development Access
+`GET /api/health` is process liveness only. `GET /api/ready` checks SQLite connectivity and schema, data-directory writeability, Project Knowledge initialization/index state, and production LLM configuration without calling DeepSeek.
 
-The backend CORS allowlist includes:
+## Docker Compose Production-Style Quick Start
 
-- `http://localhost:5173`
-- `http://127.0.0.1:5173`
-- `http://101.34.61.52:5173`
-
-Backend:
+Bootstrap persistent host directories and create an ignored production configuration:
 
 ```bash
-cd backend
-source .venv/bin/activate
-uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+sudo scripts/bootstrap-runtime.sh
+cp .env.production.example .env.production
 ```
 
-Frontend:
+Set the required production values, then validate and build:
 
 ```bash
-cd frontend
-npm run dev -- --host 0.0.0.0 --port 5173
+APP_ENV_FILE=.env.production docker compose --env-file .env.production config --quiet
+APP_ENV_FILE=.env.production docker compose --env-file .env.production build
 ```
 
-Public development URLs:
+Start only when the container topology is intentionally being deployed:
 
-```text
-Frontend: http://101.34.61.52:5173
-Backend:  http://101.34.61.52:8000
-Health:   http://101.34.61.52:8000/api/health
-Docs:     http://101.34.61.52:8000/docs
+```bash
+APP_ENV_FILE=.env.production docker compose --env-file .env.production up -d
+scripts/health-check.sh http://127.0.0.1:8080
 ```
 
-If another device cannot connect, check that the cloud security group or firewall allows TCP ports `5173` and `8000`.
+The backend has no host port. Nginx is the only published service and forwards `/api` internally. Read `docs/DEPLOYMENT.md` before Ubuntu deployment. Version 1.9 does not automatically configure firewall, DNS, HTTPS, or system services.
 
 ## Database
 
@@ -658,6 +684,17 @@ Response:
 - The system instructs the LLM not to fabricate user experience.
 - Cover letters must be grounded in the resume and retrieved Project Knowledge evidence.
 
+## Version 1.9 Core Changes
+
+- Containerized the FastAPI backend as a non-root image.
+- Added a multi-stage React/Nginx frontend image with same-origin `/api` proxying.
+- Added a hardened Docker Compose topology with persistent SQLite and Project Knowledge bind mounts.
+- Added strict production configuration, Trusted Hosts, CORS, and API documentation controls.
+- Added liveness/readiness checks, request IDs, and privacy-aware structured logging.
+- Added SQLite-safe backup, verified restore, and explicit existing-data migration tooling.
+- Added GitHub Actions CI and semantic-tag GHCR image publishing configuration.
+- Added Ubuntu deployment, backup/restore, CI/CD, and production security documentation.
+
 ## Version 1.8.1 Core Changes
 
 - Added monitoring data lifecycle management with clear-all and filtered cleanup.
@@ -693,8 +730,8 @@ Response:
 - v1.7: AI Security and Prompt Injection Mitigation
 - v1.8: AI Monitoring and Behavioral Evaluation
 - v1.8.1: Monitoring Data Management and Test Isolation
+- v1.9: Containerized Deployment, CI/CD, and Production Hardening
 
 ## Roadmap
 
-- v1.9: Docker, CI/CD, and Cloud Deployment
 - v2.0: MCP Server Integration

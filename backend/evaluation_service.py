@@ -14,6 +14,7 @@ from database import (
 )
 from knowledge_utils import build_text_chunks, clean_knowledge_text
 from recommendation_engine import generate_next_action
+from project_knowledge_runtime import get_project_knowledge_path
 from safe_prompt import build_safe_analysis_prompt
 from security_utils import (
     INTERNAL_SECURITY_MARKER,
@@ -33,8 +34,6 @@ EVALUATION_VERSION = "1.8.0"
 EVALUATION_MODE = "offline"
 EVALS_DIR = Path(__file__).resolve().parent / "evals"
 CASES_PATH = EVALS_DIR / "cases.json"
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-PROJECT_KNOWLEDGE_PATH = PROJECT_ROOT / "docs" / "PROJECT_KNOWLEDGE.md"
 FAILURE_SUMMARY_LIMIT = 500
 
 
@@ -138,8 +137,9 @@ def runner_safe_prompt(case: dict[str, Any]) -> dict[str, Any]:
 def runner_rag_retrieval(case: dict[str, Any]) -> dict[str, Any]:
     query = str(case["input"].get("query") or "").lower()
     content = ""
-    if PROJECT_KNOWLEDGE_PATH.exists():
-        content = clean_knowledge_text(PROJECT_KNOWLEDGE_PATH.read_text(encoding="utf-8"))
+    project_knowledge_path = get_project_knowledge_path()
+    if project_knowledge_path.exists():
+        content = clean_knowledge_text(project_knowledge_path.read_text(encoding="utf-8"))
     chunks = build_text_chunks(content) if content else []
     matching_chunks = [
         chunk for chunk in chunks
@@ -337,7 +337,7 @@ def insert_evaluation_result(run_id: str, result: dict[str, Any]) -> None:
 
 def run_evaluation_suite(suite_name: str = "default", mode: str = "offline") -> dict[str, Any]:
     if mode != EVALUATION_MODE:
-        raise ValueError("Live LLM evaluation is not supported in Version 1.8.")
+        raise ValueError("Live LLM evaluation is not supported in Version 1.9.")
     suite = load_evaluation_suite(suite_name)
     run_id = str(uuid4())
     started_at = utc_now()

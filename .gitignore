@@ -11,6 +11,9 @@ __pycache__/
 *.pyc
 node_modules/
 dist/
+runtime/
+backups/
+.env.production
 
 .venv/
 backend/.venv/

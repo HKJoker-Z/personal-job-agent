@@ -2,8 +2,8 @@ import React, { Component, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import "./styles.css";
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://101.34.61.52:8000";
-const APP_VERSION = "1.8.1";
+const API_BASE_URL = import.meta.env.DEV ? (import.meta.env.VITE_API_BASE_URL || "") : "";
+const APP_VERSION = "1.9";
 const APPLICATION_STATUSES = ["Saved", "Applied", "Interview", "Rejected", "Offer"];
 const NEXT_ACTION_DECISIONS = [
   { value: "accepted", label: "Accept Recommendation" },
@@ -2382,7 +2382,7 @@ function ProjectKnowledgePage() {
           <div className="detail-grid">
             <div>
               <span className="label">Path</span>
-              <p>{displayText(status.path, "docs/PROJECT_KNOWLEDGE.md")}</p>
+              <p>{displayText(status.path, "PROJECT_KNOWLEDGE.md")}</p>
             </div>
             <div>
               <span className="label">File</span>
@@ -2452,7 +2452,7 @@ function ProjectKnowledgePage() {
             <h2>Project Knowledge Index</h2>
           </div>
           <button type="button" onClick={handleRebuild} disabled={rebuilding}>
-            {rebuilding ? "Rebuilding..." : "Rebuild Index from docs/PROJECT_KNOWLEDGE.md"}
+            {rebuilding ? "Rebuilding..." : "Rebuild Project Knowledge Index"}
           </button>
         </div>
         {rebuildMessage && <div className="history-message">{rebuildMessage}</div>}
@@ -2620,7 +2620,7 @@ function App() {
       {activeTab === "knowledge" && <ProjectKnowledgePage />}
       {activeTab === "monitoring" && <MonitoringPage />}
 
-      <footer className="app-footer">API Base URL: {API_BASE_URL}</footer>
+      <footer className="app-footer">API: {API_BASE_URL || "same origin"}</footer>
     </main>
   );
 }
