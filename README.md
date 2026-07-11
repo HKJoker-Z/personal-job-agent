@@ -273,6 +273,8 @@ scripts/health-check.sh http://127.0.0.1:8080
 
 The backend has no host port. Nginx is the only published service and forwards same-origin `/api` requests internally. After changing `.env.production`, recreate the containers. Troubleshoot with `docker compose ps`, `docker compose logs --tail=200 backend frontend`, and `curl http://127.0.0.1:8080/api/health`. Read `docs/DEPLOYMENT.md` before Ubuntu deployment. Version 1.9 does not automatically configure cloud firewalls, DNS, HTTPS, or system services.
 
+On Linux hosts using Mihomo TUN, policy routing can capture Docker published-port return traffic even though port 8080 is listening correctly. The production Compose network uses the stable Linux bridge name `pja-br0`, and the optional systemd routing service bypasses TUN only for packets entering from `pja-br0` with TCP source port 8080. Backend port 8000 remains private, and other Backend HTTPS traffic keeps its existing routing policy. See [Client Proxy Troubleshooting](docs/CLIENT_PROXY_TROUBLESHOOTING.md) and [Deployment](docs/DEPLOYMENT.md). Never flush iptables or nftables as a workaround.
+
 ## Database
 
 SQLite database file:
@@ -699,6 +701,7 @@ Response:
 - Added SQLite-safe backup, verified restore, and explicit existing-data migration tooling.
 - Added GitHub Actions CI and semantic-tag GHCR image publishing configuration.
 - Added Ubuntu deployment, backup/restore, CI/CD, and production security documentation.
+- Added stable Docker bridge naming and an exact, restart-safe policy-routing service for Mihomo TUN compatibility without bypassing Backend HTTPS traffic.
 
 ## Version 1.8.1 Core Changes
 

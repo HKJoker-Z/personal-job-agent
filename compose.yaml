@@ -62,3 +62,5 @@ services:
 networks:
   application:
     driver: bridge
+    driver_opts:
+      com.docker.network.bridge.name: pja-br0

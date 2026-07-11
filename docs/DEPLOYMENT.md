@@ -26,6 +26,40 @@ The Version 1.9 browser entry point is `http://SERVER_IP:8080`. Nginx publishes 
 - Do not expose Vite port 5173; it is only used by the development workflow.
 - Verify the entry point with `curl http://127.0.0.1:8080/api/health` and `curl http://SERVER_IP:8080/api/health`.
 
+## Mihomo TUN and Docker Return Routing
+
+Mihomo TUN policy routing may capture the SYN-ACK return path for a Docker published port. In that failure mode, the host listens on `0.0.0.0:8080` and localhost succeeds, but a remote client never completes the TCP handshake because the Frontend response is sent to the TUN routing table instead of the main table.
+
+The Compose `application` network has the stable Linux bridge name `pja-br0`. Stable naming is required because Docker's default `br-<network-id>` interface changes when the Compose network is recreated. The project routing rule is deliberately narrow:
+
+```text
+pref 8999 iif pja-br0 ipproto tcp sport 8080 lookup main
+```
+
+This selects the main IPv4 routing table only for Frontend TCP responses sourced from port 8080. It does not bypass TUN for all Docker traffic, does not publish Backend port 8000, and does not change iptables, nftables, sysctl, the default route, or Mihomo configuration. Backend HTTPS traffic, including DeepSeek access, retains the host's existing policy routing.
+
+The repository provides `scripts/configure-production-routing.sh` with `install`, `remove`, and `status` commands. Install it at the absolute path referenced by the unit, then install the unit:
+
+```bash
+sudo install -Dm0755 scripts/configure-production-routing.sh \
+  /usr/local/libexec/personal-job-agent/configure-production-routing.sh
+sudo install -Dm0644 deploy/systemd/personal-job-agent-routing.service \
+  /etc/systemd/system/personal-job-agent-routing.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now personal-job-agent-routing.service
+```
+
+The service waits up to 120 seconds for `pja-br0`; `TimeoutStartSec` is longer than that wait and `Restart=on-failure` retries a late Docker network. `PJA_ROUTING_WAIT_SECONDS` may be set to an integer from 1 through 600, although the production unit intentionally uses 120. Check it with:
+
+```bash
+sudo /usr/local/libexec/personal-job-agent/configure-production-routing.sh status
+systemctl is-enabled personal-job-agent-routing.service
+systemctl is-active personal-job-agent-routing.service
+ip -4 rule show
+```
+
+Do not enable the service until the Compose network has been migrated to `pja-br0`. Network migration recreates containers and the Compose network, so create a verified runtime backup first and use `docker compose down` without `-v`. Never use `down -v`, delete bind-mounted runtime directories, or flush iptables/nftables to troubleshoot this condition. See [Client Proxy Troubleshooting](CLIENT_PROXY_TROUBLESHOOTING.md) for diagnosis and rollback guidance.
+
 ## Environment Configuration
 
 Copy `.env.production.example` to an ignored `.env.production` and set values on the deployment host. Production requires a non-empty `DEEPSEEK_API_KEY` and explicit `TRUSTED_HOSTS`. `ALLOWED_ORIGINS` may be empty for same-origin operation but cannot contain `*`. API docs default to disabled.
@@ -99,6 +133,8 @@ Use `docker compose -f compose.yaml -f compose.prod.yaml ps` and `docker compose
 ## Updates and Rollback Guidance
 
 Create a verified backup before every update. Pull or build the intended version, run Compose config validation, start it, then check readiness. If an update fails, select the previous image tag or source commit and restart it manually. Do not delete runtime directories or volumes. Deployment scripts do not guarantee zero downtime or complete automatic rollback.
+
+When rolling back the stable bridge migration, do not assume the regenerated dynamic bridge has its old name. Inspect the current Compose network ID, derive the actual `br-<network-id>` interface, and apply only the exact TCP source-port 8080 return-routing rule. Preserve a verified `pja-br0` pref 8998 rule if permanent unit installation fails, and stop before removing the last working return-path rule.
 
 ## Firewall and HTTPS Guidance
 

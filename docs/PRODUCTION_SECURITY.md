@@ -12,5 +12,8 @@ Version 1.9 applies practical hardening for the current single-instance deployme
 - Monitoring destructive APIs remain disabled without an admin token and remote destructive access remains disabled by default.
 - SQLite and backup directories should be readable only by the deployment operator and container UID 10001.
 - Images should be rebuilt regularly from maintained base images and reviewed before promotion.
+- The production Compose network uses the stable bridge `pja-br0`; the routing service matches only IPv4 packets entering that bridge with TCP source port 8080 and sends those responses to the main routing table.
+- Backend port 8000 remains unpublished, while Backend HTTPS egress retains the existing host policy and may continue through Mihomo TUN.
+- The routing service does not alter iptables, nftables, sysctl, the default route, or Mihomo configuration. Never flush firewall rule sets as a published-port troubleshooting workaround.
 
 Public deployments should use HTTPS through a protected reverse proxy. Backups must be stored with restricted permissions and tested for restoration. These controls do not constitute a security certification, penetration-test certification, SOC 2, ISO 27001, or perfect prompt-injection prevention.

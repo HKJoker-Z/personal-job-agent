@@ -259,6 +259,9 @@ Resume bullets:
 - Added GitHub Actions CI.
 - Added GHCR image publishing configuration.
 - Added Ubuntu deployment and production-security documentation.
+- Added the stable `pja-br0` Docker application bridge so Compose network recreation does not invalidate host policy routing.
+- Added an idempotent systemd oneshot service that routes only Frontend TCP source-port 8080 responses through the main IPv4 table when Mihomo TUN would otherwise capture Docker published-port return traffic.
+- Preserved private Backend port 8000 exposure and existing Mihomo routing for Backend HTTPS and DeepSeek access.
 
 Skills demonstrated:
 
@@ -283,6 +286,7 @@ Resume bullets:
 - Containerized a React and FastAPI AI application with Docker Compose and Nginx, implementing persistent SQLite storage, Project Knowledge persistence, health checks, and production configuration validation.
 - Built GitHub Actions pipelines for Python regression tests, React production builds, Docker image validation, Compose configuration checks, and versioned GHCR image publishing.
 - Developed safe deployment, SQLite backup, restore, and existing-data migration workflows for repeatable Ubuntu server operations.
+- Diagnosed and fixed asymmetric Docker published-port return routing under Mihomo TUN with stable bridge naming and a least-scope, restart-safe IPv4 policy rule.
 
 ## 3. Technical Stack
 

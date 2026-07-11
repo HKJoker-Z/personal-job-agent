@@ -5,6 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PROJECT_NAME="pja-v19-smoke"
 TEMP_ROOT="$(mktemp -d -t pja-v19-smoke-XXXXXX)"
 ENV_FILE="${TEMP_ROOT}/smoke.env"
+COMPOSE_OVERRIDE="${TEMP_ROOT}/compose.override.yaml"
 APP_DATA_DIR="${TEMP_ROOT}/data"
 PROJECT_KNOWLEDGE_DIR="${TEMP_ROOT}/project-knowledge"
 BACKUP_DIR="${TEMP_ROOT}/backups"
@@ -36,8 +37,24 @@ fi
 } > "${ENV_FILE}"
 chmod 0600 "${ENV_FILE}"
 
+# The production network owns pja-br0. Give this isolated smoke project a
+# separate bridge so it can run safely on a production host.
+printf '%s\n' \
+  'networks:' \
+  '  application:' \
+  '    driver_opts:' \
+  '      com.docker.network.bridge.name: pja-smoke-br0' \
+  >"${COMPOSE_OVERRIDE}"
+
 export APP_ENV_FILE="${ENV_FILE}" APP_DATA_DIR PROJECT_KNOWLEDGE_DIR BACKUP_DIR PUBLIC_HTTP_PORT
-compose=(docker compose --project-directory "${ROOT_DIR}" --env-file "${ENV_FILE}" -p "${PROJECT_NAME}")
+compose=(
+  docker compose
+  --project-directory "${ROOT_DIR}"
+  --env-file "${ENV_FILE}"
+  -p "${PROJECT_NAME}"
+  -f "${ROOT_DIR}/compose.yaml"
+  -f "${COMPOSE_OVERRIDE}"
+)
 
 cleanup() {
   "${compose[@]}" down --remove-orphans >/dev/null 2>&1 || true
