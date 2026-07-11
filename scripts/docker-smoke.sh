@@ -103,7 +103,12 @@ python3 -c 'import json,sys; data=json.loads(sys.argv[1]); assert data["exists"]
 wait_ready
 request GET "/api/evaluations/runs/${run_id}" >/dev/null
 request GET /api/project-knowledge/status >/dev/null
-test -s "${APP_DATA_DIR}/app.db"
-test -s "${PROJECT_KNOWLEDGE_DIR}/PROJECT_KNOWLEDGE.md"
+if [[ "${EUID}" -eq 0 ]]; then
+  test -s "${APP_DATA_DIR}/app.db"
+  test -s "${PROJECT_KNOWLEDGE_DIR}/PROJECT_KNOWLEDGE.md"
+else
+  sudo test -s "${APP_DATA_DIR}/app.db"
+  sudo test -s "${PROJECT_KNOWLEDGE_DIR}/PROJECT_KNOWLEDGE.md"
+fi
 
 printf '%s\n' 'Independent Docker smoke and persistence checks passed.'
