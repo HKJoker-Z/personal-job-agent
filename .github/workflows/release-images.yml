@@ -14,7 +14,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       APP_ENV: test
-      APP_DATABASE_PATH: ${{ runner.temp }}/release-validation.db
+      APP_DATABASE_PATH: /tmp/personal-job-agent-release-validation.db
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

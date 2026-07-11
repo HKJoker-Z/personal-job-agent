@@ -21,7 +21,7 @@ jobs:
         working-directory: backend
     env:
       APP_ENV: test
-      APP_DATABASE_PATH: ${{ runner.temp }}/personal-job-agent-ci.db
+      APP_DATABASE_PATH: /tmp/personal-job-agent-ci.db
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
