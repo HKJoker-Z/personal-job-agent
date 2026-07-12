@@ -13,12 +13,14 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, File, Form, Header, HTTPException, Query, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from openai import OpenAI
 from pydantic import BaseModel
 from pypdf import PdfReader
 
 from agent_workflow import AgentWorkflow, WorkflowContext
+from config import APP_VERSION, load_config
 from database import (
     ALLOWED_APPLICATION_STATUSES,
     ALLOWED_KNOWLEDGE_CATEGORIES,
@@ -91,29 +93,34 @@ from evaluation_service import (
     list_evaluation_runs,
     run_evaluation_suite,
 )
+from logging_utils import RequestLoggingMiddleware, configure_logging
+from project_knowledge_runtime import (
+    PROJECT_KNOWLEDGE_LOGICAL_NAME,
+    get_project_knowledge_path,
+    initialize_project_knowledge,
+)
+from readiness import readiness_status
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 load_dotenv(ROOT_DIR / ".env")
+settings = load_config()
 
 APP_NAME = "personal-job-agent"
-APP_VERSION = "1.8.1"
 DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 DEEPSEEK_MODEL = "deepseek-chat"
 MAX_RESUME_TEXT_CHARS = 18000
 MAX_JOB_TEXT_CHARS = 12000
-PROJECT_KNOWLEDGE_RELATIVE_PATH = Path("docs") / "PROJECT_KNOWLEDGE.md"
-PROJECT_KNOWLEDGE_PATH = ROOT_DIR / PROJECT_KNOWLEDGE_RELATIVE_PATH
-PROJECT_KNOWLEDGE_SOURCE_PATH = "docs/PROJECT_KNOWLEDGE.md"
+PROJECT_KNOWLEDGE_SOURCE_PATH = PROJECT_KNOWLEDGE_LOGICAL_NAME
+LEGACY_PROJECT_KNOWLEDGE_SOURCE_PATH = "docs/PROJECT_KNOWLEDGE.md"
 PROJECT_KNOWLEDGE_TITLE = "Personal Job Application Agent Project Knowledge"
 PROJECT_KNOWLEDGE_CATEGORY = "Other"
-PROJECT_KNOWLEDGE_MAX_UPLOAD_BYTES = 2 * 1024 * 1024
+PROJECT_KNOWLEDGE_MAX_UPLOAD_BYTES = settings.max_upload_size_bytes
 GENERIC_KNOWLEDGE_DISABLED_DETAIL = (
-    "Generic knowledge base upload is disabled in v1.8. "
+    "Generic knowledge base upload is disabled in v1.9. "
     "Use Project Knowledge RAG instead."
 )
-MAX_RESUME_UPLOAD_BYTES = 8 * 1024 * 1024
+MAX_RESUME_UPLOAD_BYTES = settings.max_upload_size_bytes
 JOB_URL_TIMEOUT_SECONDS = 10
-DEEPSEEK_TIMEOUT_SECONDS = 60
 SCORING_DIMENSIONS = (
     "skills_match",
     "project_experience",
@@ -234,13 +241,18 @@ SKILL_SYNONYM_GROUPS: dict[str, tuple[str, ...]] = {
     ),
 }
 
-logging.basicConfig(
-    level=os.getenv("LOG_LEVEL", "INFO"),
-    format="%(asctime)s %(levelname)s %(name)s %(message)s",
-)
+configure_logging(settings.log_level)
 logger = logging.getLogger(APP_NAME)
 
-app = FastAPI(title="Personal Job Application Agent API", version=APP_VERSION)
+app = FastAPI(
+    title="Personal Job Application Agent API",
+    version=APP_VERSION,
+    docs_url="/docs" if settings.enable_api_docs else None,
+    redoc_url="/redoc" if settings.enable_api_docs else None,
+    openapi_url="/openapi.json" if settings.enable_api_docs else None,
+    debug=False,
+)
+initialize_project_knowledge(settings)
 init_db()
 logger.info("SQLite database initialized")
 
@@ -282,24 +294,24 @@ class EvaluationDataManagementRequest(BaseModel):
     statuses: list[str] = []
     confirmation: str | None = None
 
-allowed_origins = [
-    "http://localhost:5173",
-    "http://127.0.0.1:5173",
-    "http://101.34.61.52:5173",
-]
-
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=allowed_origins,
+    allow_origins=list(settings.allowed_origins),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
     expose_headers=["Content-Disposition"],
 )
+if settings.app_env == "production":
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=list(settings.trusted_hosts))
+app.add_middleware(RequestLoggingMiddleware, logger=logger)
 
 
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:
+    detail = exc.detail if isinstance(exc.detail, dict) else {}
+    request.state.error_code = detail.get("error_code", "HTTP_ERROR")
+    request.state.error_stage = detail.get("error_stage", "")
     logger.warning(
         "Request failed path=%s status_code=%s error_type=HTTPException",
         request.url.path,
@@ -313,6 +325,7 @@ async def validation_exception_handler(
     request: Request,
     exc: RequestValidationError,
 ) -> JSONResponse:
+    request.state.error_code = "REQUEST_VALIDATION_FAILED"
     logger.warning(
         "Request validation failed path=%s error_type=%s",
         request.url.path,
@@ -326,6 +339,7 @@ async def validation_exception_handler(
 
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    request.state.error_code = "UNEXPECTED_SERVER_ERROR"
     logger.error(
         "Unhandled server error path=%s error_type=%s",
         request.url.path,
@@ -364,7 +378,10 @@ async def extract_resume_text(resume: UploadFile) -> str:
         raise HTTPException(status_code=400, detail="Uploaded resume file is empty.")
     if len(file_bytes) > MAX_RESUME_UPLOAD_BYTES:
         logger.warning("Resume parsing failed error_type=FileTooLarge")
-        raise HTTPException(status_code=400, detail="Resume file is too large. Maximum size is 8 MB.")
+        raise HTTPException(
+            status_code=400,
+            detail=f"Resume file is too large. Maximum size is {settings.max_upload_size_mb} MB.",
+        )
 
     try:
         if filename.endswith(".pdf"):
@@ -884,7 +901,8 @@ def call_deepseek_raw(
     rag_chunks: list[dict[str, Any]] | None = None,
     analysis_prompt: str | None = None,
 ) -> str:
-    api_key = os.getenv("DEEPSEEK_API_KEY")
+    runtime_settings = load_config(validate_production=False)
+    api_key = runtime_settings.deepseek_api_key
     if not api_key:
         logger.error("DeepSeek configuration failed error_type=MissingApiKey")
         raise HTTPException(
@@ -895,7 +913,7 @@ def call_deepseek_raw(
     client = OpenAI(
         api_key=api_key,
         base_url=DEEPSEEK_BASE_URL,
-        timeout=DEEPSEEK_TIMEOUT_SECONDS,
+        timeout=runtime_settings.request_timeout_seconds,
     )
 
     try:
@@ -1119,11 +1137,17 @@ def attachment_headers(filename: str) -> dict[str, str]:
 
 
 def project_knowledge_status_data() -> dict[str, Any]:
-    exists = PROJECT_KNOWLEDGE_PATH.is_file()
+    knowledge_path = get_project_knowledge_path()
+    exists = knowledge_path.is_file()
     document = find_project_knowledge_document(
         title=PROJECT_KNOWLEDGE_TITLE,
         source_filename=PROJECT_KNOWLEDGE_SOURCE_PATH,
     )
+    if document is None:
+        document = find_project_knowledge_document(
+            title=PROJECT_KNOWLEDGE_TITLE,
+            source_filename=LEGACY_PROJECT_KNOWLEDGE_SOURCE_PATH,
+        )
 
     if not exists:
         return {
@@ -1146,14 +1170,15 @@ def project_knowledge_status_data() -> dict[str, Any]:
 
 
 def rebuild_project_knowledge_index() -> dict[str, Any]:
-    if not PROJECT_KNOWLEDGE_PATH.is_file():
+    knowledge_path = get_project_knowledge_path()
+    if not knowledge_path.is_file():
         raise HTTPException(
             status_code=404,
             detail=f"Project Knowledge file not found at {PROJECT_KNOWLEDGE_SOURCE_PATH}.",
         )
 
     try:
-        raw_text = PROJECT_KNOWLEDGE_PATH.read_text(encoding="utf-8")
+        raw_text = knowledge_path.read_text(encoding="utf-8")
     except UnicodeDecodeError as exc:
         raise HTTPException(
             status_code=400,
@@ -1171,10 +1196,20 @@ def rebuild_project_knowledge_index() -> dict[str, Any]:
     if not chunks:
         raise HTTPException(status_code=400, detail="Project Knowledge content is empty.")
 
+    existing = project_knowledge_status_data()
+    database_source = (
+        LEGACY_PROJECT_KNOWLEDGE_SOURCE_PATH
+        if existing.get("document_id")
+        and find_project_knowledge_document(
+            title=PROJECT_KNOWLEDGE_TITLE,
+            source_filename=LEGACY_PROJECT_KNOWLEDGE_SOURCE_PATH,
+        )
+        else PROJECT_KNOWLEDGE_SOURCE_PATH
+    )
     result = rebuild_project_knowledge_document(
         title=PROJECT_KNOWLEDGE_TITLE,
         category=PROJECT_KNOWLEDGE_CATEGORY,
-        source_filename=PROJECT_KNOWLEDGE_SOURCE_PATH,
+        source_filename=database_source,
         content=content,
         chunks=chunks,
     )
@@ -1241,7 +1276,7 @@ def decode_project_knowledge_upload(file_bytes: bytes) -> str:
     if len(file_bytes) > PROJECT_KNOWLEDGE_MAX_UPLOAD_BYTES:
         raise HTTPException(
             status_code=400,
-            detail="Project Knowledge file is too large. Maximum size is 2 MB.",
+            detail=f"Project Knowledge file is too large. Maximum size is {settings.max_upload_size_mb} MB.",
         )
 
     try:
@@ -1254,11 +1289,12 @@ def decode_project_knowledge_upload(file_bytes: bytes) -> str:
 
 
 def write_project_knowledge_file(content: str) -> None:
-    PROJECT_KNOWLEDGE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = PROJECT_KNOWLEDGE_PATH.with_name(".PROJECT_KNOWLEDGE.md.tmp")
+    knowledge_path = get_project_knowledge_path()
+    knowledge_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = knowledge_path.with_name(".PROJECT_KNOWLEDGE.md.tmp")
     try:
         tmp_path.write_text(content, encoding="utf-8")
-        os.replace(tmp_path, PROJECT_KNOWLEDGE_PATH)
+        os.replace(tmp_path, knowledge_path)
     finally:
         if tmp_path.exists():
             tmp_path.unlink()
@@ -1421,6 +1457,7 @@ def fail_analysis_and_raise(
                 "message": message,
                 "workflow_id": context.workflow_id,
                 "error_code": error_code,
+                "error_stage": step_key,
             },
         ) from exc
     raise exc
@@ -1428,17 +1465,25 @@ def fail_analysis_and_raise(
 
 @app.get("/")
 def root() -> dict[str, str]:
-    return {
+    response = {
         "message": "Personal Job Application Agent API",
         "version": APP_VERSION,
-        "docs": "/docs",
         "health": "/api/health",
     }
+    if settings.enable_api_docs:
+        response["docs"] = "/docs"
+    return response
 
 
 @app.get("/api/health")
 def health_check() -> dict[str, str]:
     return {"status": "ok", "service": APP_NAME, "version": APP_VERSION}
+
+
+@app.get("/api/ready")
+def readiness_check() -> JSONResponse:
+    payload, status_code = readiness_status()
+    return JSONResponse(status_code=status_code, content=payload)
 
 
 @app.get("/api/security/policy")
@@ -1611,7 +1656,7 @@ def post_evaluation_run(payload: EvaluationRunRequest) -> dict[str, Any]:
     if payload.mode != "offline":
         raise HTTPException(
             status_code=400,
-            detail="Live LLM evaluation is not supported in Version 1.8.",
+            detail="Live LLM evaluation is not supported in Version 1.9.",
         )
     try:
         return run_evaluation_suite(payload.suite_name, payload.mode)
@@ -1833,6 +1878,7 @@ def delete_application(application_id: int) -> dict[str, Any]:
 
 @app.post("/api/analyze")
 async def analyze(
+    request: Request,
     resume: UploadFile | None = File(None),
     job_text: str | None = Form(None),
     job_url: str | None = Form(None),
@@ -1844,6 +1890,7 @@ async def analyze(
     logger.info("Received analysis request")
     workflow = AgentWorkflow()
     context = WorkflowContext(workflow_id=workflow.workflow_id)
+    request.state.workflow_id = workflow.workflow_id
 
     workflow.start_step("validate_input", "Validate Input")
     try:
@@ -1862,7 +1909,7 @@ async def analyze(
             logger.warning("Analyze request rejected error_type=ResumeTooLarge")
             raise HTTPException(
                 status_code=400,
-                detail="Resume file is too large. Maximum size is 8 MB.",
+                detail=f"Resume file is too large. Maximum size is {settings.max_upload_size_mb} MB.",
             )
 
         clean_job_text = (job_text or "").strip()

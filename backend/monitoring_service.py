@@ -11,7 +11,7 @@ from database import get_connection
 from security_utils import normalized_security_scan
 
 
-MONITORING_VERSION = "1.8.1"
+MONITORING_VERSION = "1.9"
 OUTCOMES = ("completed", "completed_with_warnings", "failed", "blocked")
 RECOMMENDATION_ACTIONS = (
     "apply_now",

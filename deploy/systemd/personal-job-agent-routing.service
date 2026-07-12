@@ -1,0 +1,19 @@
+[Unit]
+Description=Personal Job Agent production frontend policy routing
+Requires=docker.service
+Wants=network-online.target
+After=docker.service network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+Environment=PJA_ROUTING_WAIT_SECONDS=120
+ExecStart=/usr/local/libexec/personal-job-agent/configure-production-routing.sh install
+ExecStop=/usr/local/libexec/personal-job-agent/configure-production-routing.sh remove
+TimeoutStartSec=180
+TimeoutStopSec=30
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

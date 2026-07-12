@@ -1,5 +1,4 @@
 import json
-import os
 import re
 import sqlite3
 from datetime import datetime, timezone
@@ -7,11 +6,14 @@ from pathlib import Path
 from typing import Any
 
 from security_utils import normalized_security_scan
+from config import (
+    BACKEND_DIR,
+    DEFAULT_DEVELOPMENT_DATABASE_PATH,
+    load_config,
+)
 
 
-BACKEND_DIR = Path(__file__).resolve().parent
-DEFAULT_DATABASE_PATH = (BACKEND_DIR / "data" / "app.db").resolve(strict=False)
-ALLOWED_APP_ENVS = ("development", "production", "test")
+DEFAULT_DATABASE_PATH = DEFAULT_DEVELOPMENT_DATABASE_PATH
 
 ALLOWED_APPLICATION_STATUSES = ("Saved", "Applied", "Interview", "Rejected", "Offer")
 ALLOWED_NEXT_ACTION_DECISIONS = ("pending", "accepted", "dismissed", "completed")
@@ -45,21 +47,12 @@ def utc_now() -> str:
 
 def get_app_env() -> str:
     """Return the supported runtime environment without caching environment state."""
-    app_env = os.getenv("APP_ENV", "development").strip().lower() or "development"
-    if app_env not in ALLOWED_APP_ENVS:
-        raise RuntimeError("APP_ENV must be development, production, or test.")
-    return app_env
+    return load_config(validate_production=False).app_env
 
 
 def get_database_path() -> Path:
     """Resolve the configured SQLite database path relative to this module when needed."""
-    configured_path = os.getenv("APP_DATABASE_PATH", "").strip()
-    if not configured_path:
-        return DEFAULT_DATABASE_PATH
-    path = Path(configured_path).expanduser()
-    if not path.is_absolute():
-        path = BACKEND_DIR / path
-    return path.resolve(strict=False)
+    return load_config(validate_production=False).database_path
 
 
 def is_default_application_database(path: Path) -> bool:
