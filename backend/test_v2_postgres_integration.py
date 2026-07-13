@@ -2,16 +2,22 @@ import os
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+from uuid import UUID
 
 import psycopg
 from alembic import command
 from alembic.config import Config
+from sqlalchemy import select, text
+from sqlalchemy.exc import IntegrityError
 
 import database
 from app.auth.service import AuthService
 from app.core.config import load_v2_settings
 from app.db.engine import build_engine
 from app.db.session import session_factory
+from app.db.models import Application, ApplicationStageHistory, Job
+from app.jobs.service import JobService
+from app.applications.service import ApplicationConflict, ApplicationService
 from app.migration.postgres_writer import PostgreSQLV1Writer
 from app.migration.sqlite_reader import SQLiteV1Reader
 from data_management_service import delete_monitoring_data, preview_monitoring_deletion
@@ -125,6 +131,62 @@ class V2PostgreSQLIntegrationTest(unittest.TestCase):
                         resume_filename=None,
                     )
         self.assertGreater(new_id, migrated_id)
+
+    def test_job_application_constraints_partial_uniqueness_and_stage_history(self):
+        owner = self.create_owner()
+        db = session_factory(self.database_url)()
+        try:
+            first = JobService(db, owner.id).create({
+                "company_name": "Synthetic PostgreSQL Company",
+                "title": "Platform Engineer",
+                "location": "Test Region",
+                "description": "Python and PostgreSQL are required.",
+                "source_type": "manual",
+            })["job"]
+            job_id = UUID(first["id"])
+            application = ApplicationService(db, owner.id).create({"job_id": job_id})["application"]
+            with self.assertRaises(ApplicationConflict):
+                ApplicationService(db, owner.id).create({"job_id": job_id})
+            ApplicationService(db, owner.id).archive(UUID(application["id"]), application["revision"])
+            replacement = ApplicationService(db, owner.id).create({"job_id": job_id})["application"]
+            replacement_id = UUID(replacement["id"])
+            transitioned = ApplicationService(db, owner.id).transition(
+                replacement_id, "preparing", replacement["revision"], "PostgreSQL test", "", None
+            )["application"]
+            self.assertEqual(transitioned["current_stage"], "preparing")
+            db.commit()
+            histories = list(db.scalars(select(ApplicationStageHistory).where(
+                ApplicationStageHistory.application_id == replacement_id
+            )))
+            self.assertEqual(len(histories), 2)
+            indexes = db.execute(
+                text("SELECT 1 FROM pg_indexes WHERE indexname = 'uq_applications_owner_job_active'")
+            ).all()
+            self.assertTrue(indexes)
+            bad = Job(
+                owner_user_id=owner.id, company_name="Bad", normalized_company_name="bad",
+                title="Bad", normalized_title="bad", location="", normalized_location="",
+                description="bad", description_text_hash="0" * 64, source_type="manual",
+                status="new", deduplication_key="1" * 64, salary_min=-1,
+            )
+            db.add(bad)
+            with self.assertRaises(IntegrityError):
+                db.flush()
+            db.rollback()
+        finally:
+            db.close()
+
+    def test_version_201_schema_downgrade_and_upgrade_preserves_foundation(self):
+        owner = self.create_owner()
+        config = Config(str(Path(__file__).parent / "alembic.ini"))
+        command.downgrade(config, "20260712_01")
+        raw_url = self.database_url.replace("postgresql+psycopg://", "postgresql://", 1)
+        with psycopg.connect(raw_url) as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM users WHERE id = %s", (owner.id,)).fetchone()[0], 1)
+            self.assertIsNone(connection.execute("SELECT to_regclass('public.jobs')").fetchone()[0])
+        command.upgrade(config, "head")
+        with psycopg.connect(raw_url) as connection:
+            self.assertEqual(connection.execute("SELECT to_regclass('public.jobs')").fetchone()[0], "jobs")
 
 
 if __name__ == "__main__":
