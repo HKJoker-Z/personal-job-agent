@@ -27,7 +27,7 @@ class V2DatabaseMigrationTest(unittest.TestCase):
                 engine = build_engine(os.environ["TEST_DATABASE_URL"])
                 with engine.connect() as connection:
                     current = MigrationContext.configure(connection).get_current_revision()
-                self.assertEqual(current, "20260712_01")
+                self.assertEqual(current, "20260713_02")
                 command.check(config)
                 engine.dispose()
                 build_engine.cache_clear()

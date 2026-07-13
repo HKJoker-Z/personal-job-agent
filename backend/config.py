@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
-APP_VERSION = "2.0.0-alpha.1"
+APP_VERSION = "2.0.0-alpha.2"
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 BACKEND_DIR = Path(__file__).resolve().parent
 DEFAULT_DEVELOPMENT_DATABASE_PATH = (BACKEND_DIR / "data" / "app.db").resolve(strict=False)

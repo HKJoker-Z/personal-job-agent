@@ -16,7 +16,7 @@ from app.db.models import User
 from app.db.session import session_factory
 
 
-ALEMBIC_HEAD = "20260712_01"
+ALEMBIC_HEAD = "20260713_02"
 REQUIRED_TABLES = {
     "users",
     "user_sessions",
