@@ -2,7 +2,9 @@
 
 Latest stable release: v1.9.0
 
-Development runtime version: 2.0.0-alpha.2
+Latest prerelease: v2.0.0-alpha.2
+
+Development runtime version: 2.0.0-alpha.3
 
 Personal Job Application Agent is a local-first, full-stack AI job application assistant. It parses a PDF or DOCX resume, accepts pasted job description text or one user-provided job URL, applies deterministic AI security checks, uses the DeepSeek API to generate explainable Resume-JD matching results, retrieves evidence from a curated Project Knowledge RAG source, creates an English cover letter, recommends the next application action, tracks saved applications in SQLite, records local AI monitoring metadata, runs offline behavioral evaluations, and exports application materials as DOCX/PDF files.
 
@@ -10,7 +12,7 @@ Version 1.9 adds containerized deployment, persistent runtime storage, productio
 
 ## Version 2 development milestones
 
-Version 2.0.1 is the identity/PostgreSQL/Profile/Resume foundation in open PR #6. Version 2.0.2 is the current stacked milestone for Job Library, Application Pipeline, Tasks, and the Job Search Dashboard. The Version 2.0.2 PR is based on `version-2.0-phase-1-foundation`, cannot be merged independently to `main`, and must be retargeted and revalidated after PR #6 is merged.
+Version 2.0.1 and Version 2.0.2 are included in the published `v2.0.0-alpha.2` prerelease. Version 2.0.3 is the current development milestone for deterministic explainable matching, reproducible Job ranking, and evidence-grounded Application Materials. The final formal release remains planned as `v2.0.0`.
 
 Version 2.0.2 adds:
 
@@ -34,9 +36,11 @@ The foundation from Version 2.0.1 remains intact:
 - PostgreSQL/private-file backup, manifest verification, guarded empty-target restore, and isolated Docker Smoke coverage
 - Authenticated React routes, in-memory CSRF handling, Profile, Resume, Import, and Account pages around the preserved workspace
 
-Neither Version 2.0.1 nor Version 2.0.2 has been deployed to the live Version 1.9 runtime. Version 2.0.2 does not implement Job/Profile matching scores, tailored resumes, cover letters, Workers, notifications, automatic applications, or production rollout. It does not modify the production database, `pja-br0`, or the pref 8999 routing rule.
+Version 2.0.3 adds deterministic 0–100 dimension scoring, separately reported hard filters, immutable Match snapshots, reproducible ranking, Application Packages, Tailored Resume/Cover Letter/Application Answer Drafts, immutable Material Versions, evidence links, independent fact validation, and explicit review/finalization gates. An LLM may only rewrite the local grounded Draft; it never decides numeric scores, and all tests use a deterministic or Mock provider. Unknown evidence is distinct from confirmed missing evidence, and the score is not an Offer probability.
 
-Start with [Version 2 roadmap](docs/V2_ROADMAP.md), [Version 2.0.2 architecture](docs/V2_0_2_ARCHITECTURE.md), [Job Library](docs/V2_JOB_LIBRARY.md), [Job import security](docs/V2_JOB_IMPORT_SECURITY.md), [Application Pipeline](docs/V2_APPLICATION_PIPELINE.md), and [development guide](docs/V2_DEVELOPMENT.md).
+No Version 2 build is deployed to the live Version 1.9 runtime. Alpha 3 does not implement Workers, queues, schedulers, automatic applications, email sending, interview tools, or production migration. Generated Materials remain Drafts until explicit user review; Tailored Resume generation never changes the source Resume.
+
+Start with [Version 2 roadmap](docs/V2_ROADMAP.md), [Version 2.0.3 architecture](docs/V2_0_3_ARCHITECTURE.md), [matching engine](docs/V2_MATCHING_ENGINE.md), [fact grounding](docs/V2_FACT_GROUNDING.md), [Application Packages](docs/V2_APPLICATION_PACKAGES.md), and [development guide](docs/V2_DEVELOPMENT.md).
 
 Useful development checks:
 
@@ -48,7 +52,7 @@ npm ci
 npm run test
 npm run build
 cd ..
-PJA_SMOKE_MILESTONE=2.0.2 PYTHON_BIN="$(command -v python)" scripts/docker-smoke-v2.sh
+PJA_SMOKE_MILESTONE=2.0.3 PYTHON_BIN="$(command -v python)" scripts/docker-smoke-v2.sh
 ```
 
 ## Core Features
