@@ -2,7 +2,7 @@ import React, { Component, useEffect, useState } from "react";
 import { apiFetch } from "./api/client";
 
 const API_BASE_URL = import.meta.env.DEV ? (import.meta.env.VITE_API_BASE_URL || "") : "";
-const APP_VERSION = "2.0.0-alpha.1";
+const APP_VERSION = "2.0.0-alpha.2";
 const APPLICATION_STATUSES = ["Saved", "Applied", "Interview", "Rejected", "Offer"];
 const NEXT_ACTION_DECISIONS = [
   { value: "accepted", label: "Accept Recommendation" },
@@ -2556,8 +2556,10 @@ class ErrorBoundary extends Component {
   }
 }
 
-export function LegacyWorkspace() {
-  const [activeTab, setActiveTab] = useState("analyze");
+export function LegacyWorkspace({ initialTab = "analyze" }) {
+  const [activeTab, setActiveTab] = useState(initialTab);
+
+  useEffect(() => { setActiveTab(initialTab); }, [initialTab]);
 
   return (
     <main className="app-shell">
