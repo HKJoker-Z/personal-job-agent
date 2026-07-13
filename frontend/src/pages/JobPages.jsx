@@ -41,6 +41,33 @@ const blankManual = {
   salary_currency: "", salary_period: "", application_deadline: "", status: "new",
 };
 
+function MatchPanel({ jobId }) {
+  const [match, setMatch] = useState(null);
+  const [history, setHistory] = useState([]);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const run = async (forceNew = false) => {
+    setBusy(true); setError("");
+    try { setMatch(await apiJson(`/api/jobs/${jobId}/match`, { method: "POST", body: { force_new: forceNew } })); }
+    catch (value) { setError(value.message); }
+    finally { setBusy(false); }
+  };
+  const loadHistory = async () => {
+    try { setHistory(await apiJson(`/api/jobs/${jobId}/matches`)); }
+    catch (value) { setError(value.message); }
+  };
+  return <section className="match-panel" aria-label="Explainable Job Match">
+    <div className="section-heading"><div><h3>Explainable Match</h3><p className="muted">A deterministic score based only on confirmed facts. It is not an Offer probability.</p></div><div className="button-row"><button disabled={busy} onClick={() => run(false)}>{busy ? "Matching…" : "Run Match"}</button>{match ? <button disabled={busy} onClick={() => run(true)}>Re-run Match</button> : null}<button onClick={loadHistory}>Match History</button></div></div>
+    <ErrorMessage value={error} />
+    {!match ? <p className="empty-state">Run Match to see evidence, gaps, unknowns, and hard-filter risks.</p> : <>
+      <div className="metric-grid match-summary"><article className="metric-card"><span>Overall Score</span><strong>{Math.round(match.overall_score)}</strong><small>out of 100</small></article><article className="metric-card"><span>Hard Filter</span><strong className="text-value">{match.hard_filter_status}</strong></article><article className="metric-card"><span>Recommendation</span><strong className="text-value">{match.recommendation.replaceAll("_", " ")}</strong></article><article className="metric-card"><span>Preparation</span><strong className="text-value">{match.preparation_effort}</strong></article></div>
+      <h4>Dimension Breakdown</h4><div className="dimension-grid">{match.dimensions.map((item) => <article className="resource-card" key={item.dimension}><strong>{item.dimension.replaceAll("_", " ")}</strong><span className="status-badge">{item.status}</span><p>{item.weighted_score} / {item.max_score}</p><small>{item.explanation}</small></article>)}</div>
+      <div className="evidence-columns"><article><h4>Matched Evidence</h4><ul>{match.evidence.filter((item) => item.evidence_kind === "matched").map((item) => <li key={item.id}>{item.dimension}: {item.evidence_summary}</li>)}</ul></article><article><h4>Partial Evidence</h4><ul>{match.evidence.filter((item) => item.evidence_kind === "partial").map((item) => <li key={item.id}>{item.dimension}: {item.evidence_summary}</li>)}</ul></article><article><h4>Missing Requirements</h4><ul>{match.evidence.filter((item) => item.evidence_kind === "missing").map((item) => <li key={item.id}>{item.dimension}: confirmed requirement lacks evidence</li>)}</ul></article><article><h4>Unknown Requirements</h4><ul>{match.evidence.filter((item) => item.evidence_kind === "unknown").map((item) => <li key={item.id}>{item.dimension}: needs confirmation</li>)}</ul></article></div>
+    </>}
+    {history.length ? <div><h4>Match History</h4><ol>{history.map((item) => <li key={item.id}><button className="text-button" onClick={async () => setMatch(await apiJson(`/api/jobs/${jobId}/matches/${item.id}`))}>{new Date(item.created_at).toLocaleString()} — {Math.round(item.overall_score)} — {item.hard_filter_status}</button></li>)}</ol></div> : null}
+  </section>;
+}
+
 export function JobImportPage() {
   const [tab, setTab] = useState("manual");
   const [manual, setManual] = useState(blankManual);
@@ -109,6 +136,7 @@ export function JobDetailPage() {
       <button type="submit">Save Job</button>
     </form> : null}
     <dl className="detail-grid"><dt>Work mode</dt><dd>{job.work_mode || "Not provided"}</dd><dt>Employment type</dt><dd>{job.employment_type || "Not provided"}</dd><dt>Salary</dt><dd>{job.salary_min || job.salary_max ? `${job.salary_currency || ""} ${job.salary_min || "?"}–${job.salary_max || "?"}` : "Not provided"}</dd><dt>Deadline</dt><dd>{job.application_deadline ? new Date(job.application_deadline).toLocaleString() : "Not provided"}</dd></dl>
+    <MatchPanel jobId={jobId} />
     <h3>Job Description</h3><pre className="untrusted-text">{job.description}</pre>
     <div className="section-heading"><h3>Requirements</h3><button onClick={() => mutate(`/api/jobs/${jobId}/extract-requirements`, {})}>Extract requirements</button></div>
     {!job.requirements.length ? <p>No requirements extracted.</p> : <div className="card-list">{job.requirements.map((item) => <article key={item.id} className="resource-card"><strong>{item.name}</strong><span className="status-badge">{item.verification_status}</span>{item.evidence_text ? <blockquote>{item.evidence_text}</blockquote> : null}<div className="button-row"><button onClick={() => apiJson(`/api/jobs/${jobId}/requirements/${item.id}`, { method: "PATCH", body: { verification_status: "confirmed" } }).then(load)}>Confirm</button><button onClick={() => apiJson(`/api/jobs/${jobId}/requirements/${item.id}`, { method: "PATCH", body: { verification_status: "rejected" } }).then(load)}>Reject</button></div></article>)}</div>}
