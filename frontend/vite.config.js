@@ -12,5 +12,11 @@ export default defineConfig(() => {
         ? { "/api": { target: proxyTarget, changeOrigin: true } }
         : undefined,
     },
+    test: {
+      environment: "jsdom",
+      setupFiles: "./src/test-setup.js",
+      clearMocks: true,
+      globals: true,
+    },
   };
 });
