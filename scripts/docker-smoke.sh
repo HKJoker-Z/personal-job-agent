@@ -2,13 +2,15 @@
 set -Eeuo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PROJECT_NAME="pja-v19-smoke"
+STAMP="$(date +%s)-$$"
+PROJECT_NAME="pja-v2-phase1-v19compat-${STAMP}"
 TEMP_ROOT="$(mktemp -d -t pja-v19-smoke-XXXXXX)"
 ENV_FILE="${TEMP_ROOT}/smoke.env"
 COMPOSE_OVERRIDE="${TEMP_ROOT}/compose.override.yaml"
 APP_DATA_DIR="${TEMP_ROOT}/data"
 PROJECT_KNOWLEDGE_DIR="${TEMP_ROOT}/project-knowledge"
 BACKUP_DIR="${TEMP_ROOT}/backups"
+FILE_STORAGE_DIR="${TEMP_ROOT}/files"
 PUBLIC_HTTP_PORT="$(python3 - <<'PY'
 import socket
 with socket.socket() as sock:
@@ -17,17 +19,38 @@ with socket.socket() as sock:
 PY
 )"
 
-mkdir -p "${APP_DATA_DIR}" "${PROJECT_KNOWLEDGE_DIR}" "${BACKUP_DIR}"
+if docker info >/dev/null 2>&1; then
+  DOCKER=(docker)
+elif sudo -n docker info >/dev/null 2>&1; then
+  DOCKER=(sudo docker)
+else
+  printf '%s\n' 'Docker access is required for the compatibility smoke test.' >&2
+  exit 1
+fi
+
+mkdir -p "${APP_DATA_DIR}" "${PROJECT_KNOWLEDGE_DIR}" "${BACKUP_DIR}" "${FILE_STORAGE_DIR}"
 cp "${ROOT_DIR}/docs/PROJECT_KNOWLEDGE.md" "${PROJECT_KNOWLEDGE_DIR}/PROJECT_KNOWLEDGE.md"
-chmod 0750 "${APP_DATA_DIR}" "${PROJECT_KNOWLEDGE_DIR}" "${BACKUP_DIR}"
+chmod 0750 "${APP_DATA_DIR}" "${PROJECT_KNOWLEDGE_DIR}" "${BACKUP_DIR}" "${FILE_STORAGE_DIR}"
 chmod 0640 "${PROJECT_KNOWLEDGE_DIR}/PROJECT_KNOWLEDGE.md"
 if [[ "${EUID}" -eq 0 ]]; then
-  chown -R 10001:10001 "${APP_DATA_DIR}" "${PROJECT_KNOWLEDGE_DIR}" "${BACKUP_DIR}"
+  chown -R 10001:10001 "${APP_DATA_DIR}" "${PROJECT_KNOWLEDGE_DIR}" "${BACKUP_DIR}" "${FILE_STORAGE_DIR}"
 else
-  sudo chown -R 10001:10001 "${APP_DATA_DIR}" "${PROJECT_KNOWLEDGE_DIR}" "${BACKUP_DIR}"
+  sudo chown -R 10001:10001 "${APP_DATA_DIR}" "${PROJECT_KNOWLEDGE_DIR}" "${BACKUP_DIR}" "${FILE_STORAGE_DIR}"
 fi
 
 {
+  printf '%s=%s\n' 'APP_ENV' 'development'
+  printf '%s=%s\n' 'APP_DATABASE_PATH' '/app/backend/data/app.db'
+  printf '%s=%s\n' 'AUTH_ENABLED' 'false'
+  printf '%s=%s\n' 'POSTGRES_DB' 'personal_job_agent_v19_compat_test'
+  printf '%s=%s\n' 'POSTGRES_BOOTSTRAP_USER' 'pja_v19_bootstrap'
+  printf '%s=%s\n' 'POSTGRES_BOOTSTRAP_PASSWORD' 'v19_compat_bootstrap_test_only'
+  printf '%s=%s\n' 'POSTGRES_MIGRATION_USER' 'pja_v19_migrate'
+  printf '%s=%s\n' 'POSTGRES_MIGRATION_PASSWORD' 'v19_compat_migration_test_only'
+  printf '%s=%s\n' 'POSTGRES_APP_USER' 'pja_v19_app'
+  printf '%s=%s\n' 'POSTGRES_APP_PASSWORD' 'v19_compat_application_test_only'
+  printf '%s=%s\n' 'PUBLIC_HTTP_BIND' '127.0.0.1'
+  printf '%s=%s\n' 'PUBLIC_HTTP_PORT' "${PUBLIC_HTTP_PORT}"
   printf '%s=%s\n' 'DEEPSEEK_API_KEY' 'TEST_ONLY_SMOKE_CONFIGURATION'
   printf '%s=%s\n' 'TRUSTED_HOSTS' '127.0.0.1,localhost'
   printf '%s=%s\n' 'ALLOWED_ORIGINS' ''
@@ -40,15 +63,27 @@ chmod 0600 "${ENV_FILE}"
 # The production network owns pja-br0. Give this isolated smoke project a
 # separate bridge so it can run safely on a production host.
 printf '%s\n' \
+  'services:' \
+  '  backend:' \
+  '    environment:' \
+  '      APP_ENV: development' \
+  '      APP_DATABASE_PATH: /app/backend/data/app.db' \
+  '      AUTH_ENABLED: "false"' \
+  '      DATABASE_URL: ""' \
+  '      TEST_DATABASE_URL: ""' \
+  '    volumes:' \
+  '      - type: bind' \
+  "        source: ${APP_DATA_DIR}" \
+  '        target: /app/backend/data' \
   'networks:' \
   '  application:' \
   '    driver_opts:' \
-  '      com.docker.network.bridge.name: pja-smoke-br0' \
+  "      com.docker.network.bridge.name: pja19-$(( $$ % 100000 ))" \
   >"${COMPOSE_OVERRIDE}"
 
-export APP_ENV_FILE="${ENV_FILE}" APP_DATA_DIR PROJECT_KNOWLEDGE_DIR BACKUP_DIR PUBLIC_HTTP_PORT
+export APP_ENV_FILE="${ENV_FILE}" APP_DATA_DIR PROJECT_KNOWLEDGE_DIR BACKUP_DIR FILE_STORAGE_DIR PUBLIC_HTTP_PORT
 compose=(
-  docker compose
+  "${DOCKER[@]}" compose
   --project-directory "${ROOT_DIR}"
   --env-file "${ENV_FILE}"
   -p "${PROJECT_NAME}"
@@ -57,12 +92,21 @@ compose=(
 )
 
 cleanup() {
-  "${compose[@]}" down --remove-orphans >/dev/null 2>&1 || true
+  local exit_code=$?
+  trap - EXIT
+  if [[ "${exit_code}" != 0 ]]; then
+    "${compose[@]}" ps >&2 || true
+    "${compose[@]}" logs --no-color --tail 150 backend migrate database >&2 || true
+  fi
+  if [[ "${PROJECT_NAME}" =~ ^pja-v2-phase1-[A-Za-z0-9_.-]+$ ]]; then
+    "${compose[@]}" down --volumes --remove-orphans >/dev/null 2>&1 || true
+  fi
   if [[ "${EUID}" -eq 0 ]]; then
     rm -rf "${TEMP_ROOT}"
   else
     sudo rm -rf "${TEMP_ROOT}"
   fi
+  exit "${exit_code}"
 }
 trap cleanup EXIT
 
