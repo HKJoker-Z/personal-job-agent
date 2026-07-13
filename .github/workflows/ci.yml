@@ -147,7 +147,7 @@ jobs:
             echo 'ENABLE_API_DOCS=false'
           } > "${env_file}"
           echo "APP_ENV_FILE=${env_file}" >> "${GITHUB_ENV}"
-      - run: docker compose config --quiet
+      - run: docker compose --env-file "${APP_ENV_FILE}" config --quiet
 
   script-validation:
     runs-on: ubuntu-latest
