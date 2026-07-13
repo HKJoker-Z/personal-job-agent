@@ -465,4 +465,15 @@ A: Version 1.7 uses defense-in-depth controls around the LLM call. The backend s
 ## 9. Future Roadmap
 
 - Version 1.9 Docker, CI/CD, and cloud deployment.
-- Version 2.0 MCP server integration.
+- Version 2.0 later phases may evaluate MCP integrations after the identity and data foundation is stable.
+
+## 10. Version 2.0 Phase 1 Foundation
+
+- Added SQLAlchemy 2.x, psycopg 3, PostgreSQL 16, and Alembic while preserving the Version 1.9 Analyze, Project Knowledge, Monitoring, Evaluation, History, and export workflows.
+- Added explicit administrator bootstrap with no default account or public registration, Argon2 password hashing, opaque server-side Sessions, HttpOnly Cookies, Origin-bound CSRF, database-backed login throttling, Session revocation, and safe audit events.
+- Added ownership-scoped Career Profiles with structured experience, education, project, skill, language, certification, and job-preference records; optimistic revisions; immutable snapshots; restore; verification states; and deterministic completeness.
+- Added a Resume Library with append-only Resume Versions, immutable finalized content, structured diffs, PDF/DOCX import, human review gates, private opaque file storage, duplicate detection, and cross-user IDOR protection.
+- Added PostgreSQL full-text Project Knowledge retrieval using a GIN expression index while retaining SQLite FTS5 and fallback retrieval for compatible development/test paths.
+- Added read-only Version 1.9 SQLite inspection and transactional PostgreSQL migration with fingerprinting, row-count and aggregate-checksum verification, idempotent migration records, malformed JSON normalization, and sequence synchronization.
+- Added Version 2 PostgreSQL/private-file/Project-Knowledge backup manifests, checksum verification, guarded empty-target restore, isolated Docker Smoke tests, PostgreSQL CI integration tests, and frontend authentication/Profile/Resume tests.
+- Phase 1 is an alpha development foundation and was not deployed over the live Version 1.9 production runtime.
