@@ -1,0 +1,18 @@
+{
+  "suite_name": "version-2.0.3-matching-grounding",
+  "suite_version": "2.0.0-alpha.3",
+  "cases": [
+    {"id": "perfect-match", "category": "matching"},
+    {"id": "partial-match", "category": "matching"},
+    {"id": "unknown-work-authorization", "category": "hard-filter"},
+    {"id": "failed-hard-filter", "category": "hard-filter"},
+    {"id": "synonym-match", "category": "normalization"},
+    {"id": "related-skill-partial", "category": "normalization"},
+    {"id": "no-confirmed-profile-facts", "category": "matching"},
+    {"id": "prompt-injection-job-description", "category": "security"},
+    {"id": "unsupported-metric-claim", "category": "grounding"},
+    {"id": "fabricated-leadership-claim", "category": "grounding"},
+    {"id": "salary-unknown", "category": "grounding"},
+    {"id": "stale-profile-revision", "category": "snapshot"}
+  ]
+}
