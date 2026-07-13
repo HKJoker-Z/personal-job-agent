@@ -290,6 +290,293 @@ class ResumeVersion(Base):
     finalized_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
+class Job(TimestampMixin, Base):
+    __tablename__ = "jobs"
+    __table_args__ = (
+        CheckConstraint("salary_min IS NULL OR salary_min >= 0", name="salary_min_nonnegative"),
+        CheckConstraint("salary_max IS NULL OR salary_max >= 0", name="salary_max_nonnegative"),
+        CheckConstraint(
+            "salary_min IS NULL OR salary_max IS NULL OR salary_max >= salary_min",
+            name="salary_range_valid",
+        ),
+        CheckConstraint("length(description) <= 200000", name="description_length_valid"),
+        CheckConstraint(
+            "status IN ('new','reviewed','shortlisted','ignored','closed','archived')",
+            name="status_valid",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    owner_user_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    company_name: Mapped[str | None] = mapped_column(String(300))
+    normalized_company_name: Mapped[str] = mapped_column(String(300), index=True, nullable=False)
+    title: Mapped[str | None] = mapped_column(String(300))
+    normalized_title: Mapped[str] = mapped_column(String(300), index=True, nullable=False)
+    location: Mapped[str] = mapped_column(String(300), default="", nullable=False)
+    normalized_location: Mapped[str] = mapped_column(String(300), index=True, default="", nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+    description_text_hash: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    canonical_url: Mapped[str | None] = mapped_column(String(2048))
+    external_reference: Mapped[str | None] = mapped_column(String(500))
+    employment_type: Mapped[str | None] = mapped_column(String(80))
+    work_mode: Mapped[str | None] = mapped_column(String(80))
+    seniority: Mapped[str | None] = mapped_column(String(120))
+    department: Mapped[str | None] = mapped_column(String(200))
+    salary_min: Mapped[int | None] = mapped_column(BigInteger)
+    salary_max: Mapped[int | None] = mapped_column(BigInteger)
+    salary_currency: Mapped[str | None] = mapped_column(String(8))
+    salary_period: Mapped[str | None] = mapped_column(String(30))
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    application_deadline: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    source_type: Mapped[str] = mapped_column(String(30), index=True, nullable=False)
+    status: Mapped[str] = mapped_column(String(30), default="new", index=True, nullable=False)
+    deduplication_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    revision: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+
+
+JOB_ACTIVE_DEDUP_UNIQUE = Index(
+    "uq_jobs_owner_deduplication_key_active",
+    Job.__table__.c.owner_user_id,
+    Job.__table__.c.deduplication_key,
+    unique=True,
+    postgresql_where=Job.__table__.c.archived_at.is_(None),
+    sqlite_where=Job.__table__.c.archived_at.is_(None),
+)
+Job.__table__.append_constraint(JOB_ACTIVE_DEDUP_UNIQUE)
+
+
+class JobSource(Base):
+    __tablename__ = "job_sources"
+    __table_args__ = (
+        CheckConstraint("source_type IN ('manual','url','pdf','docx','csv','migrated')", name="source_type_valid"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    job_id: Mapped[UUID] = mapped_column(Uuid, ForeignKey("jobs.id", ondelete="CASCADE"), index=True)
+    owner_user_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    source_type: Mapped[str] = mapped_column(String(30), index=True, nullable=False)
+    original_url: Mapped[str | None] = mapped_column(String(2048))
+    canonical_url: Mapped[str | None] = mapped_column(String(2048))
+    external_id: Mapped[str | None] = mapped_column(String(500))
+    file_asset_id: Mapped[UUID | None] = mapped_column(
+        Uuid, ForeignKey("file_assets.id", ondelete="RESTRICT"), index=True
+    )
+    imported_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    fetched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    http_status_summary: Mapped[str | None] = mapped_column(String(80))
+    media_type: Mapped[str | None] = mapped_column(String(160))
+    content_sha256: Mapped[str | None] = mapped_column(String(64), index=True)
+    source_metadata: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+
+
+class JobRequirement(TimestampMixin, Base):
+    __tablename__ = "job_requirements"
+    __table_args__ = (
+        CheckConstraint("confidence >= 0 AND confidence <= 1", name="confidence_valid"),
+        CheckConstraint("evidence_start IS NULL OR evidence_start >= 0", name="evidence_start_valid"),
+        CheckConstraint(
+            "evidence_end IS NULL OR evidence_start IS NULL OR evidence_end >= evidence_start",
+            name="evidence_end_valid",
+        ),
+        CheckConstraint("category IN ('skill','education','experience','language','certification','location','work_authorization','responsibility','benefit','other')", name="category_valid"),
+        CheckConstraint("requirement_type IN ('required','preferred','informational','hard_filter')", name="requirement_type_valid"),
+        CheckConstraint("extraction_source IN ('deterministic','llm','user')", name="extraction_source_valid"),
+        CheckConstraint("verification_status IN ('needs_review','confirmed','rejected')", name="verification_status_valid"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    job_id: Mapped[UUID] = mapped_column(Uuid, ForeignKey("jobs.id", ondelete="CASCADE"), index=True)
+    owner_user_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    category: Mapped[str] = mapped_column(String(40), index=True, nullable=False)
+    requirement_type: Mapped[str] = mapped_column(String(30), nullable=False)
+    name: Mapped[str] = mapped_column(String(300), nullable=False)
+    normalized_name: Mapped[str] = mapped_column(String(300), index=True, nullable=False)
+    description: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    importance: Mapped[int] = mapped_column(Integer, default=3, nullable=False)
+    minimum_years: Mapped[float | None] = mapped_column(Float)
+    evidence_text: Mapped[str | None] = mapped_column(Text)
+    evidence_start: Mapped[int | None] = mapped_column(Integer)
+    evidence_end: Mapped[int | None] = mapped_column(Integer)
+    extraction_source: Mapped[str] = mapped_column(String(30), nullable=False)
+    confidence: Mapped[float] = mapped_column(Float, default=0.5, nullable=False)
+    verification_status: Mapped[str] = mapped_column(String(30), default="needs_review", index=True)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+
+class JobDuplicateCandidate(Base):
+    __tablename__ = "job_duplicate_candidates"
+    __table_args__ = (
+        CheckConstraint("job_id <> candidate_job_id", name="jobs_different"),
+        CheckConstraint("similarity_score >= 0 AND similarity_score <= 1", name="similarity_valid"),
+        CheckConstraint("match_type IN ('exact','near')", name="match_type_valid"),
+        CheckConstraint("status IN ('pending','confirmed_duplicate','not_duplicate','dismissed')", name="status_valid"),
+        UniqueConstraint("owner_user_id", "job_id", "candidate_job_id", name="uq_job_duplicate_pair"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    owner_user_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    job_id: Mapped[UUID] = mapped_column(Uuid, ForeignKey("jobs.id", ondelete="CASCADE"), index=True)
+    candidate_job_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("jobs.id", ondelete="CASCADE"), index=True
+    )
+    match_type: Mapped[str] = mapped_column(String(30), nullable=False)
+    similarity_score: Mapped[float] = mapped_column(Float, nullable=False)
+    reason_codes: Mapped[list[Any]] = mapped_column(JSON, default=list, nullable=False)
+    status: Mapped[str] = mapped_column(String(40), default="pending", index=True, nullable=False)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    resolved_by_user_id: Mapped[UUID | None] = mapped_column(Uuid, ForeignKey("users.id", ondelete="RESTRICT"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+
+
+class Application(TimestampMixin, Base):
+    __tablename__ = "applications"
+    __table_args__ = (
+        CheckConstraint("current_stage IN ('saved','shortlisted','preparing','ready_to_apply','applied','assessment','interview','final_interview','offer','accepted','rejected','withdrawn','closed')", name="stage_valid"),
+        CheckConstraint("priority IN ('low','normal','high','urgent')", name="priority_valid"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    owner_user_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    job_id: Mapped[UUID] = mapped_column(Uuid, ForeignKey("jobs.id", ondelete="RESTRICT"), index=True)
+    current_stage: Mapped[str] = mapped_column(String(40), default="saved", index=True, nullable=False)
+    source: Mapped[str] = mapped_column(String(80), default="manual", nullable=False)
+    priority: Mapped[str] = mapped_column(String(20), default="normal", index=True, nullable=False)
+    resume_version_id: Mapped[UUID | None] = mapped_column(
+        Uuid, ForeignKey("resume_versions.id", ondelete="RESTRICT"), index=True
+    )
+    applied_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    next_action_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    expected_response_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    outcome: Mapped[str | None] = mapped_column(String(40))
+    revision: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+
+
+APPLICATION_ACTIVE_UNIQUE = Index(
+    "uq_applications_owner_job_active",
+    Application.__table__.c.owner_user_id,
+    Application.__table__.c.job_id,
+    unique=True,
+    postgresql_where=Application.__table__.c.archived_at.is_(None),
+    sqlite_where=Application.__table__.c.archived_at.is_(None),
+)
+Application.__table__.append_constraint(APPLICATION_ACTIVE_UNIQUE)
+
+
+class ApplicationStageHistory(Base):
+    __tablename__ = "application_stage_history"
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    application_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("applications.id", ondelete="RESTRICT"), index=True
+    )
+    owner_user_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    from_stage: Mapped[str] = mapped_column(String(40), nullable=False)
+    to_stage: Mapped[str] = mapped_column(String(40), nullable=False)
+    reason: Mapped[str] = mapped_column(String(500), default="", nullable=False)
+    notes: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    changed_by_user_id: Mapped[UUID] = mapped_column(Uuid, ForeignKey("users.id", ondelete="RESTRICT"))
+    changed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, index=True)
+    revision_before: Mapped[int] = mapped_column(Integer, nullable=False)
+    revision_after: Mapped[int] = mapped_column(Integer, nullable=False)
+
+
+class ApplicationNote(TimestampMixin, Base):
+    __tablename__ = "application_notes"
+    __table_args__ = (
+        CheckConstraint("note_type IN ('general','recruiter','interview','follow_up','outcome','private')", name="note_type_valid"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    application_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("applications.id", ondelete="RESTRICT"), index=True
+    )
+    owner_user_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    note_type: Mapped[str] = mapped_column(String(30), default="general", index=True, nullable=False)
+    created_by_user_id: Mapped[UUID] = mapped_column(Uuid, ForeignKey("users.id", ondelete="RESTRICT"))
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    revision: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+
+
+class ApplicationTask(TimestampMixin, Base):
+    __tablename__ = "application_tasks"
+    __table_args__ = (
+        CheckConstraint("status IN ('pending','in_progress','completed','cancelled')", name="status_valid"),
+        CheckConstraint("priority IN ('low','normal','high','urgent')", name="priority_valid"),
+        CheckConstraint("task_type IN ('review_job','tailor_resume','prepare_application','submit_application','follow_up','assessment','interview_preparation','interview','document_request','other')", name="task_type_valid"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    owner_user_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    application_id: Mapped[UUID | None] = mapped_column(
+        Uuid, ForeignKey("applications.id", ondelete="RESTRICT"), index=True
+    )
+    job_id: Mapped[UUID | None] = mapped_column(Uuid, ForeignKey("jobs.id", ondelete="RESTRICT"), index=True)
+    title: Mapped[str] = mapped_column(String(300), nullable=False)
+    description: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    task_type: Mapped[str] = mapped_column(String(50), index=True, nullable=False)
+    status: Mapped[str] = mapped_column(String(30), default="pending", index=True, nullable=False)
+    priority: Mapped[str] = mapped_column(String(20), default="normal", index=True, nullable=False)
+    due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    reminder_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    revision: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+
+
+class JobImportRun(Base):
+    __tablename__ = "job_import_runs"
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    owner_user_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    import_type: Mapped[str] = mapped_column(String(30), index=True, nullable=False)
+    status: Mapped[str] = mapped_column(String(30), index=True, nullable=False)
+    source_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    created_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    duplicate_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    failed_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    safe_error_summary: Mapped[str | None] = mapped_column(String(500))
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, index=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class JobMergeHistory(Base):
+    __tablename__ = "job_merge_history"
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    owner_user_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    target_job_id: Mapped[UUID] = mapped_column(Uuid, ForeignKey("jobs.id", ondelete="RESTRICT"), index=True)
+    source_job_id: Mapped[UUID] = mapped_column(Uuid, ForeignKey("jobs.id", ondelete="RESTRICT"), index=True)
+    field_selection: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
+    summary: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
+    merged_by_user_id: Mapped[UUID] = mapped_column(Uuid, ForeignKey("users.id", ondelete="RESTRICT"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+
+
 class MigrationRun(Base):
     __tablename__ = "migration_runs"
 
@@ -467,6 +754,12 @@ def prevent_resume_version_content_update(_mapper: object, _connection: object, 
     )
     if any(state.attrs[field].history.has_changes() for field in immutable_fields):
         raise ValueError("Resume Version content is immutable; create a new Version instead.")
+
+
+@event.listens_for(ApplicationStageHistory, "before_update")
+@event.listens_for(ApplicationStageHistory, "before_delete")
+def prevent_stage_history_mutation(_mapper: object, _connection: object, _target: ApplicationStageHistory) -> None:
+    raise ValueError("Application Stage History is append-only.")
 
 
 KNOWLEDGE_FTS_INDEX = Index(

@@ -6,15 +6,23 @@ export function AppLayout() {
   const { user } = useAuth();
   return <main className="app-shell">
     <header className="page-header">
-      <div className="header-title-row"><h1>Personal Job Agent</h1><span className="version-pill">2.0.0-alpha.1</span></div>
-      <p>Identity, PostgreSQL, Career Profile, and Resume Versioning foundation.</p>
+      <div className="header-title-row"><h1>Personal Job Agent</h1><span className="version-pill">2.0.0-alpha.2</span></div>
+      <p>Job Library, Application Pipeline, Tasks, and Job Search Dashboard.</p>
       <p className="muted">Signed in as {user?.display_name}</p>
     </header>
     <nav className="tabs" aria-label="Version 2 sections">
-      <NavLink to="/workspace">Workspace</NavLink>
+      <NavLink to="/dashboard">Dashboard</NavLink>
+      <NavLink to="/jobs">Jobs</NavLink>
+      <NavLink to="/applications">Applications</NavLink>
+      <NavLink to="/tasks">Tasks</NavLink>
+      <NavLink to="/analyze">Analyze</NavLink>
+      <NavLink to="/history">History</NavLink>
       <NavLink to="/profile">Career Profile</NavLink>
       <NavLink to="/resumes">Resume Library</NavLink>
       <NavLink to="/resumes/import">Import Resume</NavLink>
+      <NavLink to="/project-knowledge">Project Knowledge</NavLink>
+      <NavLink to="/monitoring">Monitoring</NavLink>
+      <NavLink to="/evaluation">Evaluation</NavLink>
       <NavLink to="/account">Account</NavLink>
     </nav>
     <Outlet />

@@ -1,0 +1,39 @@
+services:
+  migrate:
+    environment:
+      APP_ENV: test
+      TEST_DATABASE_URL: postgresql+psycopg://${POSTGRES_MIGRATION_USER}:${POSTGRES_MIGRATION_PASSWORD}@database:5432/${POSTGRES_DB}
+
+  backend:
+    environment:
+      APP_ENV: test
+      TEST_DATABASE_URL: postgresql+psycopg://${POSTGRES_APP_USER}:${POSTGRES_APP_PASSWORD}@database:5432/${POSTGRES_DB}
+      JOB_IMPORT_TEST_ALLOWED_HOST: mock-job
+    depends_on:
+      mock-job:
+        condition: service_healthy
+
+  mock-job:
+    image: python:3.12-alpine
+    command: ["python", "-m", "http.server", "8085", "--bind", "0.0.0.0", "--directory", "/fixtures"]
+    expose:
+      - "8085"
+    volumes:
+      - type: bind
+        source: ${MOCK_JOB_DIR:?MOCK_JOB_DIR is required}
+        target: /fixtures
+        read_only: true
+    read_only: true
+    tmpfs:
+      - /tmp:size=8m,mode=1777
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8085/job.html', timeout=2).read()"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    networks:
+      - application

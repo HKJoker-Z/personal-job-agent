@@ -8,7 +8,7 @@ from pathlib import Path
 
 class StorageProvider(ABC):
     @abstractmethod
-    def write(self, extension: str, data: bytes) -> tuple[str, str]:
+    def write(self, extension: str, data: bytes, namespace: str = "resumes") -> tuple[str, str]:
         """Return an opaque storage key and SHA-256 digest."""
 
     @abstractmethod

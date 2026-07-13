@@ -10,12 +10,28 @@ import { AccountPage } from "./pages/AccountPage";
 import { LoginPage } from "./pages/LoginPage";
 import { ProfilePage } from "./pages/ProfilePage";
 import { ResumeDetailPage, ResumeImportPage, ResumeLibraryPage } from "./pages/ResumePages";
+import { DashboardPage } from "./pages/DashboardPage";
+import { JobDetailPage, JobImportPage, JobLibraryPage } from "./pages/JobPages";
+import { ApplicationBoardPage, ApplicationDetailPage } from "./pages/ApplicationPages";
+import { TasksPage } from "./pages/TasksPage";
 
 export function App() {
   return <AuthProvider><Routes>
     <Route path="/login" element={<LoginPage />} />
     <Route element={<ProtectedRoute />}><Route element={<AppLayout />}>
-      <Route path="/workspace" element={<LegacyWorkspace />} />
+      <Route path="/workspace" element={<LegacyWorkspace initialTab="analyze" />} />
+      <Route path="/analyze" element={<LegacyWorkspace initialTab="analyze" />} />
+      <Route path="/history" element={<LegacyWorkspace initialTab="history" />} />
+      <Route path="/project-knowledge" element={<LegacyWorkspace initialTab="knowledge" />} />
+      <Route path="/monitoring" element={<LegacyWorkspace initialTab="monitoring" />} />
+      <Route path="/evaluation" element={<LegacyWorkspace initialTab="monitoring" />} />
+      <Route path="/dashboard" element={<DashboardPage />} />
+      <Route path="/jobs" element={<JobLibraryPage />} />
+      <Route path="/jobs/import" element={<JobImportPage />} />
+      <Route path="/jobs/:jobId" element={<JobDetailPage />} />
+      <Route path="/applications" element={<ApplicationBoardPage />} />
+      <Route path="/applications/:applicationId" element={<ApplicationDetailPage />} />
+      <Route path="/tasks" element={<TasksPage />} />
       <Route path="/profile" element={<ProfilePage />} />
       <Route path="/resumes" element={<ResumeLibraryPage />} />
       <Route path="/resumes/import" element={<ResumeImportPage />} />

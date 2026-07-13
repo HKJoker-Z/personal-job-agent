@@ -18,13 +18,15 @@ class LocalStorageProvider(StorageProvider):
         self.root = configured_root.resolve(strict=False)
         self.root.mkdir(parents=True, exist_ok=True, mode=0o750)
 
-    def write(self, extension: str, data: bytes) -> tuple[str, str]:
-        directory = self.root / "resumes"
+    def write(self, extension: str, data: bytes, namespace: str = "resumes") -> tuple[str, str]:
+        if namespace not in {"resumes", "jobs"}:
+            raise ValueError("Storage namespace is invalid.")
+        directory = self.root / namespace
         directory.mkdir(mode=0o750, exist_ok=True)
         if directory.is_symlink():
             raise ValueError("Storage directory cannot be a symlink.")
         filename = f"{uuid4().hex}{extension}"
-        key = f"resumes/{filename}"
+        key = f"{namespace}/{filename}"
         destination = self.path(key)
         temporary = directory / f".{filename}.{uuid4().hex}.tmp"
         descriptor = os.open(temporary, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)

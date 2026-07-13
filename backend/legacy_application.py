@@ -6,8 +6,6 @@ from io import BytesIO
 from pathlib import Path
 from typing import Any
 
-import requests
-from bs4 import BeautifulSoup
 from docx import Document
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, Form, Header, HTTPException, Query, Request, UploadFile
@@ -16,10 +14,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from openai import OpenAI
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 from pypdf import PdfReader
 
 from agent_workflow import AgentWorkflow, WorkflowContext
+from app.jobs.acquisition import SafeJobUrlFetcher, UnsafeJobUrl
 from config import APP_VERSION, load_config
 from database import (
     ALLOWED_APPLICATION_STATUSES,
@@ -409,46 +408,14 @@ async def extract_resume_text(resume: UploadFile) -> str:
 
 
 def fetch_job_text_from_url(job_url: str) -> str:
-    if not job_url.lower().startswith(("http://", "https://")):
-        logger.warning("JD fetch failed error_type=InvalidUrlScheme")
-        raise HTTPException(status_code=400, detail="Job URL must start with http:// or https://.")
-
     try:
-        response = requests.get(
-            job_url,
-            timeout=JOB_URL_TIMEOUT_SECONDS,
-            headers={
-                "User-Agent": "PersonalJobApplicationAgent/1.6 (+local MVP)",
-            },
-        )
-        response.raise_for_status()
-    except requests.Timeout as exc:
-        logger.warning("JD fetch failed error_type=Timeout")
+        return SafeJobUrlFetcher().fetch(job_url).description
+    except UnsafeJobUrl as exc:
+        logger.warning("JD fetch failed error_type=UnsafeOrUnavailableUrl")
         raise HTTPException(
             status_code=400,
-            detail="Job URL request timed out. Please paste the job description instead.",
+            detail="Failed to fetch job URL safely. Please paste the job description instead.",
         ) from exc
-    except requests.RequestException as exc:
-        logger.warning("JD fetch failed error_type=%s", type(exc).__name__)
-        raise HTTPException(
-            status_code=400,
-            detail="Failed to fetch job URL. Please check the URL or paste the job description.",
-        ) from exc
-
-    soup = BeautifulSoup(response.text, "html.parser")
-    for element in soup(["script", "style", "noscript", "header", "footer", "nav"]):
-        element.decompose()
-
-    main = soup.find("main") or soup.find("article") or soup.body or soup
-    text = main.get_text(separator="\n", strip=True)
-    lines = [line.strip() for line in text.splitlines() if line.strip()]
-    clean_text = "\n".join(lines)
-
-    if not clean_text:
-        logger.warning("JD fetch failed error_type=NoReadableText")
-        raise HTTPException(status_code=400, detail="Could not extract readable text from job URL.")
-
-    return clean_text
 
 
 def parse_ai_json_response(raw_response: str) -> dict[str, Any]:
@@ -1768,11 +1735,23 @@ def search_knowledge(
 
 @app.get("/api/applications")
 def get_applications(
+    request: Request,
     status: str | None = Query(None),
     search: str | None = Query(None),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
-) -> dict[str, Any]:
+    stage: str | None = Query(None),
+    archived: bool = Query(False),
+) -> Any:
+    legacy_query = any(key in request.query_params for key in ("status", "search", "limit", "offset"))
+    if not legacy_query:
+        from app.applications.service import ApplicationService
+
+        current_user = getattr(request.state, "v2_user", None)
+        current_db = getattr(request.state, "v2_db", None)
+        if current_user is None or current_db is None:
+            raise HTTPException(status_code=401, detail="Authentication required.")
+        return ApplicationService(current_db, current_user.id).list(stage, archived)
     clean_status = validate_application_status(status, required=False)
     clean_search = (search or "").strip() or None
     items, total = list_application_records(
@@ -1785,8 +1764,27 @@ def get_applications(
 
 
 @app.get("/api/applications/{application_id}")
-def get_application(application_id: int) -> dict[str, Any]:
-    return get_existing_application_record(application_id)
+def get_application(application_id: str, request: Request) -> dict[str, Any]:
+    from uuid import UUID
+
+    try:
+        version_2_id = UUID(application_id)
+    except ValueError:
+        try:
+            legacy_id = int(application_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail="Application not found.") from exc
+        return get_existing_application_record(legacy_id)
+    from app.applications.service import ApplicationNotFound, ApplicationService
+
+    current_user = getattr(request.state, "v2_user", None)
+    current_db = getattr(request.state, "v2_db", None)
+    if current_user is None or current_db is None:
+        raise HTTPException(status_code=401, detail="Authentication required.")
+    try:
+        return ApplicationService(current_db, current_user.id).get(version_2_id)
+    except ApplicationNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @app.get("/api/applications/{application_id}/cover-letter.docx")
@@ -1830,20 +1828,53 @@ def head_analysis_report_pdf(application_id: int) -> Response:
 
 
 @app.patch("/api/applications/{application_id}")
-def patch_application(application_id: int, payload: ApplicationUpdate) -> dict[str, Any]:
-    clean_status = validate_application_status(payload.application_status, required=True)
-    notes_provided = field_was_provided(payload, "notes")
-    updated_record = update_application_record(
-        application_id,
-        application_status=clean_status,
-        notes=payload.notes,
-        update_notes=notes_provided,
-    )
+async def patch_application(application_id: str, request: Request) -> dict[str, Any]:
+    from uuid import UUID
 
-    if updated_record is None:
-        raise HTTPException(status_code=404, detail="Application record not found.")
+    raw_payload = await request.json()
+    try:
+        version_2_id = UUID(application_id)
+    except ValueError:
+        try:
+            legacy_id = int(application_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail="Application not found.") from exc
+        try:
+            payload = ApplicationUpdate.model_validate(raw_payload)
+        except ValidationError as exc:
+            raise HTTPException(status_code=422, detail="Application update is invalid.") from exc
+        clean_status = validate_application_status(payload.application_status, required=True)
+        notes_provided = field_was_provided(payload, "notes")
+        updated_record = update_application_record(
+            legacy_id,
+            application_status=clean_status,
+            notes=payload.notes,
+            update_notes=notes_provided,
+        )
 
-    return updated_record
+        if updated_record is None:
+            raise HTTPException(status_code=404, detail="Application record not found.")
+        return updated_record
+
+    from app.applications.schemas import ApplicationPatch
+    from app.applications.service import ApplicationConflict, ApplicationNotFound, ApplicationService
+
+    current_user = getattr(request.state, "v2_user", None)
+    current_db = getattr(request.state, "v2_db", None)
+    if current_user is None or current_db is None:
+        raise HTTPException(status_code=401, detail="Authentication required.")
+    try:
+        payload = ApplicationPatch.model_validate(raw_payload)
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail="Application update is invalid.") from exc
+    try:
+        return ApplicationService(current_db, current_user.id).update(
+            version_2_id, payload.model_dump(exclude_unset=True)
+        )
+    except ApplicationNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ApplicationConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @app.patch("/api/applications/{application_id}/next-action")
@@ -1870,11 +1901,40 @@ def patch_next_action_decision(
 
 
 @app.delete("/api/applications/{application_id}")
-def delete_application(application_id: int) -> dict[str, Any]:
-    deleted = delete_application_record(application_id)
-    if not deleted:
-        raise HTTPException(status_code=404, detail="Application record not found.")
-    return {"deleted": True, "id": application_id}
+async def delete_application(application_id: str, request: Request) -> dict[str, Any]:
+    from uuid import UUID
+
+    try:
+        version_2_id = UUID(application_id)
+    except ValueError:
+        try:
+            legacy_id = int(application_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail="Application not found.") from exc
+        deleted = delete_application_record(legacy_id)
+        if not deleted:
+            raise HTTPException(status_code=404, detail="Application record not found.")
+        return {"deleted": True, "id": legacy_id}
+
+    from app.applications.schemas import ExpectedRevision
+    from app.applications.service import ApplicationConflict, ApplicationNotFound, ApplicationService
+
+    current_user = getattr(request.state, "v2_user", None)
+    current_db = getattr(request.state, "v2_db", None)
+    if current_user is None or current_db is None:
+        raise HTTPException(status_code=401, detail="Authentication required.")
+    try:
+        payload = ExpectedRevision.model_validate(await request.json())
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail="Application archive request is invalid.") from exc
+    try:
+        return ApplicationService(current_db, current_user.id).archive(
+            version_2_id, payload.expected_revision
+        )
+    except ApplicationNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ApplicationConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @app.post("/api/analyze")
@@ -1888,6 +1948,7 @@ async def analyze(
     rag_top_k: int = Form(5),
     rag_mode: str | None = Form(None),
     resume_version_id: str | None = Form(None),
+    job_id: str | None = Form(None),
 ) -> dict[str, Any]:
     logger.info("Received analysis request")
     workflow = AgentWorkflow()
@@ -1921,16 +1982,17 @@ async def analyze(
 
         clean_job_text = (job_text or "").strip()
         clean_job_url = (job_url or "").strip()
-        if not clean_job_text and not clean_job_url:
+        clean_job_id = (job_id or "").strip()
+        if sum(bool(value) for value in (clean_job_text, clean_job_url, clean_job_id)) != 1:
             logger.warning("Analyze request rejected error_type=MissingJobInput")
             raise HTTPException(
                 status_code=400,
-                detail="Please provide either job description text or a job URL.",
+                detail="Provide exactly one Job source: job_id, job description text, or job URL.",
             )
 
         context.resume_filename = resume_filename or ("Stored Resume Version" if clean_resume_version_id else None)
         context.job_url = clean_job_url or None
-        context.source_type = "text" if clean_job_text else "url"
+        context.source_type = "saved_job" if clean_job_id else "text" if clean_job_text else "url"
         context.rag_mode = resolve_rag_mode(use_knowledge_base, rag_mode)
         context.rag_top_k = clamp_rag_top_k(rag_top_k)
         workflow.complete_step(
@@ -1986,7 +2048,19 @@ async def analyze(
 
     workflow.start_step("acquire_job_description", "Acquire Job Description")
     try:
-        if clean_job_text:
+        if clean_job_id:
+            from uuid import UUID
+
+            from app.jobs.service import JobService
+
+            current_user = getattr(request.state, "v2_user", None)
+            current_db = getattr(request.state, "v2_db", None)
+            if current_user is None or current_db is None:
+                raise HTTPException(status_code=401, detail="Authentication required.")
+            job_description = str(JobService(current_db, current_user.id).get(UUID(clean_job_id))["description"])
+            source_message = "Used an owned Job Library description."
+            logger.info("Owned Job description received characters=%s", len(job_description))
+        elif clean_job_text:
             job_description = clean_job_text
             source_message = "Used pasted job description text."
             logger.info("JD text received characters=%s", len(job_description))

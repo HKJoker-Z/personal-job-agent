@@ -3,10 +3,23 @@ set -Eeuo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 STAMP="$(date +%s)-$$"
-PROJECT_NAME="${PJA_TEST_PROJECT:-pja-v2-phase1-${STAMP}}"
-HTTP_PORT="${PJA_TEST_HTTP_PORT:-18080}"
-POSTGRES_PORT="${PJA_TEST_POSTGRES_PORT:-15432}"
-TEST_ROOT="$(mktemp -d "/tmp/pja-v2-phase1-${STAMP}.XXXXXX")"
+SMOKE_MILESTONE="${PJA_SMOKE_MILESTONE:-2.0.1}"
+if [[ "${SMOKE_MILESTONE}" == "2.0.2" ]]; then
+  TEST_PREFIX='pja-v2-0-2'
+  DEFAULT_HTTP_PORT=18082
+  DEFAULT_POSTGRES_PORT=15434
+elif [[ "${SMOKE_MILESTONE}" == "2.0.1" ]]; then
+  TEST_PREFIX='pja-v2-phase1'
+  DEFAULT_HTTP_PORT=18080
+  DEFAULT_POSTGRES_PORT=15432
+else
+  printf '%s\n' 'Refusing to run: unsupported isolated Smoke milestone.' >&2
+  exit 1
+fi
+PROJECT_NAME="${PJA_TEST_PROJECT:-${TEST_PREFIX}-${STAMP}}"
+HTTP_PORT="${PJA_TEST_HTTP_PORT:-${DEFAULT_HTTP_PORT}}"
+POSTGRES_PORT="${PJA_TEST_POSTGRES_PORT:-${DEFAULT_POSTGRES_PORT}}"
+TEST_ROOT="$(mktemp -d "/tmp/${TEST_PREFIX}-${STAMP}.XXXXXX")"
 ENV_FILE="${TEST_ROOT}/test.env"
 COOKIE_JAR="${TEST_ROOT}/cookies.txt"
 RESPONSE_FILE="${TEST_ROOT}/response.json"
@@ -15,11 +28,11 @@ ADMIN_EMAIL="phase1-admin@example.com"
 ADMIN_PASSWORD="Phase-1-Smoke-Passphrase-Only-2026"
 
 valid_project_name() {
-  [[ "$1" =~ ^pja-v2-phase1-[a-zA-Z0-9_.-]+$ ]]
+  [[ "$1" =~ ^${TEST_PREFIX}-[a-zA-Z0-9_.-]+$ ]]
 }
 
 if ! valid_project_name "${PROJECT_NAME}"; then
-  printf '%s\n' 'Refusing to run: isolated Compose project must start with pja-v2-phase1-.' >&2
+  printf 'Refusing to run: isolated Compose project must start with %s-.\n' "${TEST_PREFIX}" >&2
   exit 1
 fi
 
@@ -33,6 +46,9 @@ else
 fi
 
 COMPOSE=("${DOCKER[@]}" compose --project-name "${PROJECT_NAME}" --env-file "${ENV_FILE}" -f "${ROOT_DIR}/compose.yaml" -f "${ROOT_DIR}/compose.test.yaml")
+if [[ "${SMOKE_MILESTONE}" == "2.0.2" ]]; then
+  COMPOSE+=(-f "${ROOT_DIR}/compose.v202-smoke.yaml")
+fi
 
 cleanup() {
   local exit_code=$?
@@ -40,7 +56,7 @@ cleanup() {
   if valid_project_name "${PROJECT_NAME}"; then
     "${COMPOSE[@]}" down --volumes --remove-orphans >/dev/null 2>&1 || true
   fi
-  if [[ "${TEST_ROOT}" =~ ^/tmp/pja-v2-phase1- ]]; then
+  if [[ "${TEST_ROOT}" == "/tmp/${TEST_PREFIX}-"* ]]; then
     "${DOCKER[@]}" run --rm -v "${TEST_ROOT}:/cleanup" alpine:3.21 sh -c 'rm -rf /cleanup/*' >/dev/null 2>&1 || true
     rm -rf "${TEST_ROOT}"
   fi
@@ -53,14 +69,29 @@ smoke_step() {
 }
 
 umask 077
-install -d -m 0700 "${TEST_ROOT}/files" "${TEST_ROOT}/knowledge" "${TEST_ROOT}/backup"
+install -d -m 0700 "${TEST_ROOT}/files" "${TEST_ROOT}/knowledge" "${TEST_ROOT}/backup" "${TEST_ROOT}/mock-job"
 install -m 0600 "${ROOT_DIR}/docs/PROJECT_KNOWLEDGE.md" "${TEST_ROOT}/knowledge/PROJECT_KNOWLEDGE.md"
+python3 - "${TEST_ROOT}/mock-job/job.html" <<'PY'
+import sys
+from pathlib import Path
+
+Path(sys.argv[1]).write_text(
+    '<!doctype html><html><head><title>Mock URL Engineer</title>'
+    '<script type="application/ld+json">{"@type":"JobPosting","title":"Mock URL Engineer",'
+    '"hiringOrganization":{"name":"Synthetic URL Company"},'
+    '"jobLocation":{"address":{"addressLocality":"Mock City","addressCountry":"XX"}}}</script>'
+    '</head><body><main><h1>Mock URL Engineer</h1><p>Required: Python and PostgreSQL. Remote.</p></main></body></html>',
+    encoding='utf-8',
+)
+PY
+chmod 0755 "${TEST_ROOT}/mock-job"
+chmod 0644 "${TEST_ROOT}/mock-job/job.html"
 "${DOCKER[@]}" run --rm \
   -v "${TEST_ROOT}:/test-root" \
   alpine:3.21 chown -R 10001:10001 /test-root/files /test-root/knowledge
 
 {
-  printf 'APP_ENV=development\n'
+  if [[ "${SMOKE_MILESTONE}" == "2.0.2" ]]; then printf 'APP_ENV=test\n'; else printf 'APP_ENV=development\n'; fi
   printf 'APP_ENV_FILE=%s\n' "${ENV_FILE}"
   printf 'POSTGRES_DB=personal_job_agent_smoke_test\n'
   printf 'POSTGRES_BOOTSTRAP_USER=pja_bootstrap\n'
@@ -75,6 +106,7 @@ install -m 0600 "${ROOT_DIR}/docs/PROJECT_KNOWLEDGE.md" "${TEST_ROOT}/knowledge/
   printf 'APPLICATION_BRIDGE_NAME=pja2-%s\n' "$(( $$ % 100000 ))"
   printf 'PROJECT_KNOWLEDGE_DIR=%s\n' "${TEST_ROOT}/knowledge"
   printf 'FILE_STORAGE_DIR=%s\n' "${TEST_ROOT}/files"
+  printf 'MOCK_JOB_DIR=%s\n' "${TEST_ROOT}/mock-job"
   printf 'SESSION_COOKIE_SECURE=false\n'
   printf 'AUTH_TRUSTED_ORIGINS=%s\n' "${ORIGIN}"
   printf 'AUTH_FINGERPRINT_KEY=phase1-smoke-fingerprint-key-2026-only\n'
@@ -88,7 +120,11 @@ install -m 0600 "${ROOT_DIR}/docs/PROJECT_KNOWLEDGE.md" "${TEST_ROOT}/knowledge/
 chmod 0600 "${ENV_FILE}"
 
 "${COMPOSE[@]}" config --quiet
-"${COMPOSE[@]}" up --detach --build --wait
+if [[ "${PJA_SMOKE_SKIP_BUILD:-0}" == "1" ]]; then
+  "${COMPOSE[@]}" up --detach --no-build --wait
+else
+  "${COMPOSE[@]}" up --detach --build --wait
+fi
 
 ALEMBIC_HEAD="$("${COMPOSE[@]}" run --rm --no-deps migrate alembic -c alembic.ini heads | sed -n 's/ .*//p')"
 ALEMBIC_CURRENT="$("${COMPOSE[@]}" run --rm --no-deps migrate alembic -c alembic.ini current | sed -n 's/ .*//p')"
@@ -223,8 +259,85 @@ api_write POST /api/resumes/import/confirm \
 python3 -c 'import json,sys; assert json.load(open(sys.argv[1]))["version"]["status"] == "final"' "${RESPONSE_FILE}"
 smoke_step 'DOCX import review state and JSON request body finalize flow'
 
+if [[ "${SMOKE_MILESTONE}" == "2.0.2" ]]; then
+  api_write POST /api/jobs/import/manual \
+    '{"company_name":"Synthetic Manual Company","title":"Platform Engineer","location":"Test City","description":"Required: Python and PostgreSQL. 5 years experience. Remote.","url":"https://jobs.example.test/platform?utm_source=smoke","employment_type":"permanent","work_mode":"remote","salary_min":100,"salary_max":200,"salary_currency":"USD","application_deadline":"2030-01-01T00:00:00Z"}'
+  JOB_ID="$(python3 -c 'import json,sys; value=json.load(open(sys.argv[1])); assert value["result"] in {"created","duplicate_candidate"}; print(value["job"]["id"])' "${RESPONSE_FILE}")"
+  api_write POST /api/jobs/import/manual \
+    '{"company_name":"Synthetic Manual Company","title":"Platform Engineer","location":"Test City","description":"Required: Python and PostgreSQL. 5 years experience. Remote.","url":"https://jobs.example.test/platform?utm_source=second","employment_type":"permanent","work_mode":"remote","salary_min":100,"salary_max":200,"salary_currency":"USD","application_deadline":"2030-01-01T00:00:00Z"}'
+  python3 -c 'import json,sys; assert json.load(open(sys.argv[1]))["result"] == "existing"' "${RESPONSE_FILE}"
+  smoke_step 'manual Job import, normalization, and exact duplicate detection'
+
+  api_write POST /api/jobs/import/url '{"url":"http://mock-job:8085/job.html"}'
+  python3 -c 'import json,sys; value=json.load(open(sys.argv[1])); assert value["job"]["title"] == "Mock URL Engineer"; assert value["job"]["company_name"] == "Synthetic URL Company"' "${RESPONSE_FILE}"
+  smoke_step 'SSRF-guarded URL import through isolated local Mock HTTP Server'
+
+  curl --noproxy '*' --fail --silent --show-error \
+    --cookie "${COOKIE_JAR}" -H "Origin: ${ORIGIN}" -H "X-CSRF-Token: ${CSRF_TOKEN}" \
+    -F "file=@${DOCX_FIXTURE};type=application/vnd.openxmlformats-officedocument.wordprocessingml.document" \
+    "${ORIGIN}/api/jobs/import/file" >"${RESPONSE_FILE}"
+  JOB_FILE_ID="$(python3 -c 'import json,sys; value=json.load(open(sys.argv[1])); assert value["file"]["kind"] == "job_source"; print(value["file"]["id"])' "${RESPONSE_FILE}")"
+  smoke_step 'private DOCX Job import and File Asset source link'
+
+  CSV_FIXTURE="${TEST_ROOT}/jobs.csv"
+  python3 - "${CSV_FIXTURE}" <<'PY'
+import sys
+from pathlib import Path
+
+Path(sys.argv[1]).write_text(
+    'company,title,location,description,url,employment_type,work_mode,salary_min,salary_max,salary_currency,application_deadline\n'
+    'Synthetic CSV Company,CSV Engineer,Test City,Docker and SQL required.,https://jobs.example.test/csv,permanent,hybrid,90,180,USD,2030-02-01T00:00:00+00:00\n',
+    encoding='utf-8',
+)
+PY
+  curl --noproxy '*' --fail --silent --show-error --cookie "${COOKIE_JAR}" \
+    -H "Origin: ${ORIGIN}" -H "X-CSRF-Token: ${CSRF_TOKEN}" \
+    -F "file=@${CSV_FIXTURE};type=text/csv" \
+    "${ORIGIN}/api/jobs/import/csv?validate_only=true" >"${RESPONSE_FILE}"
+  python3 -c 'import json,sys; value=json.load(open(sys.argv[1])); assert value["validate_only"] is True; assert value["rows"][0]["status"] == "valid"' "${RESPONSE_FILE}"
+  curl --noproxy '*' --fail --silent --show-error --cookie "${COOKIE_JAR}" \
+    -H "Origin: ${ORIGIN}" -H "X-CSRF-Token: ${CSRF_TOKEN}" \
+    -F "file=@${CSV_FIXTURE};type=text/csv" \
+    "${ORIGIN}/api/jobs/import/csv?validate_only=false" >"${RESPONSE_FILE}"
+  python3 -c 'import json,sys; value=json.load(open(sys.argv[1])); assert value["validate_only"] is False; assert value["rows"][0]["status"] in {"created","duplicate_candidate"}' "${RESPONSE_FILE}"
+  smoke_step 'CSV validate-only preview and confirmed row import'
+
+  api_write POST "/api/jobs/${JOB_ID}/requirements" \
+    '{"category":"skill","requirement_type":"required","name":"Python","evidence_text":"Python","evidence_start":10,"evidence_end":16,"extraction_source":"user","confidence":1,"verification_status":"confirmed"}'
+  python3 -c 'import json,sys; assert json.load(open(sys.argv[1]))["verification_status"] == "confirmed"' "${RESPONSE_FILE}"
+
+  api_write POST /api/applications "{\"job_id\":\"${JOB_ID}\"}"
+  APPLICATION_ID="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["application"]["id"])' "${RESPONSE_FILE}")"
+  APPLICATION_REVISION="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["application"]["revision"])' "${RESPONSE_FILE}")"
+  api_write POST "/api/applications/${APPLICATION_ID}/transition" \
+    "{\"to_stage\":\"preparing\",\"expected_revision\":${APPLICATION_REVISION},\"reason\":\"Isolated Smoke\"}"
+  APPLICATION_REVISION="$(python3 -c 'import json,sys; value=json.load(open(sys.argv[1])); assert value["application"]["current_stage"] == "preparing"; print(value["application"]["revision"])' "${RESPONSE_FILE}")"
+  curl --noproxy '*' --fail --silent --show-error --cookie "${COOKIE_JAR}" \
+    "${ORIGIN}/api/applications/${APPLICATION_ID}/history" >"${RESPONSE_FILE}"
+  python3 -c 'import json,sys; value=json.load(open(sys.argv[1])); assert len(value) == 2; assert value[-1]["to_stage"] == "preparing"' "${RESPONSE_FILE}"
+  api_write POST "/api/applications/${APPLICATION_ID}/resume" \
+    "{\"resume_version_id\":\"${VERSION_ID}\",\"expected_revision\":${APPLICATION_REVISION}}"
+  APPLICATION_REVISION="$(python3 -c 'import json,sys; value=json.load(open(sys.argv[1])); assert value["warning"] is None; print(value["application"]["revision"])' "${RESPONSE_FILE}")"
+  api_write POST "/api/applications/${APPLICATION_ID}/notes" \
+    '{"content":"Synthetic private Smoke note.","note_type":"general"}'
+  smoke_step 'Requirement, Application transition/history, Resume Version link, and private Note'
+
+  api_write POST /api/tasks \
+    "{\"application_id\":\"${APPLICATION_ID}\",\"title\":\"Prepare synthetic application\",\"task_type\":\"prepare_application\",\"priority\":\"high\"}"
+  TASK_ID="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["id"])' "${RESPONSE_FILE}")"
+  TASK_REVISION="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["revision"])' "${RESPONSE_FILE}")"
+  api_write POST "/api/tasks/${TASK_ID}/complete" "{\"expected_revision\":${TASK_REVISION}}"
+  python3 -c 'import json,sys; value=json.load(open(sys.argv[1])); assert value["status"] == "completed"; assert value["completed_at"]' "${RESPONSE_FILE}"
+  curl --noproxy '*' --fail --silent --show-error --cookie "${COOKIE_JAR}" \
+    "${ORIGIN}/api/dashboard/summary" >"${RESPONSE_FILE}"
+  python3 -c 'import json,sys; value=json.load(open(sys.argv[1])); assert value["jobs_total"] >= 4; assert value["applications_total"] == 1' "${RESPONSE_FILE}"
+  smoke_step 'Task completion and owned Dashboard aggregates'
+fi
+
 api_write POST /api/auth/logout
-UNAUTH_STATUS="$(curl --noproxy '*' --silent --output /dev/null --write-out '%{http_code}' "${ORIGIN}/api/resumes")"
+UNAUTH_PATH='/api/jobs'
+if [[ "${SMOKE_MILESTONE}" == "2.0.1" ]]; then UNAUTH_PATH='/api/resumes'; fi
+UNAUTH_STATUS="$(curl --noproxy '*' --silent --output /dev/null --write-out '%{http_code}' "${ORIGIN}${UNAUTH_PATH}")"
 test "${UNAUTH_STATUS}" = 401
 
 "${COMPOSE[@]}" restart backend frontend >/dev/null
@@ -238,11 +351,28 @@ curl --noproxy '*' --fail --silent --show-error \
   --cookie-jar "${COOKIE_JAR}" -H 'Content-Type: application/json' \
   -d "{\"email\":\"${ADMIN_EMAIL}\",\"password\":\"${ADMIN_PASSWORD}\"}" \
   "${ORIGIN}/api/auth/login" >"${RESPONSE_FILE}"
+smoke_step 'login after container restart'
 curl --noproxy '*' --fail --silent --cookie "${COOKIE_JAR}" \
   "${ORIGIN}/api/resumes/${IMPORTED_RESUME_ID}" >"${RESPONSE_FILE}"
+smoke_step 'Resume row after container restart'
 curl --noproxy '*' --fail --silent --show-error --cookie "${COOKIE_JAR}" \
   "${ORIGIN}/api/files/${IMPORTED_FILE_ID}/download" >"${TEST_ROOT}/downloaded-resume.docx"
 cmp --silent "${DOCX_FIXTURE}" "${TEST_ROOT}/downloaded-resume.docx"
+smoke_step 'private Resume file after container restart'
+if [[ "${SMOKE_MILESTONE}" == "2.0.2" ]]; then
+  curl --noproxy '*' --fail --silent --show-error --cookie "${COOKIE_JAR}" \
+    "${ORIGIN}/api/jobs/${JOB_ID}" >"${RESPONSE_FILE}"
+  python3 -c 'import json,sys; assert json.load(open(sys.argv[1]))["id"] == sys.argv[2]' "${RESPONSE_FILE}" "${JOB_ID}"
+  smoke_step 'Job row after container restart'
+  curl --noproxy '*' --fail --silent --show-error --cookie "${COOKIE_JAR}" \
+    "${ORIGIN}/api/applications/${APPLICATION_ID}" >"${RESPONSE_FILE}"
+  python3 -c 'import json,sys; assert json.load(open(sys.argv[1]))["current_stage"] == "preparing"' "${RESPONSE_FILE}"
+  smoke_step 'Application row after container restart'
+  curl --noproxy '*' --fail --silent --show-error --cookie "${COOKIE_JAR}" \
+    "${ORIGIN}/api/tasks/${TASK_ID}" >"${RESPONSE_FILE}"
+  python3 -c 'import json,sys; assert json.load(open(sys.argv[1]))["status"] == "completed"' "${RESPONSE_FILE}"
+  smoke_step 'Task row after container restart'
+fi
 smoke_step 'PostgreSQL and private file persistence across container restart'
 
 SOURCE_URL="postgresql+psycopg://pja_bootstrap:smoke_bootstrap_password_2026@127.0.0.1:${POSTGRES_PORT}/personal_job_agent_smoke_test"
@@ -275,12 +405,14 @@ PYTHON_BIN="${PYTHON_BIN:-python3}" \
   --project-knowledge "${TEST_ROOT}/restored-knowledge/PROJECT_KNOWLEDGE.md" \
   --confirmation 'RESTORE V2 BACKUP'
 
+COUNT_SQL="SELECT (SELECT COUNT(*) FROM users) || ':' || (SELECT COUNT(*) FROM resumes) || ':' || (SELECT COUNT(*) FROM resume_versions) || ':' || (SELECT COUNT(*) FROM file_assets)"
+if [[ "${SMOKE_MILESTONE}" == "2.0.2" ]]; then
+  COUNT_SQL="${COUNT_SQL} || ':' || (SELECT COUNT(*) FROM jobs) || ':' || (SELECT COUNT(*) FROM applications) || ':' || (SELECT COUNT(*) FROM application_tasks)"
+fi
 SOURCE_COUNTS="$("${COMPOSE[@]}" exec -T database psql -U pja_bootstrap \
-  -d personal_job_agent_smoke_test -Atqc \
-  "SELECT (SELECT COUNT(*) FROM users) || ':' || (SELECT COUNT(*) FROM resumes) || ':' || (SELECT COUNT(*) FROM resume_versions) || ':' || (SELECT COUNT(*) FROM file_assets)")"
+  -d personal_job_agent_smoke_test -Atqc "${COUNT_SQL}")"
 RESTORED_COUNTS="$("${COMPOSE[@]}" exec -T database psql -U pja_bootstrap \
-  -d personal_job_agent_restore_test -Atqc \
-  "SELECT (SELECT COUNT(*) FROM users) || ':' || (SELECT COUNT(*) FROM resumes) || ':' || (SELECT COUNT(*) FROM resume_versions) || ':' || (SELECT COUNT(*) FROM file_assets)")"
+  -d personal_job_agent_restore_test -Atqc "${COUNT_SQL}")"
 test "${RESTORED_COUNTS}" = "${SOURCE_COUNTS}"
 sudo -n python3 - "${TEST_ROOT}/files" "${TEST_ROOT}/restored-files" <<'PY'
 import hashlib
@@ -301,4 +433,4 @@ sudo -n cmp --silent "${TEST_ROOT}/knowledge/PROJECT_KNOWLEDGE.md" \
 smoke_step 'isolated restore row counts and file checksums'
 
 "${COMPOSE[@]}" ps
-printf '%s\n' 'Version 2 Phase 1 isolated smoke test passed.'
+printf 'Version %s isolated Smoke Test passed. Project: %s\n' "${SMOKE_MILESTONE}" "${PROJECT_NAME}"
