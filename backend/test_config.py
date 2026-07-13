@@ -124,6 +124,11 @@ class ConfigTest(unittest.TestCase):
                 "TRUSTED_HOSTS": "example.com",
                 "ALLOWED_ORIGINS": "https://example.com",
                 "ENABLE_API_DOCS": "false",
+                "DATABASE_URL": "postgresql+psycopg://" + "pja_app:" + "TEST_ONLY_PASSWORD" + "@database/personal_job_agent_test",
+                "SESSION_COOKIE_SECURE": "true",
+                "AUTH_TRUSTED_ORIGINS": "https://example.com",
+                "AUTH_FINGERPRINT_KEY": "TEST_ONLY_FINGERPRINT_KEY_32_BYTES_LONG",
+                "FILE_STORAGE_ROOT": str(root / "files"),
             })
             command = (
                 "from fastapi.testclient import TestClient; import json; from main import app; "
@@ -139,7 +144,7 @@ class ConfigTest(unittest.TestCase):
             )
             return json.loads(result.stdout.strip().splitlines()[-1])
 
-    def test_production_api_docs_routes_are_disabled(self):
+    def test_phase1_production_api_docs_routes_are_disabled(self):
         result = self.production_app_probe(
             "{'status': TestClient(app).get('/docs', headers={'Host':'example.com'}).status_code}"
         )

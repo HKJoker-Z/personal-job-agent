@@ -526,10 +526,10 @@ class DataManagementServiceTest(unittest.TestCase):
         self.assertNotIn(str(self.database_path), serialized)
         self.assertTrue(response.json()["test_database_isolation"])
 
-    def test_health_endpoint_reports_version_1_9(self):
+    def test_health_endpoint_reports_phase1_alpha_version(self):
         response = self.client.get("/api/health")
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()["version"], "1.9")
+        self.assertEqual(response.json()["version"], "2.0.0-alpha.1")
 
 
 if __name__ == "__main__":

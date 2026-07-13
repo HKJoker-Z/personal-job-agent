@@ -1,9 +1,14 @@
 import json
+import os
 import re
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+import psycopg
+from psycopg.pq import TransactionStatus
+from psycopg.rows import dict_row
 
 from security_utils import normalized_security_scan
 from config import (
@@ -68,7 +73,51 @@ def assert_safe_test_database(path: Path, app_env: str) -> None:
         )
 
 
-def get_connection() -> sqlite3.Connection:
+def is_postgresql_backend() -> bool:
+    return os.getenv("DATABASE_URL", "").strip().startswith(("postgresql://", "postgresql+psycopg://"))
+
+
+class PostgreSQLCompatibilityConnection:
+    """Small DB-API adapter for reviewed v1 SQL during the repository transition."""
+
+    def __init__(self, database_url: str):
+        self._connection = psycopg.connect(
+            database_url.replace("postgresql+psycopg://", "postgresql://", 1),
+            row_factory=dict_row,
+        )
+
+    @property
+    def in_transaction(self) -> bool:
+        return self._connection.info.transaction_status != TransactionStatus.IDLE
+
+    def execute(self, sql: str, params: Any = ()) -> Any:
+        statement = sql.replace("BEGIN IMMEDIATE", "BEGIN")
+        statement = statement.replace("?", "%s")
+        return self._connection.execute(statement, params)
+
+    def commit(self) -> None:
+        self._connection.commit()
+
+    def rollback(self) -> None:
+        self._connection.rollback()
+
+    def close(self) -> None:
+        self._connection.close()
+
+    def __enter__(self) -> "PostgreSQLCompatibilityConnection":
+        return self
+
+    def __exit__(self, exc_type: object, exc: object, traceback: object) -> None:
+        if exc_type is None:
+            self.commit()
+        else:
+            self.rollback()
+        self.close()
+
+
+def get_connection() -> Any:
+    if is_postgresql_backend():
+        return PostgreSQLCompatibilityConnection(os.environ["DATABASE_URL"])
     database_path = get_database_path()
     assert_safe_test_database(database_path, get_app_env())
     database_path.parent.mkdir(parents=True, exist_ok=True)
@@ -121,6 +170,8 @@ def add_column_if_missing(
 
 
 def ensure_knowledge_fts(connection: sqlite3.Connection) -> bool:
+    if is_postgresql_backend():
+        return False
     try:
         connection.execute(
             """
@@ -140,6 +191,8 @@ def ensure_knowledge_fts(connection: sqlite3.Connection) -> bool:
 
 
 def init_db() -> None:
+    if is_postgresql_backend():
+        return
     with get_connection() as connection:
         connection.execute(
             """
@@ -771,8 +824,7 @@ def insert_application_record(
     job_title = clean_text(analysis_result.get("job_title"), "Unknown Position")
 
     with get_connection() as connection:
-        cursor = connection.execute(
-            """
+        statement = """
             INSERT INTO application_records (
                 created_at,
                 updated_at,
@@ -807,7 +859,11 @@ def insert_application_record(
                 notes
             )
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
+            """
+        if is_postgresql_backend():
+            statement += " RETURNING id"
+        cursor = connection.execute(
+            statement,
             (
                 now,
                 now,
@@ -845,6 +901,8 @@ def insert_application_record(
                 None,
             ),
         )
+        if is_postgresql_backend():
+            return int(cursor.fetchone()["id"])
         return int(cursor.lastrowid)
 
 
@@ -954,15 +1012,16 @@ def update_application_workflow_steps(
 ) -> dict[str, Any] | None:
     now = utc_now()
     with get_connection() as connection:
-        cursor = connection.execute(
-            """
+        statement = """
             UPDATE application_records
             SET workflow_steps = ?,
                 workflow_duration_ms = ?,
                 workflow_duration_us = ?,
                 updated_at = ?
             WHERE id = ?
-            """,
+            """
+        cursor = connection.execute(
+            statement,
             (
                 serialize_json(workflow_steps, []),
                 workflow_duration_ms,
@@ -1068,8 +1127,7 @@ def create_knowledge_document(
 
     with get_connection() as connection:
         fts_available = ensure_knowledge_fts(connection)
-        cursor = connection.execute(
-            """
+        statement = """
             INSERT INTO knowledge_documents (
                 created_at,
                 updated_at,
@@ -1080,10 +1138,18 @@ def create_knowledge_document(
                 chunk_count
             )
             VALUES (?, ?, ?, ?, ?, ?, ?)
-            """,
+            """
+        if is_postgresql_backend():
+            statement += " RETURNING id"
+        cursor = connection.execute(
+            statement,
             (now, now, title, category, source_filename or None, preview, len(chunks)),
         )
-        document_id = int(cursor.lastrowid)
+        document_id = (
+            int(cursor.fetchone()["id"])
+            if is_postgresql_backend()
+            else int(cursor.lastrowid)
+        )
 
         for chunk_index, chunk in enumerate(chunks):
             chunk_cursor = connection.execute(
@@ -1201,13 +1267,14 @@ def get_knowledge_document(document_id: int) -> dict[str, Any] | None:
 
 def delete_knowledge_document(document_id: int) -> bool:
     with get_connection() as connection:
-        try:
-            connection.execute(
-                "DELETE FROM knowledge_chunks_fts WHERE document_id = ?",
-                (str(document_id),),
-            )
-        except sqlite3.OperationalError:
-            pass
+        if not is_postgresql_backend():
+            try:
+                connection.execute(
+                    "DELETE FROM knowledge_chunks_fts WHERE document_id = ?",
+                    (str(document_id),),
+                )
+            except sqlite3.OperationalError:
+                pass
 
         connection.execute(
             "DELETE FROM knowledge_chunks WHERE document_id = ?",
@@ -1277,13 +1344,14 @@ def rebuild_project_knowledge_document(
             ids_to_clear = existing_ids
             placeholders = ",".join("?" for _id in ids_to_clear)
 
-            try:
-                connection.execute(
-                    f"DELETE FROM knowledge_chunks_fts WHERE document_id IN ({placeholders})",
-                    [str(document_id) for document_id in ids_to_clear],
-                )
-            except sqlite3.OperationalError:
-                pass
+            if not is_postgresql_backend():
+                try:
+                    connection.execute(
+                        f"DELETE FROM knowledge_chunks_fts WHERE document_id IN ({placeholders})",
+                        [str(document_id) for document_id in ids_to_clear],
+                    )
+                except sqlite3.OperationalError:
+                    pass
 
             connection.execute(
                 f"DELETE FROM knowledge_chunks WHERE document_id IN ({placeholders})",
@@ -1312,8 +1380,7 @@ def rebuild_project_knowledge_document(
                 (now, title, category, source_filename, preview, len(chunks), document_id),
             )
         else:
-            cursor = connection.execute(
-                """
+            statement = """
                 INSERT INTO knowledge_documents (
                     created_at,
                     updated_at,
@@ -1324,10 +1391,18 @@ def rebuild_project_knowledge_document(
                     chunk_count
                 )
                 VALUES (?, ?, ?, ?, ?, ?, ?)
-                """,
+                """
+            if is_postgresql_backend():
+                statement += " RETURNING id"
+            cursor = connection.execute(
+                statement,
                 (now, now, title, category, source_filename, preview, len(chunks)),
             )
-            document_id = int(cursor.lastrowid)
+            document_id = (
+                int(cursor.fetchone()["id"])
+                if is_postgresql_backend()
+                else int(cursor.lastrowid)
+            )
 
         for chunk_index, chunk in enumerate(chunks):
             chunk_cursor = connection.execute(
@@ -1517,12 +1592,74 @@ def fallback_search_knowledge_chunks(
     return scored_items[:top_k]
 
 
+def postgres_search_knowledge_chunks(
+    query: str,
+    top_k: int,
+    *,
+    document_id: int | None = None,
+) -> list[dict[str, Any]]:
+    tokens = tokenize_search_query(query)
+    if not tokens:
+        return []
+    search_text = " ".join(tokens[:20])
+    document_filter = ""
+    params: list[Any] = [search_text]
+    if document_id is not None:
+        document_filter = "AND c.document_id = ?"
+        params.append(document_id)
+    params.append(top_k)
+    with get_connection() as connection:
+        rows = connection.execute(
+            f"""
+            SELECT
+                c.id AS chunk_id,
+                c.document_id,
+                d.title AS document_title,
+                d.category,
+                c.chunk_index,
+                c.content,
+                ts_rank(
+                    to_tsvector('simple', c.content),
+                    plainto_tsquery('simple', ?)
+                ) AS rank
+            FROM knowledge_chunks c
+            JOIN knowledge_documents d ON d.id = c.document_id
+            WHERE to_tsvector('simple', c.content) @@ plainto_tsquery('simple', ?)
+            {document_filter}
+            ORDER BY rank DESC, c.id ASC
+            LIMIT ?
+            """,
+            [search_text, *params],
+        ).fetchall()
+    return [
+        {
+            "chunk_id": row["chunk_id"],
+            "document_id": row["document_id"],
+            "document_title": row["document_title"],
+            "category": row["category"],
+            "chunk_index": row["chunk_index"],
+            "content": row["content"],
+            "score": round(float(row["rank"] or 0), 4),
+        }
+        for row in rows
+    ]
+
+
 def search_knowledge_chunks(
     query: str,
     top_k: int,
     *,
     document_id: int | None = None,
 ) -> tuple[list[dict[str, Any]], str]:
+    if is_postgresql_backend():
+        postgres_items = postgres_search_knowledge_chunks(
+            query, top_k, document_id=document_id
+        )
+        if postgres_items:
+            return postgres_items, "postgresql_fts"
+        return fallback_search_knowledge_chunks(
+            query, top_k, document_id=document_id
+        ), "fallback"
     fts_items = fts_search_knowledge_chunks(query, top_k, document_id=document_id)
     if fts_items:
         return fts_items, "fts5"

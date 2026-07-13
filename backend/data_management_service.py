@@ -9,6 +9,8 @@ import sqlite3
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Any
 
+import psycopg
+
 from database import get_connection
 from config import load_config
 
@@ -209,7 +211,7 @@ def delete_monitoring_data(payload: dict[str, Any]) -> dict[str, Any]:
         )
         connection.execute(f"DELETE FROM analysis_metrics WHERE {where_sql}", params)
         connection.commit()
-    except sqlite3.Error as exc:
+    except (sqlite3.Error, psycopg.Error) as exc:
         if connection.in_transaction:
             connection.rollback()
         raise DataManagementError(
@@ -254,7 +256,7 @@ def delete_trace(workflow_id: str, payload: dict[str, Any]) -> dict[str, Any]:
         connection.commit()
     except DataManagementError:
         raise
-    except sqlite3.Error as exc:
+    except (sqlite3.Error, psycopg.Error) as exc:
         if connection.in_transaction:
             connection.rollback()
         raise DataManagementError(
@@ -326,7 +328,7 @@ def delete_evaluation_data(payload: dict[str, Any]) -> dict[str, Any]:
         )
         connection.execute(f"DELETE FROM evaluation_runs WHERE {where_sql}", params)
         connection.commit()
-    except sqlite3.Error as exc:
+    except (sqlite3.Error, psycopg.Error) as exc:
         if connection.in_transaction:
             connection.rollback()
         raise DataManagementError(
