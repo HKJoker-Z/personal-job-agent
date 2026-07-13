@@ -1,16 +1,29 @@
 # Personal Job Application Agent
 
-Production version: v1.9
+Latest stable release: v1.9.0
 
-Development version: 2.0.0-alpha.1 (Phase 1 foundation)
+Development runtime version: 2.0.0-alpha.2
 
 Personal Job Application Agent is a local-first, full-stack AI job application assistant. It parses a PDF or DOCX resume, accepts pasted job description text or one user-provided job URL, applies deterministic AI security checks, uses the DeepSeek API to generate explainable Resume-JD matching results, retrieves evidence from a curated Project Knowledge RAG source, creates an English cover letter, recommends the next application action, tracks saved applications in SQLite, records local AI monitoring metadata, runs offline behavioral evaluations, and exports application materials as DOCX/PDF files.
 
 Version 1.9 adds containerized deployment, persistent runtime storage, production configuration validation, health/readiness checks, privacy-aware request logging, SQLite-safe backup/restore tooling, GitHub Actions CI, and versioned GHCR publishing configuration. It remains a single-instance SQLite deployment model and does not claim Kubernetes, high availability, zero downtime, distributed tracing, or automatic cloud deployment.
 
-## Version 2.0 Phase 1
+## Version 2 development milestones
 
-The current development branch adds the identity and data foundation for Version 2 while preserving the Version 1.9 Analyze, Project Knowledge, Monitoring, Evaluation, History, and export workflows:
+Version 2.0.1 is the identity/PostgreSQL/Profile/Resume foundation in open PR #6. Version 2.0.2 is the current stacked milestone for Job Library, Application Pipeline, Tasks, and the Job Search Dashboard. The Version 2.0.2 PR is based on `version-2.0-phase-1-foundation`, cannot be merged independently to `main`, and must be retargeted and revalidated after PR #6 is merged.
+
+Version 2.0.2 adds:
+
+- An ownership-scoped Job Library with search, filtering, stable pagination, optimistic revisions, archive/restore, source provenance, structured requirements, and explicit duplicate resolution
+- Manual, SSRF-guarded URL, private PDF/DOCX, and bounded CSV imports with deterministic normalization and per-row validation
+- Deterministic duplicate candidates and user-confirmed transactional Job merge without physical deletion
+- Explicit, Mock-tested requirement extraction where Job Descriptions are untrusted data and LLM evidence must exactly match the current description
+- An Application Pipeline with a validated stage-transition matrix, append-only Stage History, private Notes, and owned Resume Version links
+- User-confirmed Tasks with priority, due/reminder timestamps, completion/reopen, filters, and deterministic suggestions; `reminder_at` is stored only and sends no notification
+- A database-backed Dashboard and authenticated React pages for Jobs, imports, Applications, Tasks, and summary statistics
+- Alembic revision `20260713_02`, PostgreSQL integration coverage, and an isolated `pja-v2-0-2-*` Docker Smoke mode on `127.0.0.1:18082`
+
+The foundation from Version 2.0.1 remains intact:
 
 - SQLAlchemy 2.x models, psycopg 3, PostgreSQL 16, and Alembic migrations
 - Explicit administrator initialization with no default account or public registration
@@ -21,7 +34,9 @@ The current development branch adds the identity and data foundation for Version
 - PostgreSQL/private-file backup, manifest verification, guarded empty-target restore, and isolated Docker Smoke coverage
 - Authenticated React routes, in-memory CSRF handling, Profile, Resume, Import, and Account pages around the preserved workspace
 
-This phase has not been deployed to the live Version 1.9 runtime. It does not modify the production SQLite database, `pja-br0`, or the pref 8999 routing rule. Start with [Version 2 Phase 1](docs/V2_PHASE_1.md), [Version 2 Security](docs/V2_SECURITY.md), [SQLite Migration](docs/V2_SQLITE_MIGRATION.md), and [Version 2 Backup and Restore](docs/V2_BACKUP_AND_RESTORE.md).
+Neither Version 2.0.1 nor Version 2.0.2 has been deployed to the live Version 1.9 runtime. Version 2.0.2 does not implement Job/Profile matching scores, tailored resumes, cover letters, Workers, notifications, automatic applications, or production rollout. It does not modify the production database, `pja-br0`, or the pref 8999 routing rule.
+
+Start with [Version 2 roadmap](docs/V2_ROADMAP.md), [Version 2.0.2 architecture](docs/V2_0_2_ARCHITECTURE.md), [Job Library](docs/V2_JOB_LIBRARY.md), [Job import security](docs/V2_JOB_IMPORT_SECURITY.md), [Application Pipeline](docs/V2_APPLICATION_PIPELINE.md), and [development guide](docs/V2_DEVELOPMENT.md).
 
 Useful development checks:
 
@@ -33,7 +48,7 @@ npm ci
 npm run test
 npm run build
 cd ..
-scripts/docker-smoke-v2.sh
+PJA_SMOKE_MILESTONE=2.0.2 PYTHON_BIN="$(command -v python)" scripts/docker-smoke-v2.sh
 ```
 
 ## Core Features

@@ -477,3 +477,16 @@ A: Version 1.7 uses defense-in-depth controls around the LLM call. The backend s
 - Added read-only Version 1.9 SQLite inspection and transactional PostgreSQL migration with fingerprinting, row-count and aggregate-checksum verification, idempotent migration records, malformed JSON normalization, and sequence synchronization.
 - Added Version 2 PostgreSQL/private-file/Project-Knowledge backup manifests, checksum verification, guarded empty-target restore, isolated Docker Smoke tests, PostgreSQL CI integration tests, and frontend authentication/Profile/Resume tests.
 - Phase 1 is an alpha development foundation and was not deployed over the live Version 1.9 production runtime.
+
+## 11. Version 2.0.2 Job Library and Application Pipeline Milestone
+
+- Added an ownership-scoped PostgreSQL Job Library with deterministic normalization, canonical URLs, description hashes, optimistic revisions, search/filter/sort/pagination, provenance Sources, structured evidence-bound Requirements, and soft archive/restore.
+- Added secure manual, URL, PDF/DOCX, and CSV Job imports. URL acquisition pins a validated address, revalidates redirects, blocks local/private/metadata/obfuscated targets, bounds time and decompression, sends no user credentials, and executes no JavaScript. File import reuses private atomic storage and bounded parsers.
+- Added deterministic exact and near duplicate detection with explainable reason codes, explicit human resolution, and transactional merge history. Merge preserves Sources, Requirements, Tasks, Applications, Notes, and Stage History and never physically deletes a Job.
+- Added an explicit requirement extraction endpoint. Job Description text remains untrusted data; tests Mock the model; output must match a strict schema and exact evidence spans; all LLM items begin in `needs_review`. Import never automatically calls the model.
+- Added an Application Pipeline with a validated stage-transition matrix, PostgreSQL row locks, optimistic revisions, append-only Stage History, terminal reopen confirmation, owned Resume Version links, private Notes, and soft archive.
+- Added owned Tasks with due date, priority, completion/reopen, filters, relation consistency, and deterministic user-confirmed suggestions. `reminder_at` is stored only; there is no Scheduler, Worker, browser notification, or email sender.
+- Added real owner-isolated Dashboard aggregates plus React Dashboard, Job Library/Detail/Import, Application Board/Detail, and Tasks pages. Drag/drop has transition prechecks, important-stage confirmation, optimistic rollback, 409 refresh, and accessible non-drag controls.
+- Added Alembic revision `20260713_02`, SQLite/PostgreSQL tests, IDOR/CSRF/SSRF/Prompt Injection/CSV injection tests, Docker builds, and an isolated `pja-v2-0-2-*` Smoke on `127.0.0.1:18082` with restart and backup/restore verification.
+- Runtime development marker is `2.0.0-alpha.2`; latest stable remains `v1.9.0`. Version 2.0.1 PR #6 is still the unmerged base, so Version 2.0.2 is a stacked PR and cannot be merged independently to `main`.
+- This milestone has no Job/Profile matching score, tailored Resume, Cover Letter generation, Worker, automatic application, production database migration, deployment, Version 2 tag, release, or published Version 2 image.
