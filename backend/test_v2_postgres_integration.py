@@ -188,6 +188,29 @@ class V2PostgreSQLIntegrationTest(unittest.TestCase):
         with psycopg.connect(raw_url) as connection:
             self.assertEqual(connection.execute("SELECT to_regclass('public.jobs')").fetchone()[0], "jobs")
 
+    def test_alpha2_schema_upgrades_to_matching_and_materials(self):
+        config = Config(str(Path(__file__).parent / "alembic.ini"))
+        command.downgrade(config, "20260713_02")
+        raw_url = self.database_url.replace("postgresql+psycopg://", "postgresql://", 1)
+        with psycopg.connect(raw_url) as connection:
+            self.assertIsNone(connection.execute("SELECT to_regclass('public.job_match_analyses')").fetchone()[0])
+            self.assertEqual(connection.execute("SELECT to_regclass('public.applications')").fetchone()[0], "applications")
+        command.upgrade(config, "head")
+        with psycopg.connect(raw_url) as connection:
+            for table in (
+                "job_match_analyses", "job_match_dimensions", "job_match_evidence",
+                "job_rank_runs", "job_rank_items", "application_packages",
+                "application_materials", "application_material_versions",
+                "material_evidence_links", "material_reviews",
+            ):
+                self.assertEqual(connection.execute("SELECT to_regclass(%s)", (f"public.{table}",)).fetchone()[0], table)
+            self.assertEqual(
+                connection.execute(
+                    "SELECT COUNT(*) FROM pg_indexes WHERE indexname = 'uq_application_packages_approved'"
+                ).fetchone()[0],
+                1,
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
