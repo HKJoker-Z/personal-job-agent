@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from fastapi import FastAPI
 
-from app.api.routers import applications, auth, dashboard, jobs, profile, resumes, system, tasks
+from app.api.routers import applications, auth, dashboard, jobs, matching, materials, profile, resumes, system, tasks
 from app.auth.middleware import V2SecurityMiddleware
 from app.core.config import load_v2_settings
 
@@ -14,8 +14,11 @@ def extend_application(app: FastAPI) -> FastAPI:
     app.include_router(auth.router)
     app.include_router(profile.router)
     app.include_router(resumes.router)
+    # Static /api/jobs/rank must be registered before the legacy /api/jobs/{job_id} route.
+    app.include_router(matching.router)
     app.include_router(jobs.router)
     app.include_router(applications.router)
+    app.include_router(materials.router)
     app.include_router(tasks.router)
     app.include_router(dashboard.router)
     app.include_router(system.router)
