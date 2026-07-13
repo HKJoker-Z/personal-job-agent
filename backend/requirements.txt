@@ -8,3 +8,10 @@ pypdf==6.14.2
 python-docx==1.2.0
 openai==2.44.0
 reportlab==4.1.0
+SQLAlchemy==2.0.51
+psycopg[binary]==3.3.4
+alembic==1.18.5
+pwdlib[argon2]==0.3.0
+email-validator==2.3.0
+urllib3==2.1.0
+chardet==5.2.0

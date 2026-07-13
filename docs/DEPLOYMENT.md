@@ -1,5 +1,7 @@
 # Version 1.9 Deployment Guide
 
+This remains the guide for the live Version 1.9 runtime. Version 2.0 Phase 1 is a development foundation and is not authorized for production deployment by this document. See [Version 2 Phase 1](V2_PHASE_1.md) for architecture and test-only guidance.
+
 ## Overview and Architecture
 
 Version 1.9 provides a repeatable, single-instance Docker Compose topology:

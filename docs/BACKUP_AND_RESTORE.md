@@ -1,5 +1,7 @@
 # Backup and Restore
 
+This document describes the live Version 1.9 SQLite workflow. Version 2 PostgreSQL/private-file procedures are separate; see [Version 2 Backup and Restore](V2_BACKUP_AND_RESTORE.md). Do not use one version's restore tool on the other version's data.
+
 ## Backup Scope
 
 Backups contain the runtime SQLite `app.db`, the writable `PROJECT_KNOWLEDGE.md`, and `manifest.json`. The manifest records application version, UTC creation time, logical filenames, and SHA-256 checksums.

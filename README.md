@@ -1,10 +1,40 @@
 # Personal Job Application Agent
 
-Current version: v1.9
+Production version: v1.9
+
+Development version: 2.0.0-alpha.1 (Phase 1 foundation)
 
 Personal Job Application Agent is a local-first, full-stack AI job application assistant. It parses a PDF or DOCX resume, accepts pasted job description text or one user-provided job URL, applies deterministic AI security checks, uses the DeepSeek API to generate explainable Resume-JD matching results, retrieves evidence from a curated Project Knowledge RAG source, creates an English cover letter, recommends the next application action, tracks saved applications in SQLite, records local AI monitoring metadata, runs offline behavioral evaluations, and exports application materials as DOCX/PDF files.
 
 Version 1.9 adds containerized deployment, persistent runtime storage, production configuration validation, health/readiness checks, privacy-aware request logging, SQLite-safe backup/restore tooling, GitHub Actions CI, and versioned GHCR publishing configuration. It remains a single-instance SQLite deployment model and does not claim Kubernetes, high availability, zero downtime, distributed tracing, or automatic cloud deployment.
+
+## Version 2.0 Phase 1
+
+The current development branch adds the identity and data foundation for Version 2 while preserving the Version 1.9 Analyze, Project Knowledge, Monitoring, Evaluation, History, and export workflows:
+
+- SQLAlchemy 2.x models, psycopg 3, PostgreSQL 16, and Alembic migrations
+- Explicit administrator initialization with no default account or public registration
+- Argon2 password hashing, opaque server-side Sessions, HttpOnly Cookies, Origin-bound CSRF, database-backed login throttling, and ownership-scoped queries
+- Career Profile CRUD, optimistic revision checks, immutable snapshots, restore, verification states, and deterministic completeness
+- Resume Library, immutable Resume Versions, PDF/DOCX import, human review gates, private file storage, and IDOR protection
+- Read-only Version 1.9 SQLite inspection and transactional PostgreSQL migration with row-count/checksum verification
+- PostgreSQL/private-file backup, manifest verification, guarded empty-target restore, and isolated Docker Smoke coverage
+- Authenticated React routes, in-memory CSRF handling, Profile, Resume, Import, and Account pages around the preserved workspace
+
+This phase has not been deployed to the live Version 1.9 runtime. It does not modify the production SQLite database, `pja-br0`, or the pref 8999 routing rule. Start with [Version 2 Phase 1](docs/V2_PHASE_1.md), [Version 2 Security](docs/V2_SECURITY.md), [SQLite Migration](docs/V2_SQLITE_MIGRATION.md), and [Version 2 Backup and Restore](docs/V2_BACKUP_AND_RESTORE.md).
+
+Useful development checks:
+
+```bash
+cd backend
+python -m unittest discover -v
+cd ../frontend
+npm ci
+npm run test
+npm run build
+cd ..
+scripts/docker-smoke-v2.sh
+```
 
 ## Core Features
 

@@ -39,6 +39,10 @@ def _directory_is_writable(directory: Path) -> bool:
 
 
 def readiness_status(config: AppConfig | None = None) -> tuple[dict[str, Any], int]:
+    if os.getenv("DATABASE_URL") or os.getenv("TEST_DATABASE_URL"):
+        from app.readiness import readiness_status as v2_readiness_status
+
+        return v2_readiness_status()
     try:
         settings = config or load_config(validate_production=False)
     except ConfigError:

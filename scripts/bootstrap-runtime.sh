@@ -4,7 +4,7 @@ set -Eeuo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 RUNTIME_DIR="${ROOT_DIR}/runtime"
 
-install -d -m 0750 "${RUNTIME_DIR}/data" "${RUNTIME_DIR}/project-knowledge" "${RUNTIME_DIR}/backups"
+install -d -m 0750 "${RUNTIME_DIR}/data" "${RUNTIME_DIR}/project-knowledge" "${RUNTIME_DIR}/backups" "${RUNTIME_DIR}/files"
 
 TARGET_KNOWLEDGE="${RUNTIME_DIR}/project-knowledge/PROJECT_KNOWLEDGE.md"
 if [[ ! -e "${TARGET_KNOWLEDGE}" ]]; then
@@ -16,7 +16,7 @@ if [[ -e "${ROOT_DIR}/backend/data/app.db" && ! -e "${RUNTIME_DIR}/data/app.db" 
 fi
 
 if [[ "${EUID}" -eq 0 ]]; then
-  chown -R 10001:10001 "${RUNTIME_DIR}/data" "${RUNTIME_DIR}/project-knowledge" "${RUNTIME_DIR}/backups"
+  chown -R 10001:10001 "${RUNTIME_DIR}/data" "${RUNTIME_DIR}/project-knowledge" "${RUNTIME_DIR}/backups" "${RUNTIME_DIR}/files"
 else
   owner_uid="$(stat -c '%u' "${RUNTIME_DIR}/data")"
   if [[ "${owner_uid}" != "10001" ]]; then
