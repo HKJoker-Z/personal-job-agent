@@ -168,14 +168,17 @@ class MaterialService:
         )))
         content = dict(resume.content_json)
         content.pop("header", None)  # Contact details are merged locally by export, never sent to a model.
+        # Build the model/validation text only from Resume prose. Snapshot IDs and
+        # keyword bookkeeping remain local JSON metadata and are never interpreted
+        # as candidate claims.
+        text_values = _flatten(content, blocked={"schema_version", "tailoring"})
+        text = "\n".join(text_values)[:50_000]
         content["tailoring"] = {
             "selected_evidence_ids": [str(item.id) for item in evidence],
             "keyword_coverage": sorted({item.dimension for item in evidence if item.contribution > 0}),
             "missing_keywords": sorted({item.dimension for item in self._analysis_evidence(analysis.id) if item.evidence_kind in {"missing", "unknown"}}),
             "source_resume_version_id": str(resume.id),
         }
-        text_values = _flatten(content)
-        text = "\n".join(text_values)[:50_000]
         content, text, model_metadata = generate_grounded_material(
             material_type="tailored_resume", seed_text=text, seed_json=content,
             evidence=[item.text for item in self._evidence_sources(package)],
