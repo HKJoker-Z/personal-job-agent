@@ -58,6 +58,13 @@ class V2SecurityMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         if not request.url.path.startswith("/api/"):
             return await call_next(request)
+        content_length = request.headers.get("content-length", "").strip()
+        if content_length:
+            try:
+                if int(content_length) > self.settings.request_max_body_mb * 1024 * 1024:
+                    return JSONResponse(status_code=413, content={"detail": "Request body is too large."})
+            except ValueError:
+                return JSONResponse(status_code=400, content={"detail": "Content-Length is invalid."})
         db = self._session_factory()
         request.state.v2_db = db
         try:
@@ -92,6 +99,14 @@ class V2SecurityMiddleware(BaseHTTPMiddleware):
                 db.rollback()
             else:
                 db.commit()
+            response.headers.setdefault("X-Content-Type-Options", "nosniff")
+            response.headers.setdefault("X-Frame-Options", "DENY")
+            response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+            response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+            response.headers.setdefault(
+                "Content-Security-Policy",
+                "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+            )
             return response
         except SQLAlchemyError:
             db.rollback()

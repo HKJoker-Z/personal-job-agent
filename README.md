@@ -2,9 +2,9 @@
 
 Latest stable release: v1.9.0
 
-Latest prerelease: v2.0.0-alpha.2
+Latest prerelease: v2.0.0-alpha.3
 
-Development runtime version: 2.0.0-alpha.3
+Development runtime version: 2.0.0-alpha.4-dev+031dfa9
 
 Personal Job Application Agent is a local-first, full-stack AI job application assistant. It parses a PDF or DOCX resume, accepts pasted job description text or one user-provided job URL, applies deterministic AI security checks, uses the DeepSeek API to generate explainable Resume-JD matching results, retrieves evidence from a curated Project Knowledge RAG source, creates an English cover letter, recommends the next application action, tracks saved applications in SQLite, records local AI monitoring metadata, runs offline behavioral evaluations, and exports application materials as DOCX/PDF files.
 
@@ -12,7 +12,7 @@ Version 1.9 adds containerized deployment, persistent runtime storage, productio
 
 ## Version 2 development milestones
 
-Version 2.0.1 and Version 2.0.2 are included in the published `v2.0.0-alpha.2` prerelease. Version 2.0.3 is the current development milestone for deterministic explainable matching, reproducible Job ranking, and evidence-grounded Application Materials. The final formal release remains planned as `v2.0.0`.
+Version 2.0.1 through Version 2.0.3 are included in the published `v2.0.0-alpha.3` prerelease. Version 2.0.4 is the final development milestone underlying the future formal `v2.0.0`: reliable asynchronous Agent workflows, Workers, approvals, retry/cancellation/resume, live progress, budgets, and production readiness.
 
 Version 2.0.2 adds:
 
@@ -36,11 +36,13 @@ The foundation from Version 2.0.1 remains intact:
 - PostgreSQL/private-file backup, manifest verification, guarded empty-target restore, and isolated Docker Smoke coverage
 - Authenticated React routes, in-memory CSRF handling, Profile, Resume, Import, and Account pages around the preserved workspace
 
-Version 2.0.3 adds deterministic 0–100 dimension scoring, separately reported hard filters, immutable Match snapshots, reproducible ranking, Application Packages, Tailored Resume/Cover Letter/Application Answer Drafts, immutable Material Versions, evidence links, independent fact validation, and explicit review/finalization gates. An LLM may only rewrite the local grounded Draft; it never decides numeric scores, and all tests use a deterministic or Mock provider. Unknown evidence is distinct from confirmed missing evidence, and the score is not an Offer probability.
+Version 2.0.3 adds deterministic 0–100 dimension scoring, separately reported hard filters, immutable Match snapshots, reproducible ranking, Application Packages, Tailored Resume/Cover Letter/Application Answer Drafts, immutable Material Versions, evidence links, independent fact validation, and explicit review/finalization gates. An LLM may only rewrite the local grounded Draft; it never decides numeric scores. Unknown evidence is distinct from confirmed missing evidence, and the score is not an Offer probability.
 
-No Version 2 build is deployed to the live Version 1.9 runtime. Alpha 3 does not implement Workers, queues, schedulers, automatic applications, email sending, interview tools, or production migration. Generated Materials remain Drafts until explicit user review; Tailored Resume generation never changes the source Resume.
+Version 2.0.4 adds PostgreSQL-owned Agent Runs/Steps/append-only Events, Redis 7.4.1 and Dramatiq 2.2.0 Workers, a Transactional Outbox, safe-ID-only JSON queue messages, row-locked state transitions, idempotent usage accounting, bounded retry and Dead Letter handling, step-boundary cancellation, crash resume, explicit append-only approvals, authenticated reconnecting SSE progress, per-user/Run/Step token and estimated-cost budgets, concurrent limits, Worker heartbeats, and a durable 20-step Application Package workflow. Approval waits occupy no Worker, page closure does not stop work, completed steps are reused, and nothing is automatically submitted or sent.
 
-Start with [Version 2 roadmap](docs/V2_ROADMAP.md), [Version 2.0.3 architecture](docs/V2_0_3_ARCHITECTURE.md), [matching engine](docs/V2_MATCHING_ENGINE.md), [fact grounding](docs/V2_FACT_GROUNDING.md), [Application Packages](docs/V2_APPLICATION_PACKAGES.md), and [development guide](docs/V2_DEVELOPMENT.md).
+No Version 2 build is deployed to the live Version 1.9 runtime. Interview Center, Mock Interview, formal STAR Story tooling, automatic applications, automatic email, a browser extension, and multi-model intelligent routing are deferred to Version 2.1.x. Generated Materials remain Drafts until explicit user approval; Tailored Resume generation never changes the source Resume.
+
+Start with [Version 2 roadmap](docs/V2_ROADMAP.md), [Version 2.0.4 architecture](docs/V2_0_4_ARCHITECTURE.md), [Agent API](docs/V2_0_4_API.md), [production readiness](docs/V2_PRODUCTION_READINESS.md), [matching engine](docs/V2_MATCHING_ENGINE.md), [fact grounding](docs/V2_FACT_GROUNDING.md), [Application Packages](docs/V2_APPLICATION_PACKAGES.md), and [development guide](docs/V2_DEVELOPMENT.md).
 
 Useful development checks:
 
@@ -52,7 +54,7 @@ npm ci
 npm run test
 npm run build
 cd ..
-PJA_SMOKE_MILESTONE=2.0.3 PYTHON_BIN="$(command -v python)" scripts/docker-smoke-v2.sh
+PJA_SMOKE_MILESTONE=2.0.4 PYTHON_BIN="$(command -v python)" scripts/docker-smoke-v2.sh
 ```
 
 ## Core Features
