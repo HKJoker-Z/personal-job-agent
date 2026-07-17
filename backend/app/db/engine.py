@@ -24,6 +24,9 @@ def build_engine(database_url: str | None = None) -> Engine:
         kwargs["connect_args"] = {"timeout": settings.database_connect_timeout_seconds}
     else:
         kwargs["connect_args"] = {"connect_timeout": settings.database_connect_timeout_seconds}
+        kwargs["pool_size"] = settings.database_pool_size
+        kwargs["max_overflow"] = settings.database_max_overflow
+        kwargs["pool_timeout"] = settings.database_connect_timeout_seconds
     return create_engine(url, **kwargs)
 
 
