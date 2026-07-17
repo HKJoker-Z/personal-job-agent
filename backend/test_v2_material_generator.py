@@ -3,6 +3,9 @@ import os
 import unittest
 from unittest.mock import patch
 
+import httpx
+from openai import APIConnectionError
+
 from app.materials.generator import generate_grounded_material
 
 
@@ -58,6 +61,17 @@ class V203MaterialGeneratorTest(unittest.TestCase):
             generate_grounded_material(
                 material_type="tailored_resume", seed_text="Draft", seed_json={}, evidence=[],
                 invoker=lambda _system, _user: (_ for _ in ()).throw(TimeoutError("private provider detail")),
+            )
+
+    def test_provider_connection_failure_is_classified_as_retryable_timeout(self):
+        failure = APIConnectionError(
+            message="private provider connection detail",
+            request=httpx.Request("POST", "https://provider.invalid/chat"),
+        )
+        with self.assertRaisesRegex(ValueError, "temporarily unavailable"):
+            generate_grounded_material(
+                material_type="tailored_resume", seed_text="Draft", seed_json={}, evidence=[],
+                invoker=lambda _system, _user: (_ for _ in ()).throw(failure),
             )
 
 

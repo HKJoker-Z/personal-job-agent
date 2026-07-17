@@ -4,14 +4,36 @@ set -Eeuo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 STAMP="$(date +%s)-$$"
 SMOKE_MILESTONE="${PJA_SMOKE_MILESTONE:-2.0.1}"
-if [[ "${SMOKE_MILESTONE}" == "2.0.3" ]]; then
+REAL_LLM_VALIDATION="${PJA_REAL_LLM_VALIDATION:-0}"
+if [[ "${REAL_LLM_VALIDATION}" != "0" && "${REAL_LLM_VALIDATION}" != "1" ]]; then
+  printf '%s\n' 'PJA_REAL_LLM_VALIDATION must be 0 or 1.' >&2
+  exit 1
+fi
+if [[ "${REAL_LLM_VALIDATION}" == "1" && -z "${PJA_REAL_DEEPSEEK_API_KEY:-}" ]]; then
+  printf '%s\n' 'Controlled DeepSeek validation requires an explicitly supplied API key.' >&2
+  exit 1
+fi
+V202_SCOPE=0
+V203_SCOPE=0
+V204_SCOPE=0
+if [[ "${SMOKE_MILESTONE}" == "2.0.4" ]]; then
+  TEST_PREFIX='pja-v2-final'
+  DEFAULT_HTTP_PORT=18088
+  DEFAULT_POSTGRES_PORT=15438
+  V202_SCOPE=1
+  V203_SCOPE=1
+  V204_SCOPE=1
+elif [[ "${SMOKE_MILESTONE}" == "2.0.3" ]]; then
   TEST_PREFIX='pja-v2-0-3'
   DEFAULT_HTTP_PORT=18083
   DEFAULT_POSTGRES_PORT=15435
+  V202_SCOPE=1
+  V203_SCOPE=1
 elif [[ "${SMOKE_MILESTONE}" == "2.0.2" ]]; then
   TEST_PREFIX='pja-v2-0-2'
   DEFAULT_HTTP_PORT=18082
   DEFAULT_POSTGRES_PORT=15434
+  V202_SCOPE=1
 elif [[ "${SMOKE_MILESTONE}" == "2.0.1" ]]; then
   TEST_PREFIX='pja-v2-phase1'
   DEFAULT_HTTP_PORT=18080
@@ -50,7 +72,7 @@ else
 fi
 
 COMPOSE=("${DOCKER[@]}" compose --project-name "${PROJECT_NAME}" --env-file "${ENV_FILE}" -f "${ROOT_DIR}/compose.yaml" -f "${ROOT_DIR}/compose.test.yaml")
-if [[ "${SMOKE_MILESTONE}" == "2.0.2" || "${SMOKE_MILESTONE}" == "2.0.3" ]]; then
+if [[ "${V202_SCOPE}" == "1" ]]; then
   COMPOSE+=(-f "${ROOT_DIR}/compose.v202-smoke.yaml")
 fi
 
@@ -58,6 +80,11 @@ cleanup() {
   local exit_code=$?
   trap - EXIT
   if valid_project_name "${PROJECT_NAME}"; then
+    if [[ "${exit_code}" != 0 ]]; then
+      "${COMPOSE[@]}" ps >&2 || true
+      "${COMPOSE[@]}" logs --no-color --tail=200 \
+        database redis backup-before-migrate migrate worker backend frontend >&2 || true
+    fi
     "${COMPOSE[@]}" down --volumes --remove-orphans >/dev/null 2>&1 || true
   fi
   if [[ "${TEST_ROOT}" == "/tmp/${TEST_PREFIX}-"* ]]; then
@@ -73,7 +100,8 @@ smoke_step() {
 }
 
 umask 077
-install -d -m 0700 "${TEST_ROOT}/files" "${TEST_ROOT}/knowledge" "${TEST_ROOT}/backup" "${TEST_ROOT}/mock-job"
+install -d -m 0700 "${TEST_ROOT}/files" "${TEST_ROOT}/knowledge" "${TEST_ROOT}/backup" \
+  "${TEST_ROOT}/verified-backup" "${TEST_ROOT}/mock-job"
 install -m 0600 "${ROOT_DIR}/docs/PROJECT_KNOWLEDGE.md" "${TEST_ROOT}/knowledge/PROJECT_KNOWLEDGE.md"
 python3 - "${TEST_ROOT}/mock-job/job.html" <<'PY'
 import sys
@@ -92,10 +120,20 @@ chmod 0755 "${TEST_ROOT}/mock-job"
 chmod 0644 "${TEST_ROOT}/mock-job/job.html"
 "${DOCKER[@]}" run --rm \
   -v "${TEST_ROOT}:/test-root" \
-  alpine:3.21 chown -R 10001:10001 /test-root/files /test-root/knowledge
+  alpine:3.21 chown -R 10001:10001 /test-root/files /test-root/knowledge /test-root/backup \
+  /test-root/mock-job
 
 {
-  if [[ "${SMOKE_MILESTONE}" == "2.0.2" || "${SMOKE_MILESTONE}" == "2.0.3" ]]; then printf 'APP_ENV=test\n'; else printf 'APP_ENV=development\n'; fi
+  if [[ "${REAL_LLM_VALIDATION}" == "1" ]]; then
+    printf 'APP_ENV=development\n'
+    printf 'PJA_COMPOSE_APP_ENV=development\n'
+  elif [[ "${V202_SCOPE}" == "1" ]]; then
+    printf 'APP_ENV=test\n'
+    printf 'PJA_COMPOSE_APP_ENV=test\n'
+  else
+    printf 'APP_ENV=development\n'
+    printf 'PJA_COMPOSE_APP_ENV=development\n'
+  fi
   printf 'APP_ENV_FILE=%s\n' "${ENV_FILE}"
   printf 'POSTGRES_DB=personal_job_agent_smoke_test\n'
   printf 'POSTGRES_BOOTSTRAP_USER=pja_bootstrap\n'
@@ -110,6 +148,7 @@ chmod 0644 "${TEST_ROOT}/mock-job/job.html"
   printf 'APPLICATION_BRIDGE_NAME=pja2-%s\n' "$(( $$ % 100000 ))"
   printf 'PROJECT_KNOWLEDGE_DIR=%s\n' "${TEST_ROOT}/knowledge"
   printf 'FILE_STORAGE_DIR=%s\n' "${TEST_ROOT}/files"
+  printf 'BACKUP_DIR=%s\n' "${TEST_ROOT}/backup"
   printf 'MOCK_JOB_DIR=%s\n' "${TEST_ROOT}/mock-job"
   printf 'SESSION_COOKIE_SECURE=false\n'
   printf 'AUTH_TRUSTED_ORIGINS=%s\n' "${ORIGIN}"
@@ -118,7 +157,14 @@ chmod 0644 "${TEST_ROOT}/mock-job/job.html"
   printf 'TRUSTED_HOSTS=127.0.0.1,localhost\n'
   printf 'ALLOWED_ORIGINS=%s\n' "${ORIGIN}"
   printf 'ENABLE_API_DOCS=false\n'
-  printf '%s=%s\n' 'DEEPSEEK_API_KEY' 'TEST_ONLY_NEVER_SENT'
+  if [[ "${REAL_LLM_VALIDATION}" == "1" ]]; then
+    printf '%s=%s\n' 'DEEPSEEK_API_KEY' "${PJA_REAL_DEEPSEEK_API_KEY}"
+    printf 'AGENT_MODEL_MAX_OUTPUT_TOKENS=800\n'
+    printf 'MODEL_INPUT_COST_PER_MILLION_USD=1\n'
+    printf 'MODEL_OUTPUT_COST_PER_MILLION_USD=1\n'
+  else
+    printf '%s=%s\n' 'DEEPSEEK_API_KEY' 'TEST_ONLY_NEVER_SENT'
+  fi
   printf '%s=%s\n' 'MONITORING_ADMIN_TOKEN' 'TEST_ONLY_MONITORING_TOKEN'
 } >"${ENV_FILE}"
 chmod 0600 "${ENV_FILE}"
@@ -263,7 +309,7 @@ api_write POST /api/resumes/import/confirm \
 python3 -c 'import json,sys; assert json.load(open(sys.argv[1]))["version"]["status"] == "final"' "${RESPONSE_FILE}"
 smoke_step 'DOCX import review state and JSON request body finalize flow'
 
-if [[ "${SMOKE_MILESTONE}" == "2.0.2" || "${SMOKE_MILESTONE}" == "2.0.3" ]]; then
+if [[ "${V202_SCOPE}" == "1" ]]; then
   api_write POST /api/jobs/import/manual \
     '{"company_name":"Synthetic Manual Company","title":"Platform Engineer","location":"Test City","description":"Required: Python and PostgreSQL. 5 years experience. Remote.","url":"https://jobs.example.test/platform?utm_source=smoke","employment_type":"permanent","work_mode":"remote","salary_min":100,"salary_max":200,"salary_currency":"USD","application_deadline":"2030-01-01T00:00:00Z"}'
   JOB_ID="$(python3 -c 'import json,sys; value=json.load(open(sys.argv[1])); assert value["result"] in {"created","duplicate_candidate"}; print(value["job"]["id"])' "${RESPONSE_FILE}")"
@@ -272,15 +318,17 @@ if [[ "${SMOKE_MILESTONE}" == "2.0.2" || "${SMOKE_MILESTONE}" == "2.0.3" ]]; the
   python3 -c 'import json,sys; assert json.load(open(sys.argv[1]))["result"] == "existing"' "${RESPONSE_FILE}"
   smoke_step 'manual Job import, normalization, and exact duplicate detection'
 
-  api_write POST /api/jobs/import/url '{"url":"http://mock-job:8085/job.html"}'
-  python3 -c 'import json,sys; value=json.load(open(sys.argv[1])); assert value["job"]["title"] == "Mock URL Engineer"; assert value["job"]["company_name"] == "Synthetic URL Company"' "${RESPONSE_FILE}"
-  smoke_step 'SSRF-guarded URL import through isolated local Mock HTTP Server'
+  if [[ "${REAL_LLM_VALIDATION}" == "0" ]]; then
+    api_write POST /api/jobs/import/url '{"url":"http://mock-job:8085/job.html"}'
+    python3 -c 'import json,sys; value=json.load(open(sys.argv[1])); assert value["job"]["title"] == "Mock URL Engineer"; assert value["job"]["company_name"] == "Synthetic URL Company"' "${RESPONSE_FILE}"
+    smoke_step 'SSRF-guarded URL import through isolated local Mock HTTP Server'
+  fi
 
   curl --noproxy '*' --fail --silent --show-error \
     --cookie "${COOKIE_JAR}" -H "Origin: ${ORIGIN}" -H "X-CSRF-Token: ${CSRF_TOKEN}" \
     -F "file=@${DOCX_FIXTURE};type=application/vnd.openxmlformats-officedocument.wordprocessingml.document" \
     "${ORIGIN}/api/jobs/import/file" >"${RESPONSE_FILE}"
-  JOB_FILE_ID="$(python3 -c 'import json,sys; value=json.load(open(sys.argv[1])); assert value["file"]["kind"] == "job_source"; print(value["file"]["id"])' "${RESPONSE_FILE}")"
+  python3 -c 'import json,sys; value=json.load(open(sys.argv[1])); assert value["file"]["kind"] == "job_source"; assert value["file"]["id"]' "${RESPONSE_FILE}"
   smoke_step 'private DOCX Job import and File Asset source link'
 
   CSV_FIXTURE="${TEST_ROOT}/jobs.csv"
@@ -334,11 +382,14 @@ PY
   python3 -c 'import json,sys; value=json.load(open(sys.argv[1])); assert value["status"] == "completed"; assert value["completed_at"]' "${RESPONSE_FILE}"
   curl --noproxy '*' --fail --silent --show-error --cookie "${COOKIE_JAR}" \
     "${ORIGIN}/api/dashboard/summary" >"${RESPONSE_FILE}"
-  python3 -c 'import json,sys; value=json.load(open(sys.argv[1])); assert value["jobs_total"] >= 4; assert value["applications_total"] == 1' "${RESPONSE_FILE}"
+  MINIMUM_JOB_COUNT=4
+  if [[ "${REAL_LLM_VALIDATION}" == "1" ]]; then MINIMUM_JOB_COUNT=3; fi
+  python3 -c 'import json,sys; value=json.load(open(sys.argv[1])); assert value["jobs_total"] >= int(sys.argv[2]); assert value["applications_total"] == 1' \
+    "${RESPONSE_FILE}" "${MINIMUM_JOB_COUNT}"
   smoke_step 'Task completion and owned Dashboard aggregates'
 fi
 
-if [[ "${SMOKE_MILESTONE}" == "2.0.3" ]]; then
+if [[ "${V203_SCOPE}" == "1" ]]; then
   curl --noproxy '*' --fail --silent --show-error --cookie "${COOKIE_JAR}" \
     "${ORIGIN}/api/profile" >"${RESPONSE_FILE}"
   PROFILE_REVISION="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["revision"])' "${RESPONSE_FILE}")"
@@ -367,44 +418,214 @@ if [[ "${SMOKE_MILESTONE}" == "2.0.3" ]]; then
   RANK_RUN_ID="$(python3 -c 'import json,sys; value=json.load(open(sys.argv[1])); assert value["job_count"] == 1; assert value["items"][0]["hard_filter_status"] == "passed"; print(value["id"])' "${RESPONSE_FILE}")"
   smoke_step 'deterministic Match, hard filter, and reproducible Job Ranking'
 
-  api_write POST "/api/applications/${APPLICATION_ID}/packages" \
-    "{\"source_resume_version_id\":\"${VERSION_ID}\",\"match_analysis_id\":\"${MATCH_ID}\",\"title\":\"Synthetic Smoke Package\"}"
-  PACKAGE_ID="$(python3 -c 'import json,sys; value=json.load(open(sys.argv[1])); assert value["status"] == "draft"; print(value["id"])' "${RESPONSE_FILE}")"
-  api_write POST "/api/application-packages/${PACKAGE_ID}/generate-resume" '{}'
-  RESUME_MATERIAL_ID="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["material_id"])' "${RESPONSE_FILE}")"
-  GENERATED_RESUME_VERSION_ID="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["id"])' "${RESPONSE_FILE}")"
-  api_write POST "/api/application-packages/${PACKAGE_ID}/generate-cover-letter" '{}'
-  COVER_VERSION_ID="$(python3 -c 'import json,sys; value=json.load(open(sys.argv[1])); assert value["validation_status"] == "valid"; print(value["id"])' "${RESPONSE_FILE}")"
-  api_write POST "/api/application-packages/${PACKAGE_ID}/answers" \
-    '{"questions":[{"key":"role","question":"Why are you interested in this role?"},{"key":"authorization","question":"What is your work authorization?"}]}'
-  python3 -c 'import json,sys; value=json.load(open(sys.argv[1])); assert len(value) == 2; assert all(item["validation_status"] in {"valid","needs_user_input"} for item in value)' "${RESPONSE_FILE}"
-  smoke_step 'Application Package and grounded Resume, Cover Letter, and Answer drafts'
+  if [[ "${REAL_LLM_VALIDATION}" == "0" ]]; then
+    api_write POST "/api/applications/${APPLICATION_ID}/packages" \
+      "{\"source_resume_version_id\":\"${VERSION_ID}\",\"match_analysis_id\":\"${MATCH_ID}\",\"title\":\"Synthetic Smoke Package\"}"
+    PACKAGE_ID="$(python3 -c 'import json,sys; value=json.load(open(sys.argv[1])); assert value["status"] == "draft"; print(value["id"])' "${RESPONSE_FILE}")"
+    api_write POST "/api/application-packages/${PACKAGE_ID}/generate-resume" '{}'
+    RESUME_MATERIAL_ID="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["material_id"])' "${RESPONSE_FILE}")"
+    GENERATED_RESUME_VERSION_ID="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["id"])' "${RESPONSE_FILE}")"
+    api_write POST "/api/application-packages/${PACKAGE_ID}/generate-cover-letter" '{}'
+    COVER_VERSION_ID="$(python3 -c 'import json,sys; value=json.load(open(sys.argv[1])); assert value["validation_status"] == "valid"; print(value["id"])' "${RESPONSE_FILE}")"
+    api_write POST "/api/application-packages/${PACKAGE_ID}/answers" \
+      '{"questions":[{"key":"role","question":"Why are you interested in this role?"},{"key":"authorization","question":"What is your work authorization?"}]}'
+    python3 -c 'import json,sys; value=json.load(open(sys.argv[1])); assert len(value) == 2; assert all(item["validation_status"] in {"valid","needs_user_input"} for item in value)' "${RESPONSE_FILE}"
+    smoke_step 'Application Package and grounded Resume, Cover Letter, and Answer drafts'
 
-  api_write POST "/api/application-materials/${RESUME_MATERIAL_ID}/versions" \
-    "{\"expected_active_version_id\":\"${GENERATED_RESUME_VERSION_ID}\",\"content_json\":{},\"content_text\":\"Led a team of 20 and increased revenue by 75% using Kubernetes.\",\"change_summary\":\"Synthetic unsupported claim test\"}"
-  UNSUPPORTED_VERSION_ID="$(python3 -c 'import json,sys; value=json.load(open(sys.argv[1])); assert value["unsupported_claim_count"] > 0; print(value["id"])' "${RESPONSE_FILE}")"
-  BLOCKED_FINALIZE_STATUS="$(curl --noproxy '*' --silent --output /dev/null --write-out '%{http_code}' \
-    --cookie "${COOKIE_JAR}" -X POST -H "Origin: ${ORIGIN}" -H "X-CSRF-Token: ${CSRF_TOKEN}" \
-    -H 'Content-Type: application/json' --data '{"confirmation":"FINALIZE MATERIAL"}' \
-    "${ORIGIN}/api/material-versions/${UNSUPPORTED_VERSION_ID}/finalize")"
-  test "${BLOCKED_FINALIZE_STATUS}" = 409
-  api_write POST "/api/application-materials/${RESUME_MATERIAL_ID}/versions" \
-    "{\"expected_active_version_id\":\"${UNSUPPORTED_VERSION_ID}\",\"content_json\":{},\"content_text\":\"Python Platform Engineer.\",\"change_summary\":\"Grounded correction\"}"
-  SUPPORTED_VERSION_ID="$(python3 -c 'import json,sys; value=json.load(open(sys.argv[1])); assert value["unsupported_claim_count"] == 0; print(value["id"])' "${RESPONSE_FILE}")"
-  for MATERIAL_VERSION_ID in "${SUPPORTED_VERSION_ID}" "${COVER_VERSION_ID}"; do
-    api_write POST "/api/material-versions/${MATERIAL_VERSION_ID}/review" \
-      '{"decision":"approve","notes":"Synthetic Smoke review."}'
-    api_write POST "/api/material-versions/${MATERIAL_VERSION_ID}/finalize" \
-      '{"confirmation":"FINALIZE MATERIAL"}'
-    python3 -c 'import json,sys; assert json.load(open(sys.argv[1]))["finalized_at"]' "${RESPONSE_FILE}"
+    api_write POST "/api/application-materials/${RESUME_MATERIAL_ID}/versions" \
+      "{\"expected_active_version_id\":\"${GENERATED_RESUME_VERSION_ID}\",\"content_json\":{},\"content_text\":\"Led a team of 20 and increased revenue by 75% using Kubernetes.\",\"change_summary\":\"Synthetic unsupported claim test\"}"
+    UNSUPPORTED_VERSION_ID="$(python3 -c 'import json,sys; value=json.load(open(sys.argv[1])); assert value["unsupported_claim_count"] > 0; print(value["id"])' "${RESPONSE_FILE}")"
+    BLOCKED_FINALIZE_STATUS="$(curl --noproxy '*' --silent --output /dev/null --write-out '%{http_code}' \
+      --cookie "${COOKIE_JAR}" -X POST -H "Origin: ${ORIGIN}" -H "X-CSRF-Token: ${CSRF_TOKEN}" \
+      -H 'Content-Type: application/json' --data '{"confirmation":"FINALIZE MATERIAL"}' \
+      "${ORIGIN}/api/material-versions/${UNSUPPORTED_VERSION_ID}/finalize")"
+    test "${BLOCKED_FINALIZE_STATUS}" = 409
+    api_write POST "/api/application-materials/${RESUME_MATERIAL_ID}/versions" \
+      "{\"expected_active_version_id\":\"${UNSUPPORTED_VERSION_ID}\",\"content_json\":{},\"content_text\":\"Python Platform Engineer.\",\"change_summary\":\"Grounded correction\"}"
+    SUPPORTED_VERSION_ID="$(python3 -c 'import json,sys; value=json.load(open(sys.argv[1])); assert value["unsupported_claim_count"] == 0; print(value["id"])' "${RESPONSE_FILE}")"
+    for MATERIAL_VERSION_ID in "${SUPPORTED_VERSION_ID}" "${COVER_VERSION_ID}"; do
+      api_write POST "/api/material-versions/${MATERIAL_VERSION_ID}/review" \
+        '{"decision":"approve","notes":"Synthetic Smoke review."}'
+      api_write POST "/api/material-versions/${MATERIAL_VERSION_ID}/finalize" \
+        '{"confirmation":"FINALIZE MATERIAL"}'
+      python3 -c 'import json,sys; assert json.load(open(sys.argv[1]))["finalized_at"]' "${RESPONSE_FILE}"
+    done
+    curl --noproxy '*' --fail --silent --show-error --cookie "${COOKIE_JAR}" \
+      "${ORIGIN}/api/application-packages/${PACKAGE_ID}" >"${RESPONSE_FILE}"
+    PACKAGE_REVISION="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["revision"])' "${RESPONSE_FILE}")"
+    if [[ "${V204_SCOPE}" == "1" ]]; then
+      python3 -c 'import json,sys; assert json.load(open(sys.argv[1]))["status"] == "draft"' "${RESPONSE_FILE}"
+      smoke_step 'Evidence validation blocks unsupported claims and permits reviewed grounded Material finalization'
+    else
+      api_write POST "/api/application-packages/${PACKAGE_ID}/approve" \
+        "{\"expected_revision\":${PACKAGE_REVISION},\"confirmation\":\"APPROVE PACKAGE\"}"
+      python3 -c 'import json,sys; assert json.load(open(sys.argv[1]))["status"] == "approved"' "${RESPONSE_FILE}"
+      smoke_step 'Evidence validation blocks unsupported claims and permits reviewed grounded finalization'
+    fi
+  fi
+fi
+
+if [[ "${V204_SCOPE}" == "1" ]]; then
+  api_write POST "/api/applications/${APPLICATION_ID}/packages" \
+    "{\"source_resume_version_id\":\"${VERSION_ID}\",\"match_analysis_id\":\"${MATCH_ID}\",\"title\":\"Async Agent Smoke Package\"}"
+  AGENT_PACKAGE_ID="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["id"])' "${RESPONSE_FILE}")"
+  AGENT_IDEMPOTENCY_KEY="smoke-agent-${STAMP}"
+  curl --noproxy '*' --fail --silent --show-error \
+    --cookie "${COOKIE_JAR}" --cookie-jar "${COOKIE_JAR}" \
+    -X POST -H "Origin: ${ORIGIN}" -H "X-CSRF-Token: ${CSRF_TOKEN}" \
+    -H "Idempotency-Key: ${AGENT_IDEMPOTENCY_KEY}" -H 'Content-Type: application/json' \
+    --data "{\"workflow_type\":\"generate_application_package\",\"package_id\":\"${AGENT_PACKAGE_ID}\"}" \
+    "${ORIGIN}/api/agent-runs" >"${RESPONSE_FILE}"
+  AGENT_RUN_ID="$(python3 -c 'import json,sys; value=json.load(open(sys.argv[1])); assert value["reused"] is False; print(value["run"]["id"])' "${RESPONSE_FILE}")"
+
+  curl --noproxy '*' --silent --show-error --max-time 3 \
+    --cookie "${COOKIE_JAR}" -H 'Last-Event-ID: 0' \
+    "${ORIGIN}/api/agent-runs/${AGENT_RUN_ID}/events/stream" \
+    >"${TEST_ROOT}/agent-events.sse" || test "$?" = 28
+  grep -q '^id: ' "${TEST_ROOT}/agent-events.sse"
+  grep -q '^event: ' "${TEST_ROOT}/agent-events.sse"
+  smoke_step 'authenticated SSE progress with Last-Event-ID and reconnect framing'
+
+  APPROVAL_COUNT=0
+  for attempt in $(seq 1 240); do
+    curl --noproxy '*' --fail --silent --show-error --cookie "${COOKIE_JAR}" \
+      "${ORIGIN}/api/agent-runs/${AGENT_RUN_ID}" >"${RESPONSE_FILE}"
+    AGENT_STATUS="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["status"])' "${RESPONSE_FILE}")"
+    if [[ "${AGENT_STATUS}" == "completed" ]]; then
+      break
+    fi
+    if [[ "${AGENT_STATUS}" == "failed" || "${AGENT_STATUS}" == "dead_letter" || "${AGENT_STATUS}" == "cancelled" ]]; then
+      cat "${RESPONSE_FILE}" >&2
+      exit 1
+    fi
+    if [[ "${AGENT_STATUS}" == "waiting_for_approval" ]]; then
+      APPROVAL_ID="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["pending_approval"]["id"])' "${RESPONSE_FILE}")"
+      APPROVAL_REVISION="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["pending_approval"]["revision"])' "${RESPONSE_FILE}")"
+      APPROVAL_COUNT=$((APPROVAL_COUNT + 1))
+      if [[ "${REAL_LLM_VALIDATION}" == "1" && "${APPROVAL_COUNT}" == 3 ]]; then
+        break
+      fi
+      if [[ "${APPROVAL_COUNT}" == 1 ]]; then
+        "${COMPOSE[@]}" restart redis >/dev/null
+        "${COMPOSE[@]}" up --detach --wait redis worker backend >/dev/null
+      elif [[ "${APPROVAL_COUNT}" == 2 ]]; then
+        "${COMPOSE[@]}" restart worker >/dev/null
+        "${COMPOSE[@]}" up --detach --wait worker backend >/dev/null
+      fi
+      api_write POST "/api/approvals/${APPROVAL_ID}/decide" \
+        "{\"decision\":\"approve\",\"expected_revision\":${APPROVAL_REVISION},\"idempotency_key\":\"smoke-decision-${APPROVAL_COUNT}\",\"safe_reason\":\"Synthetic isolated Smoke approval.\"}"
+    fi
+    sleep 1
   done
+  test "${APPROVAL_COUNT}" = 3
   curl --noproxy '*' --fail --silent --show-error --cookie "${COOKIE_JAR}" \
-    "${ORIGIN}/api/application-packages/${PACKAGE_ID}" >"${RESPONSE_FILE}"
-  PACKAGE_REVISION="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["revision"])' "${RESPONSE_FILE}")"
-  api_write POST "/api/application-packages/${PACKAGE_ID}/approve" \
-    "{\"expected_revision\":${PACKAGE_REVISION},\"confirmation\":\"APPROVE PACKAGE\"}"
-  python3 -c 'import json,sys; assert json.load(open(sys.argv[1]))["status"] == "approved"' "${RESPONSE_FILE}"
-  smoke_step 'Evidence validation blocks unsupported claims and permits reviewed grounded finalization'
+    "${ORIGIN}/api/agent-runs/${AGENT_RUN_ID}/steps" >"${RESPONSE_FILE}"
+  if [[ "${REAL_LLM_VALIDATION}" == "1" ]]; then
+    test "${AGENT_STATUS}" = "waiting_for_approval"
+    python3 -c 'import json,sys; value=json.load(open(sys.argv[1])); assert len(value) == 20; assert all(item["status"] == "completed" for item in value[:18]); assert value[18]["status"] == "waiting_for_approval"; assert value[19]["status"] == "pending"' "${RESPONSE_FILE}"
+  else
+    test "${AGENT_STATUS}" = "completed"
+    python3 -c 'import json,sys; value=json.load(open(sys.argv[1])); assert len(value) == 20; assert all(item["status"] == "completed" for item in value)' "${RESPONSE_FILE}"
+  fi
+  curl --noproxy '*' --fail --silent --show-error --cookie "${COOKIE_JAR}" \
+    "${ORIGIN}/api/agent-runs/${AGENT_RUN_ID}/events?after_id=0" >"${RESPONSE_FILE}"
+  python3 -c 'import json,sys; value=json.load(open(sys.argv[1])); assert value; raw=json.dumps(value); assert "Synthetic private Smoke note" not in raw; assert "Phase-1-Smoke-Passphrase" not in raw; assert "TEST_ONLY_NEVER_SENT" not in raw' "${RESPONSE_FILE}"
+  if [[ "${REAL_LLM_VALIDATION}" == "1" ]]; then
+    smoke_step 'controlled DeepSeek workflow reached final Package Approval without automatic finalization'
+  else
+    smoke_step '20-step asynchronous Package Workflow, Redis/Worker restart, three Approvals, and completion'
+  fi
+
+  curl --noproxy '*' --fail --silent --show-error \
+    --cookie "${COOKIE_JAR}" --cookie-jar "${COOKIE_JAR}" \
+    -X POST -H "Origin: ${ORIGIN}" -H "X-CSRF-Token: ${CSRF_TOKEN}" \
+    -H "Idempotency-Key: ${AGENT_IDEMPOTENCY_KEY}" -H 'Content-Type: application/json' \
+    --data "{\"workflow_type\":\"generate_application_package\",\"package_id\":\"${AGENT_PACKAGE_ID}\"}" \
+    "${ORIGIN}/api/agent-runs" >"${RESPONSE_FILE}"
+  python3 -c 'import json,sys; value=json.load(open(sys.argv[1])); assert value["reused"] is True; assert value["run"]["id"] == sys.argv[2]' "${RESPONSE_FILE}" "${AGENT_RUN_ID}"
+  smoke_step 'Agent Run Idempotency-Key returns the existing Run'
+
+  "${COMPOSE[@]}" stop worker >/dev/null
+  api_write POST "/api/applications/${APPLICATION_ID}/packages" \
+    "{\"source_resume_version_id\":\"${VERSION_ID}\",\"match_analysis_id\":\"${MATCH_ID}\",\"title\":\"Cancelled Agent Smoke Package\"}"
+  CANCEL_PACKAGE_ID="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["id"])' "${RESPONSE_FILE}")"
+  curl --noproxy '*' --fail --silent --show-error \
+    --cookie "${COOKIE_JAR}" --cookie-jar "${COOKIE_JAR}" \
+    -X POST -H "Origin: ${ORIGIN}" -H "X-CSRF-Token: ${CSRF_TOKEN}" \
+    -H "Idempotency-Key: smoke-cancel-${STAMP}" -H 'Content-Type: application/json' \
+    --data "{\"workflow_type\":\"generate_application_package\",\"package_id\":\"${CANCEL_PACKAGE_ID}\"}" \
+    "${ORIGIN}/api/agent-runs" >"${RESPONSE_FILE}"
+  CANCEL_RUN_ID="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["run"]["id"])' "${RESPONSE_FILE}")"
+  CANCEL_REVISION="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["run"]["revision"])' "${RESPONSE_FILE}")"
+  api_write POST "/api/agent-runs/${CANCEL_RUN_ID}/cancel" "{\"expected_revision\":${CANCEL_REVISION}}"
+  python3 -c 'import json,sys; assert json.load(open(sys.argv[1]))["status"] == "cancelled"' "${RESPONSE_FILE}"
+  "${COMPOSE[@]}" up --detach --wait worker backend >/dev/null
+  smoke_step 'queued Agent Run cancellation is immediate and idempotent'
+
+  if [[ "${REAL_LLM_VALIDATION}" == "0" ]]; then
+    USER_ID="$("${COMPOSE[@]}" exec -T database psql -U pja_bootstrap -d personal_job_agent_smoke_test -Atqc \
+      "SELECT id FROM users WHERE normalized_email='phase1-admin@example.com'")"
+    "${COMPOSE[@]}" exec -T database psql -U pja_bootstrap -d personal_job_agent_smoke_test -v ON_ERROR_STOP=1 \
+      -c "UPDATE user_ai_budgets SET step_token_limit=100 WHERE user_id='${USER_ID}'" >/dev/null
+    api_write POST "/api/applications/${APPLICATION_ID}/packages" \
+      "{\"source_resume_version_id\":\"${VERSION_ID}\",\"match_analysis_id\":\"${MATCH_ID}\",\"title\":\"Retry Agent Smoke Package\"}"
+    RETRY_PACKAGE_ID="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["id"])' "${RESPONSE_FILE}")"
+    curl --noproxy '*' --fail --silent --show-error \
+      --cookie "${COOKIE_JAR}" --cookie-jar "${COOKIE_JAR}" \
+      -X POST -H "Origin: ${ORIGIN}" -H "X-CSRF-Token: ${CSRF_TOKEN}" \
+      -H "Idempotency-Key: smoke-retry-${STAMP}" -H 'Content-Type: application/json' \
+      --data "{\"workflow_type\":\"generate_application_package\",\"package_id\":\"${RETRY_PACKAGE_ID}\"}" \
+      "${ORIGIN}/api/agent-runs" >"${RESPONSE_FILE}"
+    RETRY_RUN_ID="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["run"]["id"])' "${RESPONSE_FILE}")"
+    for attempt in $(seq 1 120); do
+      curl --noproxy '*' --fail --silent --show-error --cookie "${COOKIE_JAR}" \
+        "${ORIGIN}/api/agent-runs/${RETRY_RUN_ID}" >"${RESPONSE_FILE}"
+      RETRY_STATUS="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["status"])' "${RESPONSE_FILE}")"
+      [[ "${RETRY_STATUS}" == "failed" ]] && break
+      sleep 1
+    done
+    test "${RETRY_STATUS}" = "failed"
+    RETRY_REVISION="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["revision"])' "${RESPONSE_FILE}")"
+    "${COMPOSE[@]}" exec -T database psql -U pja_bootstrap -d personal_job_agent_smoke_test -v ON_ERROR_STOP=1 \
+      -c "UPDATE user_ai_budgets SET step_token_limit=20000 WHERE user_id='${USER_ID}'" >/dev/null
+    api_write POST "/api/agent-runs/${RETRY_RUN_ID}/retry" \
+      "{\"expected_revision\":${RETRY_REVISION},\"acknowledge_possible_cost\":true}"
+    for attempt in $(seq 1 120); do
+      curl --noproxy '*' --fail --silent --show-error --cookie "${COOKIE_JAR}" \
+        "${ORIGIN}/api/agent-runs/${RETRY_RUN_ID}" >"${RESPONSE_FILE}"
+      RETRY_STATUS="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["status"])' "${RESPONSE_FILE}")"
+      [[ "${RETRY_STATUS}" == "waiting_for_approval" ]] && break
+      [[ "${RETRY_STATUS}" == "failed" || "${RETRY_STATUS}" == "dead_letter" ]] && exit 1
+      sleep 1
+    done
+    test "${RETRY_STATUS}" = "waiting_for_approval"
+    RETRY_REVISION="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["revision"])' "${RESPONSE_FILE}")"
+    api_write POST "/api/agent-runs/${RETRY_RUN_ID}/cancel" "{\"expected_revision\":${RETRY_REVISION}}"
+    python3 -c 'import json,sys; value=json.load(open(sys.argv[1])); assert value["status"] == "cancelled"; assert value["partial"] is True' "${RESPONSE_FILE}"
+    smoke_step 'budget preflight failure, explicit Retry with cost acknowledgment, and partial cancellation'
+  fi
+
+  HEARTBEATS="$("${COMPOSE[@]}" exec -T database psql -U pja_bootstrap -d personal_job_agent_smoke_test -Atqc \
+    "SELECT COUNT(*) FROM worker_heartbeats WHERE status IN ('ready','busy')")"
+  OUTBOX_ROWS="$("${COMPOSE[@]}" exec -T database psql -U pja_bootstrap -d personal_job_agent_smoke_test -Atqc \
+    'SELECT COUNT(*) FROM agent_outbox_events')"
+  test "${HEARTBEATS}" -ge 1
+  if [[ "${REAL_LLM_VALIDATION}" == "1" ]]; then
+    test "${OUTBOX_ROWS}" -ge 15
+  else
+    test "${OUTBOX_ROWS}" -ge 20
+  fi
+  smoke_step 'Worker heartbeat and PostgreSQL Transactional Outbox persistence'
+  if [[ "${REAL_LLM_VALIDATION}" == "1" ]]; then
+    REAL_USAGE="$("${COMPOSE[@]}" exec -T database psql -U pja_bootstrap -d personal_job_agent_smoke_test -Atqc \
+      "SELECT COUNT(*) || ':' || COALESCE(SUM(total_tokens),0) FROM ai_usage_ledger WHERE run_id='${AGENT_RUN_ID}' AND provider='deepseek'")"
+    test "${REAL_USAGE%%:*}" = 3
+    test "${REAL_USAGE##*:}" -gt 0
+    "${COMPOSE[@]}" exec -T database psql -U pja_bootstrap -d personal_job_agent_smoke_test -Atqc \
+      "SELECT COUNT(*) FROM application_material_versions v JOIN application_materials m ON m.id=v.material_id WHERE m.package_id='${AGENT_PACKAGE_ID}' AND v.unsupported_claim_count > 0" \
+      | grep -qx '0'
+    smoke_step 'three bounded DeepSeek calls recorded with valid grounded evidence and no unsupported claims'
+  fi
 fi
 
 api_write POST /api/auth/logout
@@ -413,7 +634,11 @@ if [[ "${SMOKE_MILESTONE}" == "2.0.1" ]]; then UNAUTH_PATH='/api/resumes'; fi
 UNAUTH_STATUS="$(curl --noproxy '*' --silent --output /dev/null --write-out '%{http_code}' "${ORIGIN}${UNAUTH_PATH}")"
 test "${UNAUTH_STATUS}" = 401
 
-"${COMPOSE[@]}" restart backend frontend >/dev/null
+if [[ "${V204_SCOPE}" == "1" ]]; then
+  "${COMPOSE[@]}" restart redis worker backend frontend >/dev/null
+else
+  "${COMPOSE[@]}" restart backend frontend >/dev/null
+fi
 for attempt in $(seq 1 60); do
   if curl --noproxy '*' --fail --silent "${ORIGIN}/api/ready" >/dev/null; then break; fi
   test "${attempt}" != 60
@@ -432,7 +657,7 @@ curl --noproxy '*' --fail --silent --show-error --cookie "${COOKIE_JAR}" \
   "${ORIGIN}/api/files/${IMPORTED_FILE_ID}/download" >"${TEST_ROOT}/downloaded-resume.docx"
 cmp --silent "${DOCX_FIXTURE}" "${TEST_ROOT}/downloaded-resume.docx"
 smoke_step 'private Resume file after container restart'
-if [[ "${SMOKE_MILESTONE}" == "2.0.2" || "${SMOKE_MILESTONE}" == "2.0.3" ]]; then
+if [[ "${V202_SCOPE}" == "1" ]]; then
   curl --noproxy '*' --fail --silent --show-error --cookie "${COOKIE_JAR}" \
     "${ORIGIN}/api/jobs/${JOB_ID}" >"${RESPONSE_FILE}"
   python3 -c 'import json,sys; assert json.load(open(sys.argv[1]))["id"] == sys.argv[2]' "${RESPONSE_FILE}" "${JOB_ID}"
@@ -446,17 +671,37 @@ if [[ "${SMOKE_MILESTONE}" == "2.0.2" || "${SMOKE_MILESTONE}" == "2.0.3" ]]; the
   python3 -c 'import json,sys; assert json.load(open(sys.argv[1]))["status"] == "completed"' "${RESPONSE_FILE}"
   smoke_step 'Task row after container restart'
 fi
-if [[ "${SMOKE_MILESTONE}" == "2.0.3" ]]; then
+if [[ "${V203_SCOPE}" == "1" ]]; then
   curl --noproxy '*' --fail --silent --show-error --cookie "${COOKIE_JAR}" \
     "${ORIGIN}/api/jobs/${JOB_ID}/matches/${MATCH_ID}" >"${RESPONSE_FILE}"
   python3 -c 'import json,sys; assert json.load(open(sys.argv[1]))["status"] == "completed"' "${RESPONSE_FILE}"
   curl --noproxy '*' --fail --silent --show-error --cookie "${COOKIE_JAR}" \
     "${ORIGIN}/api/job-rank-runs/${RANK_RUN_ID}" >"${RESPONSE_FILE}"
   python3 -c 'import json,sys; assert json.load(open(sys.argv[1]))["job_count"] == 1' "${RESPONSE_FILE}"
-  curl --noproxy '*' --fail --silent --show-error --cookie "${COOKIE_JAR}" \
-    "${ORIGIN}/api/application-packages/${PACKAGE_ID}" >"${RESPONSE_FILE}"
-  python3 -c 'import json,sys; assert json.load(open(sys.argv[1]))["status"] == "approved"' "${RESPONSE_FILE}"
+  if [[ "${REAL_LLM_VALIDATION}" == "1" ]]; then
+    curl --noproxy '*' --fail --silent --show-error --cookie "${COOKIE_JAR}" \
+      "${ORIGIN}/api/application-packages/${AGENT_PACKAGE_ID}" >"${RESPONSE_FILE}"
+    python3 -c 'import json,sys; assert json.load(open(sys.argv[1]))["status"] == "draft"' "${RESPONSE_FILE}"
+  else
+    curl --noproxy '*' --fail --silent --show-error --cookie "${COOKIE_JAR}" \
+      "${ORIGIN}/api/application-packages/${PACKAGE_ID}" >"${RESPONSE_FILE}"
+    if [[ "${V204_SCOPE}" == "1" ]]; then
+      python3 -c 'import json,sys; assert json.load(open(sys.argv[1]))["status"] == "draft"' "${RESPONSE_FILE}"
+    else
+      python3 -c 'import json,sys; assert json.load(open(sys.argv[1]))["status"] == "approved"' "${RESPONSE_FILE}"
+    fi
+  fi
   smoke_step 'Match, Ranking, Package, and Material rows after container restart'
+fi
+if [[ "${V204_SCOPE}" == "1" ]]; then
+  curl --noproxy '*' --fail --silent --show-error --cookie "${COOKIE_JAR}" \
+    "${ORIGIN}/api/agent-runs/${AGENT_RUN_ID}" >"${RESPONSE_FILE}"
+  if [[ "${REAL_LLM_VALIDATION}" == "1" ]]; then
+    python3 -c 'import json,sys; value=json.load(open(sys.argv[1])); assert value["status"] == "waiting_for_approval"; assert len(value["steps"]) == 20; assert value["pending_approval"]["approval_type"] == "application_package"' "${RESPONSE_FILE}"
+  else
+    python3 -c 'import json,sys; value=json.load(open(sys.argv[1])); assert value["status"] == "completed"; assert len(value["steps"]) == 20' "${RESPONSE_FILE}"
+  fi
+  smoke_step 'Agent Run, Steps, Events, and usage persist across Redis/Worker restart'
 fi
 smoke_step 'PostgreSQL and private file persistence across container restart'
 
@@ -468,13 +713,13 @@ PYTHON_BIN="${PYTHON_BIN:-python3}" \
   DATABASE_URL="${SOURCE_URL}" FILE_STORAGE_ROOT="${TEST_ROOT}/files" \
   PROJECT_KNOWLEDGE_PATH="${TEST_ROOT}/knowledge/PROJECT_KNOWLEDGE.md" \
   sudo -n --preserve-env=PYTHON_BIN,DATABASE_URL,FILE_STORAGE_ROOT,PROJECT_KNOWLEDGE_PATH \
-  "${ROOT_DIR}/scripts/backup-v2.sh" --backup-dir "${TEST_ROOT}/backup" \
+  "${ROOT_DIR}/scripts/backup-v2.sh" --backup-dir "${TEST_ROOT}/verified-backup" \
   --files-root "${TEST_ROOT}/files" \
   --project-knowledge "${TEST_ROOT}/knowledge/PROJECT_KNOWLEDGE.md"
-mapfile -t BACKUP_PATHS < <(find "${TEST_ROOT}/backup" -mindepth 1 -maxdepth 1 -type d -name 'v2-*' -print)
+mapfile -t BACKUP_PATHS < <(find "${TEST_ROOT}/verified-backup" -mindepth 1 -maxdepth 1 -type d -name 'v2-*' -print)
 test "${#BACKUP_PATHS[@]}" = 1
 BACKUP_PATH="$(realpath "${BACKUP_PATHS[0]}")"
-BACKUP_ROOT="$(realpath "${TEST_ROOT}/backup")"
+BACKUP_ROOT="$(realpath "${TEST_ROOT}/verified-backup")"
 [[ "${BACKUP_PATH}" == "${BACKUP_ROOT}"/v2-* ]]
 [[ "$(basename "${BACKUP_PATH}")" =~ ^v2-[0-9]{8}-[0-9]{6}-[a-f0-9]{8}$ ]]
 PYTHON_BIN="${PYTHON_BIN:-python3}" \
@@ -491,11 +736,14 @@ PYTHON_BIN="${PYTHON_BIN:-python3}" \
   --confirmation 'RESTORE V2 BACKUP'
 
 COUNT_SQL="SELECT (SELECT COUNT(*) FROM users) || ':' || (SELECT COUNT(*) FROM resumes) || ':' || (SELECT COUNT(*) FROM resume_versions) || ':' || (SELECT COUNT(*) FROM file_assets)"
-if [[ "${SMOKE_MILESTONE}" == "2.0.2" || "${SMOKE_MILESTONE}" == "2.0.3" ]]; then
+if [[ "${V202_SCOPE}" == "1" ]]; then
   COUNT_SQL="${COUNT_SQL} || ':' || (SELECT COUNT(*) FROM jobs) || ':' || (SELECT COUNT(*) FROM applications) || ':' || (SELECT COUNT(*) FROM application_tasks)"
 fi
-if [[ "${SMOKE_MILESTONE}" == "2.0.3" ]]; then
+if [[ "${V203_SCOPE}" == "1" ]]; then
   COUNT_SQL="${COUNT_SQL} || ':' || (SELECT COUNT(*) FROM job_match_analyses) || ':' || (SELECT COUNT(*) FROM job_rank_runs) || ':' || (SELECT COUNT(*) FROM application_packages) || ':' || (SELECT COUNT(*) FROM application_materials) || ':' || (SELECT COUNT(*) FROM application_material_versions) || ':' || (SELECT COUNT(*) FROM material_evidence_links)"
+fi
+if [[ "${V204_SCOPE}" == "1" ]]; then
+  COUNT_SQL="${COUNT_SQL} || ':' || (SELECT COUNT(*) FROM agent_runs) || ':' || (SELECT COUNT(*) FROM agent_steps) || ':' || (SELECT COUNT(*) FROM agent_run_events) || ':' || (SELECT COUNT(*) FROM approval_requests) || ':' || (SELECT COUNT(*) FROM approval_decisions) || ':' || (SELECT COUNT(*) FROM agent_outbox_events) || ':' || (SELECT COUNT(*) FROM ai_usage_ledger) || ':' || (SELECT COUNT(*) FROM worker_heartbeats) || ':' || (SELECT COUNT(*) FROM dead_letter_records)"
 fi
 SOURCE_COUNTS="$("${COMPOSE[@]}" exec -T database psql -U pja_bootstrap \
   -d personal_job_agent_smoke_test -Atqc "${COUNT_SQL}")"

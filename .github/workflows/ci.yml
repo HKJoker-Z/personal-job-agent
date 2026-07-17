@@ -127,6 +127,24 @@ jobs:
       - name: Deterministic matching, ranking, fact grounding, Mock generation, CSRF, and IDOR tests
         run: python -m unittest -v test_v2_matching_materials.py test_v2_matching_evaluation.py test_v2_material_generator.py
 
+  backend-v204-reliable-workflows:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      APP_ENV: test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - run: python -m pip install --requirement requirements.txt
+      - name: Runs, Workers, Outbox, Retry, Cancellation, Approval, SSE, Budgets, and Package Workflow
+        run: python -m unittest -v test_v2_agent_workflows.py
+
   docker-build:
     runs-on: ubuntu-latest
     steps:
@@ -184,6 +202,20 @@ jobs:
       - name: Version 2.0.3 isolated matching and materials Smoke
         run: PJA_SMOKE_MILESTONE=2.0.3 PYTHON_BIN="$(command -v python)" scripts/docker-smoke-v2.sh
 
+  docker-smoke-v204:
+    needs: docker-build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install 'psycopg[binary]==3.3.4'
+      - name: Ensure PostgreSQL client tools
+        run: command -v pg_dump >/dev/null && command -v pg_restore >/dev/null || (sudo apt-get update && sudo apt-get install -y postgresql-client)
+      - name: Version 2.0.4 isolated reliable workflow Smoke on 18088
+        run: PJA_SMOKE_MILESTONE=2.0.4 PYTHON_BIN="$(command -v python)" scripts/docker-smoke-v2.sh
+
   compose-validation:
     runs-on: ubuntu-latest
     steps:
@@ -209,6 +241,8 @@ jobs:
             echo 'TRUSTED_HOSTS=localhost'
             echo 'ALLOWED_ORIGINS=http://localhost'
             echo 'ENABLE_API_DOCS=false'
+            echo 'MODEL_INPUT_COST_PER_MILLION_USD=1'
+            echo 'MODEL_OUTPUT_COST_PER_MILLION_USD=1'
           } > "${env_file}"
           echo "APP_ENV_FILE=${env_file}" >> "${GITHUB_ENV}"
       - run: docker compose --env-file "${APP_ENV_FILE}" config --quiet
@@ -225,12 +259,23 @@ jobs:
             --env-file "${APP_ENV_FILE}" \
             -f compose.yaml -f compose.test.yaml -f compose.v202-smoke.yaml \
             config --quiet
+      - name: Validate Version 2.0.4 isolated Compose overlay
+        run: |
+          MOCK_JOB_DIR="${RUNNER_TEMP}/mock-job" PUBLIC_HTTP_PORT=18088 docker compose \
+            --env-file "${APP_ENV_FILE}" \
+            -f compose.yaml -f compose.test.yaml -f compose.v202-smoke.yaml \
+            config --quiet
 
   script-validation:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - run: bash -n scripts/*.sh
+      - name: ShellCheck deployment scripts
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck
+          shellcheck scripts/*.sh deploy/postgres/*.sh
 
   repository-safety:
     runs-on: ubuntu-latest

@@ -529,7 +529,7 @@ class DataManagementServiceTest(unittest.TestCase):
     def test_health_endpoint_reports_v203_alpha_version(self):
         response = self.client.get("/api/health")
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()["version"], "2.0.0-alpha.3")
+        self.assertEqual(response.json()["version"], "2.0.0-alpha.4-dev+031dfa9")
 
 
 if __name__ == "__main__":
