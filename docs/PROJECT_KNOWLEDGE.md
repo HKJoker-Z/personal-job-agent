@@ -490,3 +490,17 @@ A: Version 1.7 uses defense-in-depth controls around the LLM call. The backend s
 - Added Alembic revision `20260713_02`, SQLite/PostgreSQL tests, IDOR/CSRF/SSRF/Prompt Injection/CSV injection tests, Docker builds, and an isolated `pja-v2-0-2-*` Smoke on `127.0.0.1:18082` with restart and backup/restore verification.
 - Runtime development marker is `2.0.0-alpha.2`; latest stable remains `v1.9.0`. Version 2.0.1 PR #6 is still the unmerged base, so Version 2.0.2 is a stacked PR and cannot be merged independently to `main`.
 - This milestone has no Job/Profile matching score, tailored Resume, Cover Letter generation, Worker, automatic application, production database migration, deployment, Version 2 tag, release, or published Version 2 image.
+
+## 12. Version 2.0.3 Explainable Matching and Application Materials
+
+- Published `v2.0.0-alpha.2` after merging PR #6 and PR #7 in dependency order; Alpha 2 images use prerelease/SHA tags without replacing stable `latest`, and production remains Version 1.9.
+- Added a deterministic, versioned 100-point matching engine across required skills, experience, projects, education, location/work authorization, languages, seniority, and preferences. LLM output never determines numeric scores, and scores are not Offer probabilities.
+- Added separately reported hard filters, explicit unknown-versus-missing semantics, confirmed-fact-only positive evidence, immutable Profile/Job/Resume revision snapshots, Match history, and user-isolated Match APIs.
+- Added reproducible multi-Job Rank Runs with stored Match Analyses, deadline/priority/preparation factors, hard-filter ordering, explainable strengths/gaps, and stable tie-breaking.
+- Added Application Packages that snapshot the Application, Job revision, Profile revision, finalized Resume Version, and Match Analysis without altering source records.
+- Added Tailored Resume, Cover Letter, and Application Answer Drafts with immutable version lineage. Edits create new Versions; finalized content cannot be overwritten; nothing is sent or submitted automatically.
+- Added an injectable safe generation adapter. Tests and Smoke use deterministic or Mock providers and make no DeepSeek/network call. Configured development generation uses strict JSON, PII/Secret minimization, isolated untrusted sections, Prompt Injection handling, and output-leak scanning.
+- Added independent fact validation for numbers, dates, metrics, skills, education, certification, leadership/team size, location, authorization, and salary. Unsupported/partial claims remain visible and block finalization until edited or explicitly user-confirmed for that Material Version.
+- Added an Evidence side panel, Match breakdown/history, `/job-ranking`, Application Package pages, Material editing/history/diff, review, explicit claim confirmation, and finalization gates in React.
+- Added Alembic revision `20260713_03` with ten matching/ranking/package/material tables, PostgreSQL upgrade/downgrade coverage, offline Alpha 3 evaluations, and isolated `pja-v2-0-3-*` Smoke on `127.0.0.1:18083` including backup/restore.
+- Runtime development marker is `2.0.0-alpha.3`; latest stable remains `v1.9.0`; latest prerelease remains `v2.0.0-alpha.2`. Alpha 3 has no Tag, Release, published image, Worker, queue, Scheduler, automatic application, interview center, production database migration, or deployment.

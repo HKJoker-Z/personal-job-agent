@@ -577,6 +577,281 @@ class JobMergeHistory(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
 
 
+class JobMatchAnalysis(Base):
+    __tablename__ = "job_match_analyses"
+    __table_args__ = (
+        CheckConstraint("overall_score >= 0 AND overall_score <= 100", name="overall_score_valid"),
+        CheckConstraint("hard_filter_status IN ('passed','warning','failed','unknown')", name="hard_filter_status_valid"),
+        CheckConstraint("recommendation IN ('high_priority','worth_applying','apply_with_preparation','low_priority','not_recommended')", name="recommendation_valid"),
+        CheckConstraint("status IN ('draft','completed','failed','superseded')", name="status_valid"),
+        Index("ix_job_match_owner_job_created", "owner_user_id", "job_id", "created_at"),
+        Index("ix_job_match_owner_fingerprint", "owner_user_id", "input_fingerprint"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    owner_user_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    job_id: Mapped[UUID] = mapped_column(Uuid, ForeignKey("jobs.id", ondelete="RESTRICT"), index=True)
+    application_id: Mapped[UUID | None] = mapped_column(
+        Uuid, ForeignKey("applications.id", ondelete="SET NULL"), index=True
+    )
+    profile_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("career_profiles.id", ondelete="RESTRICT"), index=True
+    )
+    profile_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    resume_version_id: Mapped[UUID | None] = mapped_column(
+        Uuid, ForeignKey("resume_versions.id", ondelete="RESTRICT"), index=True
+    )
+    job_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    scoring_version: Mapped[str] = mapped_column(String(40), nullable=False)
+    synonym_map_version: Mapped[str] = mapped_column(String(40), nullable=False)
+    input_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    weight_config: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    overall_score: Mapped[float] = mapped_column(Float, nullable=False)
+    hard_filter_status: Mapped[str] = mapped_column(String(20), index=True, nullable=False)
+    recommendation: Mapped[str] = mapped_column(String(40), index=True, nullable=False)
+    preparation_effort: Mapped[str] = mapped_column(String(20), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), default="completed", index=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, index=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_by_user_id: Mapped[UUID] = mapped_column(Uuid, ForeignKey("users.id", ondelete="RESTRICT"))
+
+
+class JobMatchDimension(Base):
+    __tablename__ = "job_match_dimensions"
+    __table_args__ = (
+        UniqueConstraint("analysis_id", "dimension", name="uq_job_match_dimension"),
+        CheckConstraint("raw_score >= 0 AND raw_score <= 1", name="raw_score_valid"),
+        CheckConstraint("weighted_score >= 0", name="weighted_score_valid"),
+        CheckConstraint("max_score >= 0", name="max_score_valid"),
+        CheckConstraint("status IN ('matched','partial','missing','unknown','not_applicable')", name="status_valid"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    analysis_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("job_match_analyses.id", ondelete="CASCADE"), index=True
+    )
+    dimension: Mapped[str] = mapped_column(String(50), nullable=False)
+    raw_score: Mapped[float] = mapped_column(Float, nullable=False)
+    weighted_score: Mapped[float] = mapped_column(Float, nullable=False)
+    max_score: Mapped[float] = mapped_column(Float, nullable=False)
+    explanation: Mapped[str] = mapped_column(String(1000), nullable=False)
+    status: Mapped[str] = mapped_column(String(30), nullable=False)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+
+class JobMatchEvidence(Base):
+    __tablename__ = "job_match_evidence"
+    __table_args__ = (
+        CheckConstraint("contribution >= 0 AND contribution <= 1", name="contribution_valid"),
+        CheckConstraint("confidence >= 0 AND confidence <= 1", name="confidence_valid"),
+        CheckConstraint("evidence_kind IN ('matched','partial','missing','unknown','hard_filter','contradictory')", name="evidence_kind_valid"),
+        CheckConstraint("verification_status IN ('confirmed','needs_review','rejected','not_applicable')", name="verification_status_valid"),
+        Index("ix_job_match_evidence_analysis_dimension", "analysis_id", "dimension"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    analysis_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("job_match_analyses.id", ondelete="CASCADE"), index=True
+    )
+    dimension: Mapped[str] = mapped_column(String(50), nullable=False)
+    requirement_id: Mapped[UUID | None] = mapped_column(
+        Uuid, ForeignKey("job_requirements.id", ondelete="SET NULL"), index=True
+    )
+    source_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    source_id: Mapped[str | None] = mapped_column(String(64))
+    source_revision: Mapped[int | None] = mapped_column(Integer)
+    evidence_kind: Mapped[str] = mapped_column(String(30), nullable=False)
+    evidence_summary: Mapped[str] = mapped_column(String(1000), nullable=False)
+    contribution: Mapped[float] = mapped_column(Float, default=0, nullable=False)
+    confidence: Mapped[float] = mapped_column(Float, default=1, nullable=False)
+    verification_status: Mapped[str] = mapped_column(String(30), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+
+
+class JobRankRun(Base):
+    __tablename__ = "job_rank_runs"
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    owner_user_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    scoring_version: Mapped[str] = mapped_column(String(40), nullable=False)
+    filter_config: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
+    weight_config: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    job_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, index=True)
+
+
+class JobRankItem(Base):
+    __tablename__ = "job_rank_items"
+    __table_args__ = (
+        UniqueConstraint("rank_run_id", "job_id", name="uq_job_rank_run_job"),
+        UniqueConstraint("rank_run_id", "rank_position", name="uq_job_rank_position"),
+        CheckConstraint("rank_position > 0", name="rank_position_positive"),
+        CheckConstraint("rank_score >= 0 AND rank_score <= 100", name="rank_score_valid"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    rank_run_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("job_rank_runs.id", ondelete="CASCADE"), index=True
+    )
+    job_id: Mapped[UUID] = mapped_column(Uuid, ForeignKey("jobs.id", ondelete="RESTRICT"), index=True)
+    analysis_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("job_match_analyses.id", ondelete="RESTRICT"), index=True
+    )
+    rank_position: Mapped[int] = mapped_column(Integer, nullable=False)
+    rank_score: Mapped[float] = mapped_column(Float, nullable=False)
+    deadline_factor: Mapped[float] = mapped_column(Float, default=0, nullable=False)
+    user_priority_factor: Mapped[float] = mapped_column(Float, default=0, nullable=False)
+    preparation_effort_factor: Mapped[float] = mapped_column(Float, default=0, nullable=False)
+    reason_summary: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
+
+
+class ApplicationPackage(TimestampMixin, Base):
+    __tablename__ = "application_packages"
+    __table_args__ = (
+        CheckConstraint("status IN ('draft','in_review','approved','archived')", name="status_valid"),
+        Index("ix_application_package_owner_application", "owner_user_id", "application_id"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    owner_user_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    application_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("applications.id", ondelete="RESTRICT"), index=True
+    )
+    job_id: Mapped[UUID] = mapped_column(Uuid, ForeignKey("jobs.id", ondelete="RESTRICT"), index=True)
+    source_profile_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    source_job_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    source_resume_version_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("resume_versions.id", ondelete="RESTRICT"), index=True
+    )
+    source_match_analysis_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("job_match_analyses.id", ondelete="RESTRICT"), index=True
+    )
+    title: Mapped[str] = mapped_column(String(240), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), default="draft", index=True, nullable=False)
+    revision: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    approved_by_user_id: Mapped[UUID | None] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="RESTRICT")
+    )
+
+
+APPLICATION_PACKAGE_APPROVED_UNIQUE = Index(
+    "uq_application_packages_approved",
+    ApplicationPackage.__table__.c.application_id,
+    unique=True,
+    postgresql_where=ApplicationPackage.__table__.c.status == "approved",
+    sqlite_where=ApplicationPackage.__table__.c.status == "approved",
+)
+ApplicationPackage.__table__.append_constraint(APPLICATION_PACKAGE_APPROVED_UNIQUE)
+
+
+class ApplicationMaterial(TimestampMixin, Base):
+    __tablename__ = "application_materials"
+    __table_args__ = (
+        CheckConstraint("material_type IN ('tailored_resume','cover_letter','application_answer','recruiter_message','follow_up_message')", name="material_type_valid"),
+        CheckConstraint("status IN ('draft','in_review','approved','archived')", name="status_valid"),
+        Index("ix_application_material_package_type", "package_id", "material_type"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    package_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("application_packages.id", ondelete="CASCADE"), index=True
+    )
+    owner_user_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    material_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    title: Mapped[str] = mapped_column(String(240), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), default="draft", index=True, nullable=False)
+    active_version_id: Mapped[UUID | None] = mapped_column(
+        Uuid,
+        ForeignKey(
+            "application_material_versions.id",
+            use_alter=True,
+            name="fk_application_materials_active_version_id_versions",
+        ),
+    )
+
+
+class ApplicationMaterialVersion(Base):
+    __tablename__ = "application_material_versions"
+    __table_args__ = (
+        UniqueConstraint("material_id", "version_number", name="uq_application_material_version"),
+        CheckConstraint("validation_status IN ('pending','valid','invalid','needs_user_input')", name="validation_status_valid"),
+        CheckConstraint("unsupported_claim_count >= 0", name="unsupported_claim_count_valid"),
+        CheckConstraint("evidence_coverage >= 0 AND evidence_coverage <= 100", name="evidence_coverage_valid"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    material_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("application_materials.id", ondelete="CASCADE"), index=True
+    )
+    version_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    parent_version_id: Mapped[UUID | None] = mapped_column(
+        Uuid, ForeignKey("application_material_versions.id", ondelete="SET NULL")
+    )
+    source_type: Mapped[str] = mapped_column(String(30), nullable=False)
+    content_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
+    content_text: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    model_provider: Mapped[str | None] = mapped_column(String(80))
+    model_name: Mapped[str | None] = mapped_column(String(120))
+    prompt_version: Mapped[str | None] = mapped_column(String(40))
+    generation_metadata: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
+    validation_status: Mapped[str] = mapped_column(String(30), default="pending", index=True)
+    unsupported_claim_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    evidence_coverage: Mapped[float] = mapped_column(Float, default=0, nullable=False)
+    created_by_user_id: Mapped[UUID] = mapped_column(Uuid, ForeignKey("users.id", ondelete="RESTRICT"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, index=True)
+    finalized_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class MaterialEvidenceLink(Base):
+    __tablename__ = "material_evidence_links"
+    __table_args__ = (
+        CheckConstraint("support_status IN ('supported','partially_supported','unsupported','user_confirmed','not_applicable','needs_user_input')", name="support_status_valid"),
+        CheckConstraint("confidence >= 0 AND confidence <= 1", name="confidence_valid"),
+        Index("ix_material_evidence_version_claim", "material_version_id", "claim_key"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    material_version_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("application_material_versions.id", ondelete="CASCADE"), index=True
+    )
+    claim_key: Mapped[str] = mapped_column(String(120), nullable=False)
+    claim_text_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    source_id: Mapped[str | None] = mapped_column(String(64))
+    source_revision: Mapped[int | None] = mapped_column(Integer)
+    evidence_summary: Mapped[str] = mapped_column(String(1000), default="", nullable=False)
+    support_status: Mapped[str] = mapped_column(String(30), index=True, nullable=False)
+    confidence: Mapped[float] = mapped_column(Float, default=1, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+
+
+class MaterialReview(Base):
+    __tablename__ = "material_reviews"
+    __table_args__ = (
+        CheckConstraint("decision IN ('request_changes','approve','reject')", name="decision_valid"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    material_version_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("application_material_versions.id", ondelete="CASCADE"), index=True
+    )
+    reviewer_user_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    decision: Mapped[str] = mapped_column(String(30), nullable=False)
+    notes: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, index=True)
+
+
 class MigrationRun(Base):
     __tablename__ = "migration_runs"
 
@@ -760,6 +1035,30 @@ def prevent_resume_version_content_update(_mapper: object, _connection: object, 
 @event.listens_for(ApplicationStageHistory, "before_delete")
 def prevent_stage_history_mutation(_mapper: object, _connection: object, _target: ApplicationStageHistory) -> None:
     raise ValueError("Application Stage History is append-only.")
+
+
+@event.listens_for(JobMatchAnalysis, "before_update")
+@event.listens_for(JobMatchAnalysis, "before_delete")
+@event.listens_for(JobMatchDimension, "before_update")
+@event.listens_for(JobMatchDimension, "before_delete")
+@event.listens_for(JobMatchEvidence, "before_update")
+@event.listens_for(JobMatchEvidence, "before_delete")
+def prevent_match_snapshot_mutation(_mapper: object, _connection: object, _target: object) -> None:
+    raise ValueError("Match Analysis snapshots are immutable; create a new Analysis instead.")
+
+
+@event.listens_for(ApplicationMaterialVersion, "before_update")
+def prevent_material_version_content_update(
+    _mapper: object, _connection: object, target: ApplicationMaterialVersion
+) -> None:
+    state = sa_inspect(target)
+    immutable_fields = (
+        "material_id", "version_number", "parent_version_id", "source_type",
+        "content_json", "content_text", "model_provider", "model_name",
+        "prompt_version", "generation_metadata", "created_by_user_id", "created_at",
+    )
+    if any(state.attrs[field].history.has_changes() for field in immutable_fields):
+        raise ValueError("Material Version content is immutable; create a new Version instead.")
 
 
 KNOWLEDGE_FTS_INDEX = Index(

@@ -4,7 +4,11 @@ set -Eeuo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 STAMP="$(date +%s)-$$"
 SMOKE_MILESTONE="${PJA_SMOKE_MILESTONE:-2.0.1}"
-if [[ "${SMOKE_MILESTONE}" == "2.0.2" ]]; then
+if [[ "${SMOKE_MILESTONE}" == "2.0.3" ]]; then
+  TEST_PREFIX='pja-v2-0-3'
+  DEFAULT_HTTP_PORT=18083
+  DEFAULT_POSTGRES_PORT=15435
+elif [[ "${SMOKE_MILESTONE}" == "2.0.2" ]]; then
   TEST_PREFIX='pja-v2-0-2'
   DEFAULT_HTTP_PORT=18082
   DEFAULT_POSTGRES_PORT=15434
@@ -46,7 +50,7 @@ else
 fi
 
 COMPOSE=("${DOCKER[@]}" compose --project-name "${PROJECT_NAME}" --env-file "${ENV_FILE}" -f "${ROOT_DIR}/compose.yaml" -f "${ROOT_DIR}/compose.test.yaml")
-if [[ "${SMOKE_MILESTONE}" == "2.0.2" ]]; then
+if [[ "${SMOKE_MILESTONE}" == "2.0.2" || "${SMOKE_MILESTONE}" == "2.0.3" ]]; then
   COMPOSE+=(-f "${ROOT_DIR}/compose.v202-smoke.yaml")
 fi
 
@@ -91,7 +95,7 @@ chmod 0644 "${TEST_ROOT}/mock-job/job.html"
   alpine:3.21 chown -R 10001:10001 /test-root/files /test-root/knowledge
 
 {
-  if [[ "${SMOKE_MILESTONE}" == "2.0.2" ]]; then printf 'APP_ENV=test\n'; else printf 'APP_ENV=development\n'; fi
+  if [[ "${SMOKE_MILESTONE}" == "2.0.2" || "${SMOKE_MILESTONE}" == "2.0.3" ]]; then printf 'APP_ENV=test\n'; else printf 'APP_ENV=development\n'; fi
   printf 'APP_ENV_FILE=%s\n' "${ENV_FILE}"
   printf 'POSTGRES_DB=personal_job_agent_smoke_test\n'
   printf 'POSTGRES_BOOTSTRAP_USER=pja_bootstrap\n'
@@ -259,7 +263,7 @@ api_write POST /api/resumes/import/confirm \
 python3 -c 'import json,sys; assert json.load(open(sys.argv[1]))["version"]["status"] == "final"' "${RESPONSE_FILE}"
 smoke_step 'DOCX import review state and JSON request body finalize flow'
 
-if [[ "${SMOKE_MILESTONE}" == "2.0.2" ]]; then
+if [[ "${SMOKE_MILESTONE}" == "2.0.2" || "${SMOKE_MILESTONE}" == "2.0.3" ]]; then
   api_write POST /api/jobs/import/manual \
     '{"company_name":"Synthetic Manual Company","title":"Platform Engineer","location":"Test City","description":"Required: Python and PostgreSQL. 5 years experience. Remote.","url":"https://jobs.example.test/platform?utm_source=smoke","employment_type":"permanent","work_mode":"remote","salary_min":100,"salary_max":200,"salary_currency":"USD","application_deadline":"2030-01-01T00:00:00Z"}'
   JOB_ID="$(python3 -c 'import json,sys; value=json.load(open(sys.argv[1])); assert value["result"] in {"created","duplicate_candidate"}; print(value["job"]["id"])' "${RESPONSE_FILE}")"
@@ -334,6 +338,75 @@ PY
   smoke_step 'Task completion and owned Dashboard aggregates'
 fi
 
+if [[ "${SMOKE_MILESTONE}" == "2.0.3" ]]; then
+  curl --noproxy '*' --fail --silent --show-error --cookie "${COOKIE_JAR}" \
+    "${ORIGIN}/api/profile" >"${RESPONSE_FILE}"
+  PROFILE_REVISION="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["revision"])' "${RESPONSE_FILE}")"
+  curl --noproxy '*' --fail --silent --show-error \
+    --cookie "${COOKIE_JAR}" --cookie-jar "${COOKIE_JAR}" \
+    -X POST -H "Origin: ${ORIGIN}" -H "X-CSRF-Token: ${CSRF_TOKEN}" \
+    -H "If-Match: ${PROFILE_REVISION}" -H 'Content-Type: application/json' \
+    --data '{"name":"Python","years_experience":6,"verification_status":"confirmed"}' \
+    "${ORIGIN}/api/profile/skills" >"${RESPONSE_FILE}"
+  curl --noproxy '*' --fail --silent --show-error --cookie "${COOKIE_JAR}" \
+    "${ORIGIN}/api/profile" >"${RESPONSE_FILE}"
+  PROFILE_REVISION="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["revision"])' "${RESPONSE_FILE}")"
+  curl --noproxy '*' --fail --silent --show-error \
+    --cookie "${COOKIE_JAR}" --cookie-jar "${COOKIE_JAR}" \
+    -X PUT -H "Origin: ${ORIGIN}" -H "X-CSRF-Token: ${CSRF_TOKEN}" \
+    -H "If-Match: ${PROFILE_REVISION}" -H 'Content-Type: application/json' \
+    --data '{"target_roles":["Platform Engineer"],"target_locations":["Test City"],"employment_types":["permanent"],"work_modes":["remote"],"work_authorization":"Authorized to work in Testland","sponsorship_required":false}' \
+    "${ORIGIN}/api/profile/preferences" >"${RESPONSE_FILE}"
+  smoke_step 'confirmed Profile facts for deterministic matching'
+
+  api_write POST "/api/jobs/${JOB_ID}/requirements" \
+    '{"category":"work_authorization","requirement_type":"hard_filter","name":"Authorized to work in Testland","extraction_source":"user","confidence":1,"verification_status":"confirmed"}'
+  api_write POST "/api/jobs/${JOB_ID}/match" "{\"resume_version_id\":\"${VERSION_ID}\"}"
+  MATCH_ID="$(python3 -c 'import json,sys; value=json.load(open(sys.argv[1])); assert 0 <= value["overall_score"] <= 100; assert value["hard_filter_status"] == "passed"; assert len(value["dimensions"]) == 8; print(value["id"])' "${RESPONSE_FILE}")"
+  api_write POST /api/jobs/rank "{\"job_ids\":[\"${JOB_ID}\"],\"resume_version_id\":\"${VERSION_ID}\"}"
+  RANK_RUN_ID="$(python3 -c 'import json,sys; value=json.load(open(sys.argv[1])); assert value["job_count"] == 1; assert value["items"][0]["hard_filter_status"] == "passed"; print(value["id"])' "${RESPONSE_FILE}")"
+  smoke_step 'deterministic Match, hard filter, and reproducible Job Ranking'
+
+  api_write POST "/api/applications/${APPLICATION_ID}/packages" \
+    "{\"source_resume_version_id\":\"${VERSION_ID}\",\"match_analysis_id\":\"${MATCH_ID}\",\"title\":\"Synthetic Smoke Package\"}"
+  PACKAGE_ID="$(python3 -c 'import json,sys; value=json.load(open(sys.argv[1])); assert value["status"] == "draft"; print(value["id"])' "${RESPONSE_FILE}")"
+  api_write POST "/api/application-packages/${PACKAGE_ID}/generate-resume" '{}'
+  RESUME_MATERIAL_ID="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["material_id"])' "${RESPONSE_FILE}")"
+  GENERATED_RESUME_VERSION_ID="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["id"])' "${RESPONSE_FILE}")"
+  api_write POST "/api/application-packages/${PACKAGE_ID}/generate-cover-letter" '{}'
+  COVER_VERSION_ID="$(python3 -c 'import json,sys; value=json.load(open(sys.argv[1])); assert value["validation_status"] == "valid"; print(value["id"])' "${RESPONSE_FILE}")"
+  api_write POST "/api/application-packages/${PACKAGE_ID}/answers" \
+    '{"questions":[{"key":"role","question":"Why are you interested in this role?"},{"key":"authorization","question":"What is your work authorization?"}]}'
+  python3 -c 'import json,sys; value=json.load(open(sys.argv[1])); assert len(value) == 2; assert all(item["validation_status"] in {"valid","needs_user_input"} for item in value)' "${RESPONSE_FILE}"
+  smoke_step 'Application Package and grounded Resume, Cover Letter, and Answer drafts'
+
+  api_write POST "/api/application-materials/${RESUME_MATERIAL_ID}/versions" \
+    "{\"expected_active_version_id\":\"${GENERATED_RESUME_VERSION_ID}\",\"content_json\":{},\"content_text\":\"Led a team of 20 and increased revenue by 75% using Kubernetes.\",\"change_summary\":\"Synthetic unsupported claim test\"}"
+  UNSUPPORTED_VERSION_ID="$(python3 -c 'import json,sys; value=json.load(open(sys.argv[1])); assert value["unsupported_claim_count"] > 0; print(value["id"])' "${RESPONSE_FILE}")"
+  BLOCKED_FINALIZE_STATUS="$(curl --noproxy '*' --silent --output /dev/null --write-out '%{http_code}' \
+    --cookie "${COOKIE_JAR}" -X POST -H "Origin: ${ORIGIN}" -H "X-CSRF-Token: ${CSRF_TOKEN}" \
+    -H 'Content-Type: application/json' --data '{"confirmation":"FINALIZE MATERIAL"}' \
+    "${ORIGIN}/api/material-versions/${UNSUPPORTED_VERSION_ID}/finalize")"
+  test "${BLOCKED_FINALIZE_STATUS}" = 409
+  api_write POST "/api/application-materials/${RESUME_MATERIAL_ID}/versions" \
+    "{\"expected_active_version_id\":\"${UNSUPPORTED_VERSION_ID}\",\"content_json\":{},\"content_text\":\"Python Platform Engineer.\",\"change_summary\":\"Grounded correction\"}"
+  SUPPORTED_VERSION_ID="$(python3 -c 'import json,sys; value=json.load(open(sys.argv[1])); assert value["unsupported_claim_count"] == 0; print(value["id"])' "${RESPONSE_FILE}")"
+  for MATERIAL_VERSION_ID in "${SUPPORTED_VERSION_ID}" "${COVER_VERSION_ID}"; do
+    api_write POST "/api/material-versions/${MATERIAL_VERSION_ID}/review" \
+      '{"decision":"approve","notes":"Synthetic Smoke review."}'
+    api_write POST "/api/material-versions/${MATERIAL_VERSION_ID}/finalize" \
+      '{"confirmation":"FINALIZE MATERIAL"}'
+    python3 -c 'import json,sys; assert json.load(open(sys.argv[1]))["finalized_at"]' "${RESPONSE_FILE}"
+  done
+  curl --noproxy '*' --fail --silent --show-error --cookie "${COOKIE_JAR}" \
+    "${ORIGIN}/api/application-packages/${PACKAGE_ID}" >"${RESPONSE_FILE}"
+  PACKAGE_REVISION="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["revision"])' "${RESPONSE_FILE}")"
+  api_write POST "/api/application-packages/${PACKAGE_ID}/approve" \
+    "{\"expected_revision\":${PACKAGE_REVISION},\"confirmation\":\"APPROVE PACKAGE\"}"
+  python3 -c 'import json,sys; assert json.load(open(sys.argv[1]))["status"] == "approved"' "${RESPONSE_FILE}"
+  smoke_step 'Evidence validation blocks unsupported claims and permits reviewed grounded finalization'
+fi
+
 api_write POST /api/auth/logout
 UNAUTH_PATH='/api/jobs'
 if [[ "${SMOKE_MILESTONE}" == "2.0.1" ]]; then UNAUTH_PATH='/api/resumes'; fi
@@ -359,7 +432,7 @@ curl --noproxy '*' --fail --silent --show-error --cookie "${COOKIE_JAR}" \
   "${ORIGIN}/api/files/${IMPORTED_FILE_ID}/download" >"${TEST_ROOT}/downloaded-resume.docx"
 cmp --silent "${DOCX_FIXTURE}" "${TEST_ROOT}/downloaded-resume.docx"
 smoke_step 'private Resume file after container restart'
-if [[ "${SMOKE_MILESTONE}" == "2.0.2" ]]; then
+if [[ "${SMOKE_MILESTONE}" == "2.0.2" || "${SMOKE_MILESTONE}" == "2.0.3" ]]; then
   curl --noproxy '*' --fail --silent --show-error --cookie "${COOKIE_JAR}" \
     "${ORIGIN}/api/jobs/${JOB_ID}" >"${RESPONSE_FILE}"
   python3 -c 'import json,sys; assert json.load(open(sys.argv[1]))["id"] == sys.argv[2]' "${RESPONSE_FILE}" "${JOB_ID}"
@@ -372,6 +445,18 @@ if [[ "${SMOKE_MILESTONE}" == "2.0.2" ]]; then
     "${ORIGIN}/api/tasks/${TASK_ID}" >"${RESPONSE_FILE}"
   python3 -c 'import json,sys; assert json.load(open(sys.argv[1]))["status"] == "completed"' "${RESPONSE_FILE}"
   smoke_step 'Task row after container restart'
+fi
+if [[ "${SMOKE_MILESTONE}" == "2.0.3" ]]; then
+  curl --noproxy '*' --fail --silent --show-error --cookie "${COOKIE_JAR}" \
+    "${ORIGIN}/api/jobs/${JOB_ID}/matches/${MATCH_ID}" >"${RESPONSE_FILE}"
+  python3 -c 'import json,sys; assert json.load(open(sys.argv[1]))["status"] == "completed"' "${RESPONSE_FILE}"
+  curl --noproxy '*' --fail --silent --show-error --cookie "${COOKIE_JAR}" \
+    "${ORIGIN}/api/job-rank-runs/${RANK_RUN_ID}" >"${RESPONSE_FILE}"
+  python3 -c 'import json,sys; assert json.load(open(sys.argv[1]))["job_count"] == 1' "${RESPONSE_FILE}"
+  curl --noproxy '*' --fail --silent --show-error --cookie "${COOKIE_JAR}" \
+    "${ORIGIN}/api/application-packages/${PACKAGE_ID}" >"${RESPONSE_FILE}"
+  python3 -c 'import json,sys; assert json.load(open(sys.argv[1]))["status"] == "approved"' "${RESPONSE_FILE}"
+  smoke_step 'Match, Ranking, Package, and Material rows after container restart'
 fi
 smoke_step 'PostgreSQL and private file persistence across container restart'
 
@@ -406,8 +491,11 @@ PYTHON_BIN="${PYTHON_BIN:-python3}" \
   --confirmation 'RESTORE V2 BACKUP'
 
 COUNT_SQL="SELECT (SELECT COUNT(*) FROM users) || ':' || (SELECT COUNT(*) FROM resumes) || ':' || (SELECT COUNT(*) FROM resume_versions) || ':' || (SELECT COUNT(*) FROM file_assets)"
-if [[ "${SMOKE_MILESTONE}" == "2.0.2" ]]; then
+if [[ "${SMOKE_MILESTONE}" == "2.0.2" || "${SMOKE_MILESTONE}" == "2.0.3" ]]; then
   COUNT_SQL="${COUNT_SQL} || ':' || (SELECT COUNT(*) FROM jobs) || ':' || (SELECT COUNT(*) FROM applications) || ':' || (SELECT COUNT(*) FROM application_tasks)"
+fi
+if [[ "${SMOKE_MILESTONE}" == "2.0.3" ]]; then
+  COUNT_SQL="${COUNT_SQL} || ':' || (SELECT COUNT(*) FROM job_match_analyses) || ':' || (SELECT COUNT(*) FROM job_rank_runs) || ':' || (SELECT COUNT(*) FROM application_packages) || ':' || (SELECT COUNT(*) FROM application_materials) || ':' || (SELECT COUNT(*) FROM application_material_versions) || ':' || (SELECT COUNT(*) FROM material_evidence_links)"
 fi
 SOURCE_COUNTS="$("${COMPOSE[@]}" exec -T database psql -U pja_bootstrap \
   -d personal_job_agent_smoke_test -Atqc "${COUNT_SQL}")"

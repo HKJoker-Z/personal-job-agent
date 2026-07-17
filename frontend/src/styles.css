@@ -297,6 +297,92 @@ button:disabled {
   color: #66758a;
 }
 
+.match-panel {
+  margin: 24px 0;
+  border-block: 1px solid #d8e0ea;
+  padding: 20px 0;
+}
+
+.text-value {
+  overflow-wrap: anywhere;
+  font-size: 18px !important;
+  text-transform: capitalize;
+}
+
+.dimension-grid,
+.evidence-columns,
+.ranking-list,
+.material-list,
+.selection-list {
+  display: grid;
+  gap: 14px;
+}
+
+.dimension-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.evidence-columns {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.evidence-columns article,
+.selection-list {
+  border: 1px solid #d8e0ea;
+  border-radius: 8px;
+  padding: 14px;
+  background: #fff;
+}
+
+.selection-list label {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.rank-card {
+  display: grid;
+  grid-template-columns: minmax(240px, 2fr) 1fr 120px auto;
+  align-items: start;
+  gap: 12px;
+}
+
+.rank-card > div {
+  grid-column: 1 / -1;
+}
+
+.material-editor textarea {
+  width: 100%;
+  font-family: inherit;
+}
+
+.material-editor details {
+  margin-top: 14px;
+  border-top: 1px solid #d8e0ea;
+  padding-top: 12px;
+}
+
+.material-editor summary {
+  cursor: pointer;
+  font-weight: 800;
+}
+
+.warning-banner {
+  border-left: 4px solid #a84b00;
+  padding: 12px;
+  color: #743400;
+  background: #fff4e8;
+}
+
+.text-button {
+  padding: 4px;
+  color: #135f54;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  text-decoration: underline;
+}
+
 .result-section h3 {
   margin: 0 0 8px;
   font-size: 18px;
@@ -1168,7 +1254,10 @@ th {
 
   .metric-grid,
   .dashboard-columns,
-  .form-grid {
+  .form-grid,
+  .dimension-grid,
+  .evidence-columns,
+  .rank-card {
     grid-template-columns: 1fr;
   }
 
