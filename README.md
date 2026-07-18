@@ -1,18 +1,18 @@
 # Personal Job Application Agent
 
-Latest stable release: v1.9.0
+Stable release version: v2.0.0
 
 Latest prerelease: v2.0.0-alpha.3
 
-Development runtime version: 2.0.0-alpha.4-dev+031dfa9
+Runtime version: 2.0.0
 
 Personal Job Application Agent is a local-first, full-stack AI job application assistant. It parses a PDF or DOCX resume, accepts pasted job description text or one user-provided job URL, applies deterministic AI security checks, uses the DeepSeek API to generate explainable Resume-JD matching results, retrieves evidence from a curated Project Knowledge RAG source, creates an English cover letter, recommends the next application action, tracks saved applications in SQLite, records local AI monitoring metadata, runs offline behavioral evaluations, and exports application materials as DOCX/PDF files.
 
 Version 1.9 adds containerized deployment, persistent runtime storage, production configuration validation, health/readiness checks, privacy-aware request logging, SQLite-safe backup/restore tooling, GitHub Actions CI, and versioned GHCR publishing configuration. It remains a single-instance SQLite deployment model and does not claim Kubernetes, high availability, zero downtime, distributed tracing, or automatic cloud deployment.
 
-## Version 2 development milestones
+## Version 2 release
 
-Version 2.0.1 through Version 2.0.3 are included in the published `v2.0.0-alpha.3` prerelease. Version 2.0.4 is the final development milestone underlying the future formal `v2.0.0`: reliable asynchronous Agent workflows, Workers, approvals, retry/cancellation/resume, live progress, budgets, and production readiness.
+Version 2.0.1 through Version 2.0.4 were development milestones leading to the formal `v2.0.0` release. Version 2.0.0 combines the secure personal workspace, explainable matching and grounded application materials with reliable asynchronous Agent workflows, Workers, approvals, retry/cancellation/resume, live progress, budgets, and production readiness.
 
 Version 2.0.2 adds:
 

@@ -1,6 +1,6 @@
 # Version 2 Development Guide
 
-Version 2.0.4 is developed on `version-2.0.4-final-release` from the Version 2.0.3 `main` commit `031dfa9`. `v2.0.0-alpha.3` is published. The runtime marker is `2.0.0-alpha.4-dev+031dfa9`; this milestone remains a development PR and is not deployed.
+Version 2.0.4 was developed on `version-2.0.4-final-release` and merged through PR #9. The formal runtime marker is `2.0.0`. Release preparation changes only stable version and release metadata; Version 2 remains undeployed until a separate production migration and deployment task.
 
 ## Local checks
 
@@ -53,6 +53,6 @@ Use only an isolated development/test URL. Do not edit `20260712_01`, `20260713_
 - Every Run/Step transition is transactional, row-locked, revisioned, and accompanied by an append-only Agent Event and Audit Event. Usage keys make accounting exactly-once under duplicate delivery.
 - Approval waits do not occupy a Worker. Completed steps and generated Materials are reused during retry and crash recovery.
 
-## Final Version 2 PR safety
+## Stable release safety
 
-Before push, compare against `origin/main`, run `git diff --check`, scan tracked/generated paths and secrets, and confirm no runtime files, databases, uploads, generated Materials, backups, logs, `node_modules`, or `frontend/dist` are tracked. Use only the isolated `pja-v2-final-*` Smoke project on `127.0.0.1:18088`. Do not force push, merge the PR, create a `v2.0.0` tag/Release, publish final images, deploy, or change the existing 8080 service.
+Before push, compare against `origin/main`, run `git diff --check`, scan tracked/generated paths and secrets, and confirm no runtime files, databases, uploads, generated Materials, backups, logs, `node_modules`, or `frontend/dist` are tracked. Use only the isolated `pja-v2-final-*` Smoke project on `127.0.0.1:18088`. Stable release changes must use reviewed PRs and an immutable annotated `v2.0.0` tag. Publishing the release does not authorize deployment or any change to the existing 8080 service.

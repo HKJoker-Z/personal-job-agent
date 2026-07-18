@@ -73,4 +73,4 @@ Agent Events are streamed through an authenticated, owner-scoped SSE endpoint. `
 
 ## Non-goals
 
-This milestone does not merge or deploy itself, create a `v2.0.0` Tag/Release, expose backend/PostgreSQL/Redis publicly, send email, or submit applications. Interview Center, Mock Interview, formal STAR Stories, browser extension, and multi-model intelligent routing are Version 2.1.x work.
+This architecture does not deploy itself, expose backend/PostgreSQL/Redis publicly, send email, or submit applications. The formal `v2.0.0` release remains separate from production migration and deployment. Interview Center, Mock Interview, formal STAR Stories, browser extension, and multi-model intelligent routing are deferred to later versions.
