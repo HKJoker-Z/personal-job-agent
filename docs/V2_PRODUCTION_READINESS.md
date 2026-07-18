@@ -1,6 +1,6 @@
 # Version 2 Production Readiness
 
-Version 2.0.4 provides deployable configuration and validation, but this development task does not deploy production.
+Version 2.0.0 provides deployable configuration and validation, but publishing the release does not deploy production.
 
 ## Required configuration
 
@@ -35,4 +35,4 @@ Restore requires the exact confirmation phrase and an empty target database/file
 
 ## Release boundary
 
-Opening the Version 2.0.4 PR does not authorize Merge, a `v2.0.0` Tag/Release, GHCR publication, production deployment, or any change to the current 8080 service. Those require a separate reviewed release procedure after all PR checks succeed.
+The `v2.0.0` tag workflow publishes only versioned GHCR images. It does not use SSH or production secrets and does not deploy. Production database migration, container replacement, routing changes, and any change to the current Version 1.9 service on port 8080 require a separate reviewed deployment procedure.

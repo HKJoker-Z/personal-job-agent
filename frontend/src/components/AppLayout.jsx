@@ -6,7 +6,7 @@ export function AppLayout() {
   const { user } = useAuth();
   return <main className="app-shell">
     <header className="page-header">
-      <div className="header-title-row"><h1>Personal Job Agent</h1><span className="version-pill">2.0.0-alpha.4-dev+031dfa9</span></div>
+      <div className="header-title-row"><h1>Personal Job Agent</h1><span className="version-pill">2.0.0</span></div>
       <p>Reliable Agent Workflows, explicit Approvals, and live progress.</p>
       <p className="muted">Signed in as {user?.display_name}</p>
     </header>
