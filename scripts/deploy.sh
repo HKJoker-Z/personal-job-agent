@@ -77,7 +77,7 @@ fi
 
 published_address="$("${compose[@]}" port frontend 8080 | tail -n 1)"
 published_port="${published_address##*:}"
-for attempt in {1..20}; do
+for _ in {1..20}; do
   if "${ROOT_DIR}/scripts/health-check.sh" "http://127.0.0.1:${published_port}" >/dev/null 2>&1; then
     printf '%s\n' 'Deployment readiness checks passed.'
     exit 0

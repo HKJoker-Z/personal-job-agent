@@ -35,6 +35,16 @@ def _int(name: str, default: int, minimum: int, maximum: int) -> int:
     return value
 
 
+def _float(name: str, default: float, minimum: float, maximum: float) -> float:
+    try:
+        value = float(os.getenv(name, str(default)))
+    except ValueError as exc:
+        raise V2ConfigError(f"{name} must be a number.") from exc
+    if not minimum <= value <= maximum:
+        raise V2ConfigError(f"{name} must be between {minimum} and {maximum}.")
+    return value
+
+
 def _csv(name: str, default: tuple[str, ...]) -> tuple[str, ...]:
     value = os.getenv(name)
     if not value:
@@ -82,6 +92,31 @@ class V2Settings:
     file_storage_root: Path
     max_stored_file_size_mb: int
     database_connect_timeout_seconds: int
+    database_pool_size: int
+    database_max_overflow: int
+    redis_url: str
+    redis_queue_namespace: str
+    worker_concurrency: int
+    worker_heartbeat_seconds: int
+    worker_stale_seconds: int
+    worker_step_lease_seconds: int
+    agent_max_auto_retries: int
+    agent_user_concurrency_limit: int
+    agent_daily_token_limit: int
+    agent_daily_cost_limit_usd: float
+    agent_run_token_limit: int
+    agent_step_token_limit: int
+    agent_run_cost_limit_usd: float
+    agent_high_cost_approval_usd: float
+    sse_max_connections_per_user: int
+    sse_heartbeat_seconds: int
+    request_max_body_mb: int
+    minimum_free_disk_mb: int
+    readiness_require_redis: bool
+    readiness_require_worker: bool
+    model_max_output_tokens: int
+    model_input_cost_per_million_usd: float
+    model_output_cost_per_million_usd: float
 
     @property
     def max_stored_file_size_bytes(self) -> int:
@@ -107,6 +142,28 @@ def load_v2_settings() -> V2Settings:
         raise V2ConfigError("AUTH_FINGERPRINT_KEY must be configured securely in production.")
     storage_default = Path("/app/runtime/files") if production else Path("/tmp/pja-v2-files")
     storage_root = Path(os.getenv("FILE_STORAGE_ROOT", str(storage_default))).expanduser().resolve(False)
+    configured_redis_url = os.getenv("REDIS_URL", "").strip()
+    if production and not configured_redis_url:
+        raise V2ConfigError("REDIS_URL must be explicitly configured in production.")
+    redis_url = configured_redis_url or "redis://127.0.0.1:6379/0"
+    if not redis_url.startswith(("redis://", "rediss://")):
+        raise V2ConfigError("REDIS_URL must use redis:// or rediss://.")
+    if production and any(value in redis_url for value in ("localhost", "127.0.0.1")):
+        raise V2ConfigError("Production REDIS_URL must use the private Redis service hostname.")
+    try:
+        daily_cost = float(os.getenv("AGENT_DAILY_COST_LIMIT_USD", "5"))
+        run_cost = float(os.getenv("AGENT_RUN_COST_LIMIT_USD", "2"))
+        high_cost = float(os.getenv("AGENT_HIGH_COST_APPROVAL_USD", "0.50"))
+    except ValueError as exc:
+        raise V2ConfigError("Agent cost limits must be numbers.") from exc
+    if daily_cost <= 0 or run_cost <= 0 or high_cost <= 0:
+        raise V2ConfigError("Agent cost limits must be positive.")
+    if run_cost > daily_cost:
+        raise V2ConfigError("AGENT_RUN_COST_LIMIT_USD cannot exceed the daily cost limit.")
+    input_rate = _float("MODEL_INPUT_COST_PER_MILLION_USD", 0, 0, 1000)
+    output_rate = _float("MODEL_OUTPUT_COST_PER_MILLION_USD", 0, 0, 1000)
+    if production and (input_rate <= 0 or output_rate <= 0):
+        raise V2ConfigError("Production model cost rates must be configured for budget enforcement.")
     return V2Settings(
         app_env=app_env,
         database_url=_database_url(app_env),
@@ -123,6 +180,32 @@ def load_v2_settings() -> V2Settings:
         file_storage_root=storage_root,
         max_stored_file_size_mb=_int("MAX_STORED_FILE_SIZE_MB", 8, 1, 32),
         database_connect_timeout_seconds=_int("DATABASE_CONNECT_TIMEOUT_SECONDS", 10, 1, 60),
+        database_pool_size=_int("DATABASE_POOL_SIZE", 10, 1, 100),
+        database_max_overflow=_int("DATABASE_MAX_OVERFLOW", 10, 0, 100),
+        redis_url=redis_url,
+        redis_queue_namespace=os.getenv("REDIS_QUEUE_NAMESPACE", "personal-job-agent-v2").strip()[:80]
+        or "personal-job-agent-v2",
+        worker_concurrency=_int("AGENT_WORKER_CONCURRENCY", 4, 1, 32),
+        worker_heartbeat_seconds=_int("AGENT_WORKER_HEARTBEAT_SECONDS", 15, 5, 120),
+        worker_stale_seconds=_int("AGENT_WORKER_STALE_SECONDS", 90, 30, 900),
+        worker_step_lease_seconds=_int("AGENT_WORKER_STEP_LEASE_SECONDS", 900, 60, 7200),
+        agent_max_auto_retries=_int("AGENT_MAX_AUTO_RETRIES", 3, 0, 10),
+        agent_user_concurrency_limit=_int("AGENT_USER_CONCURRENCY_LIMIT", 2, 1, 20),
+        agent_daily_token_limit=_int("AGENT_DAILY_TOKEN_LIMIT", 100000, 1000, 100000000),
+        agent_daily_cost_limit_usd=daily_cost,
+        agent_run_token_limit=_int("AGENT_RUN_TOKEN_LIMIT", 30000, 500, 1000000),
+        agent_step_token_limit=_int("AGENT_STEP_TOKEN_LIMIT", 8000, 100, 200000),
+        agent_run_cost_limit_usd=run_cost,
+        agent_high_cost_approval_usd=high_cost,
+        sse_max_connections_per_user=_int("SSE_MAX_CONNECTIONS_PER_USER", 3, 1, 20),
+        sse_heartbeat_seconds=_int("SSE_HEARTBEAT_SECONDS", 15, 5, 60),
+        request_max_body_mb=_int("REQUEST_MAX_BODY_MB", 10, 1, 32),
+        minimum_free_disk_mb=_int("MINIMUM_FREE_DISK_MB", 256, 16, 102400),
+        readiness_require_redis=_bool("READINESS_REQUIRE_REDIS", production),
+        readiness_require_worker=_bool("READINESS_REQUIRE_WORKER", production),
+        model_max_output_tokens=_int("AGENT_MODEL_MAX_OUTPUT_TOKENS", 1200, 100, 5000),
+        model_input_cost_per_million_usd=input_rate,
+        model_output_cost_per_million_usd=output_rate,
     )
 
 

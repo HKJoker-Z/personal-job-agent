@@ -6,8 +6,8 @@ export function AppLayout() {
   const { user } = useAuth();
   return <main className="app-shell">
     <header className="page-header">
-      <div className="header-title-row"><h1>Personal Job Agent</h1><span className="version-pill">2.0.0-alpha.3</span></div>
-      <p>Explainable Matching, Job Ranking, and evidence-grounded Application Materials.</p>
+      <div className="header-title-row"><h1>Personal Job Agent</h1><span className="version-pill">2.0.0-alpha.4-dev+031dfa9</span></div>
+      <p>Reliable Agent Workflows, explicit Approvals, and live progress.</p>
       <p className="muted">Signed in as {user?.display_name}</p>
     </header>
     <nav className="tabs" aria-label="Version 2 sections">
@@ -15,6 +15,8 @@ export function AppLayout() {
       <NavLink to="/jobs">Jobs</NavLink>
       <NavLink to="/job-ranking">Job Ranking</NavLink>
       <NavLink to="/applications">Applications</NavLink>
+      <NavLink to="/agent-runs">Agent Runs</NavLink>
+      <NavLink to="/approvals">Approvals</NavLink>
       <NavLink to="/tasks">Tasks</NavLink>
       <NavLink to="/analyze">Analyze</NavLink>
       <NavLink to="/history">History</NavLink>

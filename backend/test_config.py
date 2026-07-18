@@ -129,6 +129,9 @@ class ConfigTest(unittest.TestCase):
                 "AUTH_TRUSTED_ORIGINS": "https://example.com",
                 "AUTH_FINGERPRINT_KEY": "TEST_ONLY_FINGERPRINT_KEY_32_BYTES_LONG",
                 "FILE_STORAGE_ROOT": str(root / "files"),
+                "REDIS_URL": "redis://redis:6379/0",
+                "MODEL_INPUT_COST_PER_MILLION_USD": "1",
+                "MODEL_OUTPUT_COST_PER_MILLION_USD": "1",
             })
             command = (
                 "from fastapi.testclient import TestClient; import json; from main import app; "

@@ -19,8 +19,14 @@ from uuid import uuid4
 import psycopg
 
 
-APPLICATION_VERSION = "2.0.0-alpha.1"
-REQUIRED_TABLES = ("users", "application_records", "analysis_metrics", "evaluation_runs", "knowledge_documents", "resumes", "resume_versions", "file_assets")
+APPLICATION_VERSION = "2.0.0-alpha.4-dev+031dfa9"
+REQUIRED_TABLES = (
+    "users", "application_records", "analysis_metrics", "evaluation_runs",
+    "knowledge_documents", "resumes", "resume_versions", "file_assets",
+    "agent_runs", "agent_steps", "agent_run_events", "approval_requests",
+    "approval_decisions", "agent_outbox_events", "user_ai_budgets",
+    "ai_usage_ledger", "worker_heartbeats", "dead_letter_records",
+)
 
 
 def sha256_file(path: Path) -> str:
@@ -97,6 +103,11 @@ def create_backup(database_url_env: str, files_root: Path, knowledge: Path, dest
     knowledge = knowledge.resolve(strict=True)
     destination = destination.resolve(strict=False)
     destination.mkdir(parents=True, exist_ok=True, mode=0o700)
+    minimum_free_mb = int(os.getenv("BACKUP_MINIMUM_FREE_DISK_MB", "256"))
+    if minimum_free_mb < 16:
+        raise ValueError("Backup minimum free disk threshold is invalid.")
+    if shutil.disk_usage(destination).free < minimum_free_mb * 1024 * 1024:
+        raise OSError("Backup destination does not have enough free disk space.")
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     final = destination / f"v2-{timestamp}-{uuid4().hex[:8]}"
     temporary = destination / f".{final.name}.incomplete"

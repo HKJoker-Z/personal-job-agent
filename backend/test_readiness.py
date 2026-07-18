@@ -117,13 +117,13 @@ class ReadinessTest(unittest.TestCase):
             self.configured_runtime(directory)
             from main import health_check
 
-            self.assertEqual(health_check(), {"status": "ok", "service": "personal-job-agent", "version": "2.0.0-alpha.3"})
+            self.assertEqual(health_check(), {"status": "ok", "service": "personal-job-agent", "version": "2.0.0-alpha.4-dev+031dfa9"})
 
     def test_readiness_version_is_v203_alpha(self):
         with temporary_test_database(), tempfile.TemporaryDirectory() as directory:
             config, _ = self.configured_runtime(directory)
             payload, _status = readiness_status(config)
-            self.assertEqual(payload["version"], "2.0.0-alpha.3")
+            self.assertEqual(payload["version"], "2.0.0-alpha.4-dev+031dfa9")
 
     def test_ready_endpoint_returns_safe_status(self):
         with temporary_test_database(), tempfile.TemporaryDirectory() as directory:

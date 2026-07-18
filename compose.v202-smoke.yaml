@@ -1,17 +1,31 @@
 services:
   migrate:
     environment:
-      APP_ENV: test
+      APP_ENV: ${PJA_COMPOSE_APP_ENV:-test}
       TEST_DATABASE_URL: postgresql+psycopg://${POSTGRES_MIGRATION_USER}:${POSTGRES_MIGRATION_PASSWORD}@database:5432/${POSTGRES_DB}
 
   backend:
     environment:
-      APP_ENV: test
+      APP_ENV: ${PJA_COMPOSE_APP_ENV:-test}
       TEST_DATABASE_URL: postgresql+psycopg://${POSTGRES_APP_USER}:${POSTGRES_APP_PASSWORD}@database:5432/${POSTGRES_DB}
       JOB_IMPORT_TEST_ALLOWED_HOST: mock-job
+      READINESS_REQUIRE_REDIS: "true"
+      READINESS_REQUIRE_WORKER: "true"
     depends_on:
       mock-job:
         condition: service_healthy
+
+  backup-before-migrate:
+    environment:
+      APP_ENV: ${PJA_COMPOSE_APP_ENV:-test}
+      TEST_DATABASE_URL: postgresql+psycopg://${POSTGRES_MIGRATION_USER}:${POSTGRES_MIGRATION_PASSWORD}@database:5432/${POSTGRES_DB}
+
+  worker:
+    environment:
+      APP_ENV: ${PJA_COMPOSE_APP_ENV:-test}
+      TEST_DATABASE_URL: postgresql+psycopg://${POSTGRES_APP_USER}:${POSTGRES_APP_PASSWORD}@database:5432/${POSTGRES_DB}
+      READINESS_REQUIRE_REDIS: "true"
+      READINESS_REQUIRE_WORKER: "true"
 
   mock-job:
     image: python:3.12-alpine

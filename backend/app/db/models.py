@@ -17,6 +17,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    Numeric,
     String,
     Text,
     UniqueConstraint,
@@ -852,6 +853,257 @@ class MaterialReview(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, index=True)
 
 
+AGENT_RUN_STATUSES = (
+    "queued", "running", "waiting_for_approval", "retry_scheduled",
+    "completed", "failed", "cancelled", "dead_letter",
+)
+AGENT_STEP_STATUSES = (
+    "pending", "queued", "running", "waiting_for_approval", "completed",
+    "skipped", "failed", "cancelled", "retry_scheduled",
+)
+
+
+class AgentRun(TimestampMixin, Base):
+    __tablename__ = "agent_runs"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('queued','running','waiting_for_approval','retry_scheduled','completed','failed','cancelled','dead_letter')",
+            name="status_valid",
+        ),
+        UniqueConstraint("owner_user_id", "workflow_type", "idempotency_key_hash", name="uq_agent_run_idempotency"),
+        Index("ix_agent_runs_owner_status_created", "owner_user_id", "status", "created_at"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    owner_user_id: Mapped[UUID] = mapped_column(Uuid, ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    workflow_type: Mapped[str] = mapped_column(String(80), index=True, nullable=False)
+    status: Mapped[str] = mapped_column(String(40), default="queued", index=True, nullable=False)
+    idempotency_key_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    correlation_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    input_refs: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
+    profile_revision: Mapped[int | None] = mapped_column(Integer)
+    job_revision: Mapped[int | None] = mapped_column(Integer)
+    resume_version_id: Mapped[UUID | None] = mapped_column(Uuid, ForeignKey("resume_versions.id", ondelete="RESTRICT"), index=True)
+    application_id: Mapped[UUID | None] = mapped_column(Uuid, ForeignKey("applications.id", ondelete="RESTRICT"), index=True)
+    package_id: Mapped[UUID | None] = mapped_column(Uuid, ForeignKey("application_packages.id", ondelete="RESTRICT"), index=True)
+    current_step_key: Mapped[str | None] = mapped_column(String(100))
+    progress_percent: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    revision: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    attempt: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    max_attempts: Mapped[int] = mapped_column(Integer, default=3, nullable=False)
+    cancel_requested: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    partial: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    total_tokens: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    estimated_cost_usd: Mapped[Any] = mapped_column(Numeric(12, 6), default=0, nullable=False)
+    token_limit: Mapped[int] = mapped_column(Integer, nullable=False)
+    cost_limit_usd: Mapped[Any] = mapped_column(Numeric(12, 6), nullable=False)
+    safe_error_code: Mapped[str | None] = mapped_column(String(80))
+    safe_error_summary: Mapped[str | None] = mapped_column(String(500))
+    retry_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    cancelled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class AgentStep(Base):
+    __tablename__ = "agent_steps"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('pending','queued','running','waiting_for_approval','completed','skipped','failed','cancelled','retry_scheduled')",
+            name="status_valid",
+        ),
+        UniqueConstraint("run_id", "step_key", name="uq_agent_step_key"),
+        UniqueConstraint("idempotency_key", name="uq_agent_step_idempotency"),
+        Index("ix_agent_steps_run_order", "run_id", "step_order"),
+        Index("ix_agent_steps_status_scheduled", "status", "scheduled_at"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    run_id: Mapped[UUID] = mapped_column(Uuid, ForeignKey("agent_runs.id", ondelete="CASCADE"), index=True)
+    owner_user_id: Mapped[UUID] = mapped_column(Uuid, ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    step_key: Mapped[str] = mapped_column(String(100), nullable=False)
+    step_order: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String(40), default="pending", index=True, nullable=False)
+    revision: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    attempt: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    max_attempts: Mapped[int] = mapped_column(Integer, default=4, nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(160), nullable=False)
+    execution_token: Mapped[str | None] = mapped_column(String(64), index=True)
+    worker_id: Mapped[str | None] = mapped_column(String(120), index=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    output_refs: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
+    input_tokens: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    output_tokens: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    estimated_cost_usd: Mapped[Any] = mapped_column(Numeric(12, 6), default=0, nullable=False)
+    safe_error_code: Mapped[str | None] = mapped_column(String(80))
+    safe_error_summary: Mapped[str | None] = mapped_column(String(500))
+    scheduled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
+
+
+class AgentRunEvent(Base):
+    __tablename__ = "agent_run_events"
+    __table_args__ = (Index("ix_agent_events_run_id_id", "run_id", "id"),)
+
+    id: Mapped[int] = mapped_column(BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True)
+    run_id: Mapped[UUID] = mapped_column(Uuid, ForeignKey("agent_runs.id", ondelete="CASCADE"), index=True)
+    owner_user_id: Mapped[UUID] = mapped_column(Uuid, ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    step_id: Mapped[UUID | None] = mapped_column(Uuid, ForeignKey("agent_steps.id", ondelete="SET NULL"), index=True)
+    event_type: Mapped[str] = mapped_column(String(100), index=True, nullable=False)
+    summary: Mapped[str] = mapped_column(String(500), nullable=False)
+    safe_payload: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
+    run_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, index=True)
+
+
+class ApprovalRequest(Base):
+    __tablename__ = "approval_requests"
+    __table_args__ = (
+        CheckConstraint("status IN ('pending','approved','rejected','expired','cancelled')", name="status_valid"),
+        UniqueConstraint("run_id", "step_id", "approval_type", name="uq_approval_request_step_type"),
+        Index("ix_approval_owner_status_created", "owner_user_id", "status", "created_at"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    run_id: Mapped[UUID] = mapped_column(Uuid, ForeignKey("agent_runs.id", ondelete="CASCADE"), index=True)
+    step_id: Mapped[UUID] = mapped_column(Uuid, ForeignKey("agent_steps.id", ondelete="CASCADE"), index=True)
+    owner_user_id: Mapped[UUID] = mapped_column(Uuid, ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    approval_type: Mapped[str] = mapped_column(String(80), index=True, nullable=False)
+    status: Mapped[str] = mapped_column(String(30), default="pending", index=True, nullable=False)
+    revision: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    title: Mapped[str] = mapped_column(String(240), nullable=False)
+    safe_summary: Mapped[str] = mapped_column(String(500), nullable=False)
+    risk_level: Mapped[str] = mapped_column(String(30), default="normal", nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, index=True)
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class ApprovalDecision(Base):
+    __tablename__ = "approval_decisions"
+    __table_args__ = (
+        CheckConstraint("decision IN ('approve','reject')", name="decision_valid"),
+        UniqueConstraint("approval_request_id", "idempotency_key", name="uq_approval_decision_idempotency"),
+        Index("ix_approval_decisions_request_created", "approval_request_id", "created_at"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    approval_request_id: Mapped[UUID] = mapped_column(Uuid, ForeignKey("approval_requests.id", ondelete="CASCADE"), index=True)
+    run_id: Mapped[UUID] = mapped_column(Uuid, ForeignKey("agent_runs.id", ondelete="CASCADE"), index=True)
+    owner_user_id: Mapped[UUID] = mapped_column(Uuid, ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    decided_by_user_id: Mapped[UUID] = mapped_column(Uuid, ForeignKey("users.id", ondelete="RESTRICT"), index=True)
+    decision: Mapped[str] = mapped_column(String(30), nullable=False)
+    request_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(160), nullable=False)
+    safe_reason: Mapped[str] = mapped_column(String(500), default="", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+
+
+class AgentOutboxEvent(Base):
+    __tablename__ = "agent_outbox_events"
+    __table_args__ = (
+        CheckConstraint("status IN ('pending','publishing','published','failed','dead_letter')", name="status_valid"),
+        UniqueConstraint("deduplication_key", name="uq_agent_outbox_deduplication"),
+        Index("ix_agent_outbox_status_available", "status", "available_at"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    run_id: Mapped[UUID] = mapped_column(Uuid, ForeignKey("agent_runs.id", ondelete="CASCADE"), index=True)
+    step_id: Mapped[UUID | None] = mapped_column(Uuid, ForeignKey("agent_steps.id", ondelete="CASCADE"), index=True)
+    event_type: Mapped[str] = mapped_column(String(80), nullable=False)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    deduplication_key: Mapped[str] = mapped_column(String(200), nullable=False)
+    status: Mapped[str] = mapped_column(String(30), default="pending", index=True, nullable=False)
+    attempt: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    max_attempts: Mapped[int] = mapped_column(Integer, default=10, nullable=False)
+    available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, index=True)
+    locked_by: Mapped[str | None] = mapped_column(String(120))
+    locked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    safe_error_code: Mapped[str | None] = mapped_column(String(80))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class UserAIBudget(Base):
+    __tablename__ = "user_ai_budgets"
+    __table_args__ = (UniqueConstraint("user_id", "budget_date", name="uq_user_ai_budget_date"),)
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    user_id: Mapped[UUID] = mapped_column(Uuid, ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    budget_date: Mapped[date] = mapped_column(Date, index=True, nullable=False)
+    daily_token_limit: Mapped[int] = mapped_column(Integer, nullable=False)
+    daily_cost_limit_usd: Mapped[Any] = mapped_column(Numeric(12, 6), nullable=False)
+    run_token_limit: Mapped[int] = mapped_column(Integer, nullable=False)
+    step_token_limit: Mapped[int] = mapped_column(Integer, nullable=False)
+    concurrent_run_limit: Mapped[int] = mapped_column(Integer, nullable=False)
+    revision: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
+
+
+class AIUsageLedger(Base):
+    __tablename__ = "ai_usage_ledger"
+    __table_args__ = (
+        UniqueConstraint("usage_key", name="uq_ai_usage_ledger_key"),
+        Index("ix_ai_usage_user_created", "owner_user_id", "created_at"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    owner_user_id: Mapped[UUID] = mapped_column(Uuid, ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    run_id: Mapped[UUID] = mapped_column(Uuid, ForeignKey("agent_runs.id", ondelete="CASCADE"), index=True)
+    step_id: Mapped[UUID] = mapped_column(Uuid, ForeignKey("agent_steps.id", ondelete="CASCADE"), index=True)
+    usage_key: Mapped[str] = mapped_column(String(200), nullable=False)
+    provider: Mapped[str] = mapped_column(String(80), nullable=False)
+    model: Mapped[str] = mapped_column(String(120), nullable=False)
+    input_tokens: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    output_tokens: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    total_tokens: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    estimated_cost_usd: Mapped[Any] = mapped_column(Numeric(12, 6), default=0, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, index=True)
+
+
+class WorkerHeartbeat(Base):
+    __tablename__ = "worker_heartbeats"
+    __table_args__ = (
+        CheckConstraint("status IN ('starting','ready','busy','stopping','stopped')", name="status_valid"),
+    )
+
+    worker_id: Mapped[str] = mapped_column(String(120), primary_key=True)
+    hostname_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    process_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String(30), default="starting", index=True, nullable=False)
+    concurrency: Mapped[int] = mapped_column(Integer, nullable=False)
+    active_tasks: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    worker_version: Mapped[str] = mapped_column(String(80), nullable=False)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    last_heartbeat_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, index=True)
+    shutdown_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class DeadLetterRecord(Base):
+    __tablename__ = "dead_letter_records"
+    __table_args__ = (
+        CheckConstraint("status IN ('open','resolved')", name="status_valid"),
+        Index("ix_dead_letter_owner_status_created", "owner_user_id", "status", "created_at"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    owner_user_id: Mapped[UUID] = mapped_column(Uuid, ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    run_id: Mapped[UUID] = mapped_column(Uuid, ForeignKey("agent_runs.id", ondelete="CASCADE"), index=True)
+    step_id: Mapped[UUID | None] = mapped_column(Uuid, ForeignKey("agent_steps.id", ondelete="SET NULL"), index=True)
+    outbox_event_id: Mapped[UUID | None] = mapped_column(Uuid, ForeignKey("agent_outbox_events.id", ondelete="SET NULL"), index=True)
+    reason_code: Mapped[str] = mapped_column(String(80), nullable=False)
+    safe_error_summary: Mapped[str] = mapped_column(String(500), nullable=False)
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False)
+    safe_payload: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
+    status: Mapped[str] = mapped_column(String(30), default="open", index=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 class MigrationRun(Base):
     __tablename__ = "migration_runs"
 
@@ -1059,6 +1311,16 @@ def prevent_material_version_content_update(
     )
     if any(state.attrs[field].history.has_changes() for field in immutable_fields):
         raise ValueError("Material Version content is immutable; create a new Version instead.")
+
+
+@event.listens_for(AgentRunEvent, "before_update")
+@event.listens_for(AgentRunEvent, "before_delete")
+@event.listens_for(ApprovalDecision, "before_update")
+@event.listens_for(ApprovalDecision, "before_delete")
+@event.listens_for(AIUsageLedger, "before_update")
+@event.listens_for(AIUsageLedger, "before_delete")
+def prevent_agent_audit_mutation(_mapper: object, _connection: object, _target: object) -> None:
+    raise ValueError("Agent Events, Approval Decisions, and Usage Ledger records are append-only.")
 
 
 KNOWLEDGE_FTS_INDEX = Index(

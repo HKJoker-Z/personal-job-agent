@@ -131,7 +131,7 @@ PY
 }
 
 wait_ready() {
-  for attempt in {1..40}; do
+  for _ in {1..40}; do
     if request GET /api/ready >/dev/null 2>&1; then
       return 0
     fi

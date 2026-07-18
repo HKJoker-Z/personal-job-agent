@@ -34,7 +34,7 @@ if ! python3 "${ROOT_DIR}/scripts/restore_runtime.py" "$@"; then
 fi
 
 "${compose[@]}" up -d backend
-for attempt in {1..20}; do
+for _ in {1..20}; do
   if python3 - "${BASE_URL}" <<'PY'
 import sys
 import urllib.request

@@ -211,6 +211,39 @@ class V2PostgreSQLIntegrationTest(unittest.TestCase):
                 1,
             )
 
+    def test_alpha3_schema_upgrades_to_reliable_agent_workflows_and_round_trips(self):
+        workflow_tables = (
+            "agent_runs", "agent_steps", "agent_run_events", "approval_requests",
+            "approval_decisions", "agent_outbox_events", "user_ai_budgets",
+            "ai_usage_ledger", "worker_heartbeats", "dead_letter_records",
+        )
+        config = Config(str(Path(__file__).parent / "alembic.ini"))
+        command.downgrade(config, "20260713_03")
+        raw_url = self.database_url.replace("postgresql+psycopg://", "postgresql://", 1)
+        with psycopg.connect(raw_url) as connection:
+            self.assertEqual(
+                connection.execute("SELECT to_regclass('public.application_packages')").fetchone()[0],
+                "application_packages",
+            )
+            for table in workflow_tables:
+                self.assertIsNone(
+                    connection.execute("SELECT to_regclass(%s)", (f"public.{table}",)).fetchone()[0]
+                )
+        command.upgrade(config, "head")
+        command.check(config)
+        with psycopg.connect(raw_url) as connection:
+            for table in workflow_tables:
+                self.assertEqual(
+                    connection.execute("SELECT to_regclass(%s)", (f"public.{table}",)).fetchone()[0],
+                    table,
+                )
+            self.assertEqual(
+                connection.execute(
+                    "SELECT COUNT(*) FROM pg_indexes WHERE indexname = 'uq_ai_usage_ledger_key'"
+                ).fetchone()[0],
+                1,
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -15,6 +15,7 @@ import { JobDetailPage, JobImportPage, JobLibraryPage } from "./pages/JobPages";
 import { ApplicationBoardPage, ApplicationDetailPage } from "./pages/ApplicationPages";
 import { TasksPage } from "./pages/TasksPage";
 import { ApplicationPackageDetailPage, ApplicationPackagesPage, JobRankingPage } from "./pages/V203Pages";
+import { AgentRunDetailPage, AgentRunsPage, ApprovalsPage } from "./pages/AgentPages";
 
 export function App() {
   return <AuthProvider><Routes>
@@ -35,6 +36,9 @@ export function App() {
       <Route path="/applications/:applicationId/packages" element={<ApplicationPackagesPage />} />
       <Route path="/applications/:applicationId" element={<ApplicationDetailPage />} />
       <Route path="/application-packages/:packageId" element={<ApplicationPackageDetailPage />} />
+      <Route path="/agent-runs" element={<AgentRunsPage />} />
+      <Route path="/agent-runs/:runId" element={<AgentRunDetailPage />} />
+      <Route path="/approvals" element={<ApprovalsPage />} />
       <Route path="/tasks" element={<TasksPage />} />
       <Route path="/profile" element={<ProfilePage />} />
       <Route path="/resumes" element={<ResumeLibraryPage />} />

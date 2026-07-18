@@ -1,7 +1,16 @@
 services:
+  backup-before-migrate:
+    image: ghcr.io/hkjoker-z/personal-job-agent-backend:${IMAGE_TAG:-latest}
+    pull_policy: missing
+  migrate:
+    image: ghcr.io/hkjoker-z/personal-job-agent-backend:${IMAGE_TAG:-latest}
+    pull_policy: missing
   backend:
     image: ghcr.io/hkjoker-z/personal-job-agent-backend:${IMAGE_TAG:-latest}
     pull_policy: missing
   frontend:
     image: ghcr.io/hkjoker-z/personal-job-agent-frontend:${IMAGE_TAG:-latest}
+    pull_policy: missing
+  worker:
+    image: ghcr.io/hkjoker-z/personal-job-agent-backend:${IMAGE_TAG:-latest}
     pull_policy: missing

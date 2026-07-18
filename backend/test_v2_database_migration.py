@@ -8,7 +8,7 @@ from unittest.mock import patch
 from alembic import command
 from alembic.config import Config
 from alembic.migration import MigrationContext
-from sqlalchemy import select
+from sqlalchemy import inspect, select
 
 from app.db.engine import build_engine
 from app.db.models import User
@@ -27,7 +27,7 @@ class V2DatabaseMigrationTest(unittest.TestCase):
                 engine = build_engine(os.environ["TEST_DATABASE_URL"])
                 with engine.connect() as connection:
                     current = MigrationContext.configure(connection).get_current_revision()
-                self.assertEqual(current, "20260713_03")
+                self.assertEqual(current, "20260717_04")
                 command.check(config)
                 engine.dispose()
                 build_engine.cache_clear()
@@ -46,6 +46,37 @@ class V2DatabaseMigrationTest(unittest.TestCase):
                 db.rollback()
                 self.assertIsNone(db.scalar(select(User.id)))
                 db.close(); engine.dispose(); build_engine.cache_clear()
+
+    def test_alpha3_downgrade_and_upgrade_adds_only_reliable_workflow_tables(self):
+        workflow_tables = {
+            "agent_runs", "agent_steps", "agent_run_events", "approval_requests",
+            "approval_decisions", "agent_outbox_events", "user_ai_budgets",
+            "ai_usage_ledger", "worker_heartbeats", "dead_letter_records",
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "alpha3-to-final.db"
+            url = f"sqlite+pysqlite:///{database}"
+            with patch.dict(os.environ, {"APP_ENV": "test", "TEST_DATABASE_URL": url}):
+                build_engine.cache_clear()
+                config = Config(str(Path(__file__).parent / "alembic.ini"))
+                command.upgrade(config, "head")
+                engine = build_engine(url)
+                self.assertTrue(workflow_tables.issubset(set(inspect(engine).get_table_names())))
+                engine.dispose()
+
+                command.downgrade(config, "20260713_03")
+                engine = build_engine(url)
+                alpha3_tables = set(inspect(engine).get_table_names())
+                self.assertTrue(workflow_tables.isdisjoint(alpha3_tables))
+                self.assertIn("application_packages", alpha3_tables)
+                engine.dispose()
+
+                command.upgrade(config, "head")
+                command.check(config)
+                engine = build_engine(url)
+                self.assertTrue(workflow_tables.issubset(set(inspect(engine).get_table_names())))
+                engine.dispose()
+                build_engine.cache_clear()
 
     def test_reader_accepts_missing_optional_tables_and_preserves_hash(self):
         with tempfile.TemporaryDirectory() as directory:

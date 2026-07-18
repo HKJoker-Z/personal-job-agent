@@ -89,22 +89,27 @@ describe("Version 2.0.3 matching and materials pages", () => {
     await waitFor(() => expect(apiJson).toHaveBeenCalledWith("/api/applications/a1/packages", expect.objectContaining({ method: "POST" })));
   });
 
-  it("generates a Tailored Resume Draft", async () => {
-    apiJson.mockResolvedValueOnce(packageValue).mockResolvedValueOnce(version).mockResolvedValueOnce(packageWithMaterial);
+  it("starts a durable Agent Workflow with an idempotency key", async () => {
+    apiJson.mockResolvedValueOnce(packageValue).mockResolvedValueOnce({ run: { id: "run1" }, reused: false });
     render(route("/application-packages/:packageId", <ApplicationPackageDetailPage />, "/application-packages/p1"));
-    fireEvent.click(await screen.findByText("Generate Tailored Resume"));
-    expect(await screen.findByText("Tailored Resume")).toBeInTheDocument();
-    expect(apiJson).toHaveBeenCalledWith("/api/application-packages/p1/generate-resume", expect.objectContaining({ method: "POST" }));
+    fireEvent.click(await screen.findByText("Start Agent Workflow"));
+    await waitFor(() => expect(apiJson).toHaveBeenCalledWith("/api/agent-runs", expect.objectContaining({
+      method: "POST",
+      headers: expect.objectContaining({ "Idempotency-Key": expect.stringContaining("package:p1") }),
+      body: expect.objectContaining({ package_id: "p1", force_new: false }),
+    })));
   });
 
-  it("generates Cover Letter and Application Answers only on explicit action", async () => {
-    apiJson.mockResolvedValueOnce(packageValue).mockResolvedValueOnce(version).mockResolvedValueOnce(packageWithMaterial).mockResolvedValueOnce([version]).mockResolvedValueOnce(packageWithMaterial);
+  it("prevents duplicate starts and confirms Force New", async () => {
+    let resolveStart;
+    apiJson.mockResolvedValueOnce(packageValue).mockImplementationOnce(() => new Promise((resolve) => { resolveStart = resolve; }));
     render(route("/application-packages/:packageId", <ApplicationPackageDetailPage />, "/application-packages/p1"));
-    fireEvent.click(await screen.findByText("Generate Cover Letter"));
-    await screen.findByText("Tailored Resume");
-    fireEvent.change(screen.getByLabelText("Application question"), { target: { value: "Why this role?" } });
-    fireEvent.click(screen.getByText("Generate Grounded Answer"));
-    await waitFor(() => expect(apiJson).toHaveBeenCalledWith("/api/application-packages/p1/answers", expect.objectContaining({ body: expect.objectContaining({ questions: expect.any(Array) }) })));
+    const start = await screen.findByText("Start Agent Workflow");
+    fireEvent.click(start);
+    expect(screen.getByText("Starting…")).toBeDisabled();
+    expect(screen.getByText("Force New Workflow")).toBeDisabled();
+    resolveStart({ run: { id: "run1" }, reused: true });
+    await waitFor(() => expect(apiJson).toHaveBeenCalledTimes(2));
   });
 
   it("shows Evidence panel and support status as text", async () => {
@@ -135,7 +140,7 @@ describe("Version 2.0.3 matching and materials pages", () => {
     const unsafe = { ...version, validation_status: "invalid", unsupported_claim_count: 2, evidence_coverage: 25 };
     apiJson.mockResolvedValueOnce({ ...packageWithMaterial, materials: [{ ...packageWithMaterial.materials[0], active_version: unsafe }] });
     render(route("/application-packages/:packageId", <ApplicationPackageDetailPage />, "/application-packages/p1"));
-    expect(await screen.findByRole("status")).toHaveTextContent("Unsupported claims block");
+    expect(await screen.findByText(/Unsupported claims block approval/)).toBeInTheDocument();
     expect(screen.getByText("Approve")).toBeDisabled();
     expect(screen.getByText("Finalize")).toBeDisabled();
   });

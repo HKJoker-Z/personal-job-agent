@@ -1,6 +1,6 @@
 # Version 2 Development Guide
 
-Version 2.0.3 is developed on `version-2.0.3-matching-application-materials` from the Alpha 2 `main` commit. `v2.0.0-alpha.2` is published; Alpha 3 remains an unmerged development PR and is not deployed.
+Version 2.0.4 is developed on `version-2.0.4-final-release` from the Version 2.0.3 `main` commit `031dfa9`. `v2.0.0-alpha.3` is published. The runtime marker is `2.0.0-alpha.4-dev+031dfa9`; this milestone remains a development PR and is not deployed.
 
 ## Local checks
 
@@ -18,6 +18,7 @@ npm run test
 npm run build
 cd ..
 find scripts -maxdepth 1 -type f -name '*.sh' -print0 | xargs -0 -n1 bash -n
+shellcheck scripts/*.sh deploy/postgres/*.sh
 ```
 
 PostgreSQL integration requires an explicitly test-named database and both `PJA_RUN_POSTGRES_TESTS=1` and `TEST_DATABASE_URL`. Never point these commands at a live database.
@@ -28,12 +29,12 @@ Alembic development:
 cd backend
 alembic heads
 alembic upgrade head
-alembic downgrade 20260713_02
+alembic downgrade 20260713_03
 alembic upgrade head
 alembic check
 ```
 
-Use only an isolated development/test URL. Do not edit `20260712_01` or `20260713_02`; Alpha 3 changes belong in `20260713_03` or a later revision.
+Use only an isolated development/test URL. Do not edit `20260712_01`, `20260713_02`, or `20260713_03`; final workflow changes belong in `20260717_04` or a later revision.
 
 ## Domain rules
 
@@ -48,7 +49,10 @@ Use only an isolated development/test URL. Do not edit `20260712_01` or `2026071
 - Matching uses confirmed Profile facts and confirmed Job Requirements; unknown is never silently converted to unmet.
 - LLM output cannot set scores. It may rewrite a grounded local Draft only and must pass strict schema, output scan, and independent claim validation.
 - Material edits create a new immutable Version. Unsupported claims block approval/finalization unless edited or explicitly user-confirmed for that Version.
+- PostgreSQL is the system of record. Redis carries only allow-listed IDs and short-lived coordination state; queue messages are JSON and never contain Resume/JD/Material text, PII, Sessions, Cookies, CSRF values, API keys, or database URLs.
+- Every Run/Step transition is transactional, row-locked, revisioned, and accompanied by an append-only Agent Event and Audit Event. Usage keys make accounting exactly-once under duplicate delivery.
+- Approval waits do not occupy a Worker. Completed steps and generated Materials are reused during retry and crash recovery.
 
-## Alpha 3 PR safety
+## Final Version 2 PR safety
 
-Before push, compare against `origin/main`, run `git diff --check`, scan tracked/generated paths and secrets, and confirm no runtime files, databases, uploads, generated Materials, backups, logs, `node_modules`, or `frontend/dist` are tracked. Do not force push, merge the Alpha 3 PR, create an Alpha 3 tag/release, publish an Alpha 3 image, or deploy.
+Before push, compare against `origin/main`, run `git diff --check`, scan tracked/generated paths and secrets, and confirm no runtime files, databases, uploads, generated Materials, backups, logs, `node_modules`, or `frontend/dist` are tracked. Use only the isolated `pja-v2-final-*` Smoke project on `127.0.0.1:18088`. Do not force push, merge the PR, create a `v2.0.0` tag/Release, publish final images, deploy, or change the existing 8080 service.

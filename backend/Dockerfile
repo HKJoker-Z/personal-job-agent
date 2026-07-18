@@ -7,6 +7,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app/backend
 
 COPY backend/requirements.txt ./requirements.txt
+RUN apt-get update \
+    && apt-get install --yes --no-install-recommends postgresql-client \
+    && rm -rf /var/lib/apt/lists/*
 RUN python -m pip install --no-cache-dir --requirement requirements.txt
 
 COPY backend/agent_workflow.py backend/config.py backend/data_management_service.py ./
@@ -18,6 +21,7 @@ COPY backend/app/ ./app/
 COPY backend/alembic.ini ./alembic.ini
 COPY backend/alembic/ ./alembic/
 COPY backend/evals/ ./evals/
+COPY scripts/v2_backup_restore.py /app/scripts/v2_backup_restore.py
 COPY docs/PROJECT_KNOWLEDGE.md /app/seed/PROJECT_KNOWLEDGE.md
 
 RUN groupadd --gid 10001 app \

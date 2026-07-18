@@ -1,5 +1,5 @@
-import React, { useEffect, useMemo, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import { apiJson } from "../api/client";
 
 function Alert({ value }) { return value ? <p role="alert">{value}</p> : null; }
@@ -76,22 +76,29 @@ function MaterialEditor({ material, reload }) {
 
 export function ApplicationPackageDetailPage() {
   const { packageId } = useParams();
+  const navigate = useNavigate();
   const [value, setValue] = useState(null);
-  const [question, setQuestion] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState("");
+  const workflowKey = useRef(`package:${packageId}:${Date.now()}`);
   const load = () => apiJson(`/api/application-packages/${packageId}`).then(setValue).catch((item) => setError(item.message));
   useEffect(() => { load(); }, [packageId]);
-  const generate = async (kind) => {
-    setBusy(kind); setError("");
-    try { await apiJson(`/api/application-packages/${packageId}/${kind}`, { method: "POST", body: {} }); await load(); }
-    catch (item) { setError(item.message); }
-    finally { setBusy(""); }
-  };
-  const answer = async (event) => {
-    event.preventDefault(); setBusy("answers");
-    try { await apiJson(`/api/application-packages/${packageId}/answers`, { method: "POST", body: { questions: [{ key: `question-${Date.now()}`, question }] } }); setQuestion(""); await load(); }
-    catch (item) { setError(item.message); }
+  const startWorkflow = async (forceNew = false) => {
+    if (forceNew && !window.confirm("Force a new workflow instead of reusing the existing idempotent Run?")) return;
+    setBusy("workflow"); setError("");
+    if (forceNew) workflowKey.current = `package:${packageId}:force:${Date.now()}`;
+    try {
+      const result = await apiJson("/api/agent-runs", {
+        method: "POST",
+        headers: { "Idempotency-Key": workflowKey.current },
+        body: {
+          package_id: packageId,
+          force_new: forceNew,
+          force_confirmation: forceNew ? "FORCE NEW" : null,
+        },
+      });
+      navigate(`/agent-runs/${result.run.id}`, { state: { reused: result.reused } });
+    } catch (item) { setError(item.message); }
     finally { setBusy(""); }
   };
   if (error && !value) return <Alert value={error} />;
@@ -99,8 +106,9 @@ export function ApplicationPackageDetailPage() {
   const unsupported = value.materials.reduce((count, material) => count + Number(material.active_version?.unsupported_claim_count || 0), 0);
   return <section><div className="section-heading"><div><h2>{value.title}</h2><p>Application Package</p></div><span className="status-badge">{value.status}</span></div><Alert value={error} />
     <dl className="detail-grid"><dt>Source Resume</dt><dd>{value.source_resume_version_id}</dd><dt>Profile Revision</dt><dd>{value.source_profile_revision}</dd><dt>Job Revision</dt><dd>{value.source_job_revision}</dd><dt>Match Analysis</dt><dd>{value.source_match_analysis_id}</dd></dl>
-    <div className="button-row"><button disabled={Boolean(busy)} onClick={() => generate("generate-resume")}>Generate Tailored Resume</button><button disabled={Boolean(busy)} onClick={() => generate("generate-cover-letter")}>Generate Cover Letter</button><button disabled={unsupported > 0} onClick={async () => { if (!window.confirm("Approve this Package for manual use?")) return; try { const next = await apiJson(`/api/application-packages/${packageId}/approve`, { method: "POST", body: { expected_revision: value.revision, confirmation: "APPROVE PACKAGE" } }); setValue(next); } catch (item) { setError(item.message); } }}>Approve Package</button></div>
-    <form className="inline-form" onSubmit={answer}><label>Application question<textarea aria-label="Application question" required value={question} onChange={(event) => setQuestion(event.target.value)} /></label><button disabled={busy === "answers"}>Generate Grounded Answer</button></form>
-    {!value.materials.length ? <p className="empty-state">No materials generated. All generated content will start as a Draft.</p> : <div className="material-list">{value.materials.map((material) => <MaterialEditor key={material.id} material={material} reload={load} />)}</div>}
+    <p className="muted">The durable workflow continues if you close this page. It pauses without occupying a Worker whenever approval is required.</p>
+    <div className="button-row"><button disabled={Boolean(busy)} onClick={() => startWorkflow(false)}>{busy === "workflow" ? "Starting…" : "Start Agent Workflow"}</button><button disabled={Boolean(busy)} onClick={() => startWorkflow(true)}>Force New Workflow</button></div>
+    {unsupported > 0 ? <p className="warning-banner" role="status">Existing materials contain unsupported claims. The Agent Workflow will not auto-confirm them.</p> : null}
+    {!value.materials.length ? <p className="empty-state">No materials generated. The Agent Workflow creates Drafts and requests explicit approvals.</p> : <div className="material-list">{value.materials.map((material) => <MaterialEditor key={material.id} material={material} reload={load} />)}</div>}
   </section>;
 }

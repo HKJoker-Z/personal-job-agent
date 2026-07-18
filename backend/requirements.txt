@@ -11,6 +11,8 @@ reportlab==4.1.0
 SQLAlchemy==2.0.51
 psycopg[binary]==3.3.4
 alembic==1.18.5
+dramatiq[redis]==2.2.0
+redis==7.4.1
 pwdlib[argon2]==0.3.0
 email-validator==2.3.0
 urllib3==2.1.0
