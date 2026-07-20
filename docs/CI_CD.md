@@ -1,6 +1,6 @@
 # CI/CD and Container Image Publishing
 
-Version 2 Phase 1 extends pull-request CI with full Python test discovery, a real PostgreSQL 16 service test, frontend Vitest coverage, the retained Version 1.9 compatibility Smoke, and a separate isolated Version 2 identity/Profile/Resume/backup/restore Smoke. Release publishing remains tag-driven and is not performed for the Phase 1 development branch.
+Version 2.0.2 CI includes full Python test discovery, a real PostgreSQL 16 service test, frontend Vitest coverage, the retained compatibility/product smoke, and a separate strict PostgreSQL 16 Backup/Restore rehearsal. Release publishing remains tag-driven and never deploys production automatically.
 
 ## Continuous Integration
 
@@ -12,11 +12,12 @@ Version 2 Phase 1 extends pull-request CI with full Python test discovery, a rea
 - Backend and frontend Docker builds plus non-root/sensitive-path checks
 - An isolated Version 1.9 compatibility run that verifies readiness and SQLite/Project Knowledge persistence across restart and rebuild
 - An isolated `pja-v2-phase1-*` run that verifies identity, CSRF, PostgreSQL, Profile, Resume/DOCX, persistence, backup, verification, and restore
+- A unique `pja-pg16-restore-*` Compose project with separate private source/target networks and temporary Volumes, no published 5432, matching PostgreSQL 16 clients, exact inventory/file/readiness checks, and PostgreSQL 17 pre-write rejection tests
 - Docker Compose configuration validation with test-only configuration
 - Shell syntax validation
 - Repository checks for tracked databases, runtime data, build output, environment files, and obvious credentials
 
-CI does not use a real DeepSeek key, call the external LLM, deploy a server, or cache secrets. It does not use `pull_request_target`.
+CI does not use a real DeepSeek key, call the external LLM, deploy a server, or cache secrets. The PostgreSQL 17 image is test-only negative coverage and is never published or referenced by operational Compose. CI does not use `pull_request_target`.
 
 ## GHCR Release Images
 

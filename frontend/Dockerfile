@@ -1,5 +1,7 @@
 FROM node:22.14-slim AS build
 
+ARG APP_VERSION=2.0.2
+
 WORKDIR /app
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci
@@ -9,6 +11,11 @@ COPY frontend/src/ ./src/
 RUN npm run build
 
 FROM nginxinc/nginx-unprivileged:1.27-alpine AS runtime
+
+ARG APP_VERSION=2.0.2
+
+LABEL org.opencontainers.image.title="Personal Job Agent Frontend" \
+      org.opencontainers.image.version="${APP_VERSION}"
 
 COPY frontend/nginx.conf /etc/nginx/nginx.conf
 COPY --from=build /app/dist/ /usr/share/nginx/html/

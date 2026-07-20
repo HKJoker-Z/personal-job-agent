@@ -38,7 +38,7 @@ PROVIDER_KEY_NAME=DEEPSEEK_API_KEY
 COMPOSE_ENV=(
   "BACKEND_IMAGE=ghcr.io/example/backend@${FAKE_DIGEST}"
   "FRONTEND_IMAGE=ghcr.io/example/frontend@${FAKE_DIGEST}"
-  RELEASE_VERSION=2.0.1 "RELEASE_ROOT=${ROOT_DIR}/deploy/production"
+  RELEASE_VERSION=2.0.2 "RELEASE_ROOT=${ROOT_DIR}/deploy/production"
   FILES_DIR=/tmp/pja-v201-files PROJECT_KNOWLEDGE_DIR=/tmp/pja-v201-knowledge
   BACKUP_DIR=/tmp/pja-v201-backup TLS_DIR=/tmp/pja-v201-tls
   "REDIS_CONFIG_FILE=${ROOT_DIR}/deploy/production/redis.conf.example"
@@ -116,7 +116,7 @@ python3 - <<'PY' >"$SERVER_LOG" 2>&1 &
 from http.server import BaseHTTPRequestHandler, HTTPServer
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
-        body = b'{"status":"ok","version":"2.0.1"}'
+        body = b'{"status":"ok","version":"2.0.2"}'
         self.send_response(200); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body)
     def log_message(self, *args):
         pass
@@ -127,10 +127,10 @@ for _ in $(seq 1 20); do
   if curl --noproxy '*' --silent --fail http://127.0.0.1:18079 >/dev/null; then break; fi
   sleep 0.1
 done
-"${ROOT_DIR}/scripts/assert-release-health.sh" http://127.0.0.1:18079 2.0.1 >/dev/null
+"${ROOT_DIR}/scripts/assert-release-health.sh" http://127.0.0.1:18079 2.0.2 >/dev/null
 if "${ROOT_DIR}/scripts/assert-release-health.sh" http://127.0.0.1:18079 2.0.0 >/dev/null 2>&1; then
   printf '%s\n' 'Health assertion accepted the wrong release.' >&2
   exit 1
 fi
 
-printf '%s\n' 'Version 2.0.1 production runtime regression tests passed.'
+printf '%s\n' 'Version 2.0.2 production runtime regression tests passed.'
