@@ -960,11 +960,14 @@ def call_deepseek_raw(
     job_description: str,
     rag_chunks: list[dict[str, Any]] | None = None,
     analysis_prompt: str | None = None,
+    usage_out: dict[str, int] | None = None,
 ) -> str:
     runtime_settings = load_config(validate_production=False)
     if runtime_settings.mock_provider_enabled:
         if runtime_settings.app_env == "production":
             raise HTTPException(status_code=500, detail="Mock provider is unavailable in production.")
+        if usage_out is not None:
+            usage_out.update({"input_tokens": 0, "output_tokens": 0, "total_tokens": 0})
         return json.dumps({
             "company_name": "Synthetic Company",
             "job_title": "Synthetic Platform Engineer",
@@ -1029,6 +1032,7 @@ def call_deepseek_raw(
             ],
             response_format={"type": "json_object"},
             temperature=0.2,
+            max_tokens=runtime_settings.model_max_output_tokens,
         )
     except TimeoutError as exc:
         logger.warning("DeepSeek call failed error_type=Timeout")
@@ -1054,7 +1058,20 @@ def call_deepseek_raw(
             detail="DeepSeek API response was empty. Please try again.",
         ) from exc
 
-    logger.info("DeepSeek call succeeded")
+    usage = getattr(completion, "usage", None)
+    model_usage = {
+        "input_tokens": max(int(getattr(usage, "prompt_tokens", 0) or 0), 0),
+        "output_tokens": max(int(getattr(usage, "completion_tokens", 0) or 0), 0),
+        "total_tokens": max(int(getattr(usage, "total_tokens", 0) or 0), 0),
+    }
+    if usage_out is not None:
+        usage_out.update(model_usage)
+    logger.info(
+        "DeepSeek call succeeded input_tokens=%s output_tokens=%s total_tokens=%s",
+        model_usage["input_tokens"],
+        model_usage["output_tokens"],
+        model_usage["total_tokens"],
+    )
     return content
 
 
@@ -2412,6 +2429,7 @@ async def analyze(
             context.sanitized_job_text,
             context.retrieved_chunks,
             analysis_prompt=context.safe_prompt,
+            usage_out=context.model_usage,
         )
         workflow.complete_step("run_llm_analysis", "DeepSeek returned a JSON response.")
     except Exception as exc:
@@ -2598,6 +2616,7 @@ async def analyze(
         )
         result["security_status"] = result.get("security_status") or context.security_status
         result["security_policy_version"] = SECURITY_POLICY_VERSION
+        result["model_usage"] = dict(context.model_usage)
         workflow.complete_step(
             "finalize_result",
             "Final API response prepared with workflow audit trail.",

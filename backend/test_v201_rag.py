@@ -1,6 +1,8 @@
 import os
 import tempfile
 import unittest
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
 
 
 _IMPORT_DATABASE = tempfile.TemporaryDirectory(prefix="pja-v201-rag-import-")
@@ -10,6 +12,7 @@ from legacy_application import (
     apply_rag_supported_skill_corrections,
     build_default_rag_sources,
     build_evidence_mapping,
+    call_deepseek_raw,
     clamp_rag_top_k,
     enforce_analysis_grounding,
 )
@@ -25,6 +28,33 @@ def breakdown():
 
 
 class ProjectKnowledgeRagTest(unittest.TestCase):
+    def test_deepseek_call_enforces_output_limit_and_reports_safe_usage(self):
+        completion = SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content='{"matched_skills": []}'))],
+            usage=SimpleNamespace(prompt_tokens=123, completion_tokens=456, total_tokens=579),
+        )
+        client = MagicMock()
+        client.chat.completions.create.return_value = completion
+        usage = {}
+        with patch.dict(
+            os.environ,
+            {
+                "APP_ENV": "test",
+                "DEEPSEEK_API_KEY": "TEST_ONLY_DEEPSEEK_KEY",
+                "AGENT_MODEL_MAX_OUTPUT_TOKENS": "800",
+                "MOCK_PROVIDER_ENABLED": "false",
+            },
+            clear=False,
+        ), patch("legacy_application.OpenAI", return_value=client):
+            result = call_deepseek_raw("Synthetic resume", "Synthetic job", usage_out=usage)
+
+        self.assertEqual(result, '{"matched_skills": []}')
+        self.assertEqual(client.chat.completions.create.call_args.kwargs["max_tokens"], 800)
+        self.assertEqual(
+            usage,
+            {"input_tokens": 123, "output_tokens": 456, "total_tokens": 579},
+        )
+
     def test_top_k_is_clamped_to_the_safe_range(self):
         self.assertEqual(clamp_rag_top_k(-10), 1)
         self.assertEqual(clamp_rag_top_k(5), 5)

@@ -69,6 +69,14 @@ class ConfigTest(unittest.TestCase):
         with self.assertRaisesRegex(ConfigError, "MAX_UPLOAD_SIZE_MB"):
             self.load({"MAX_UPLOAD_SIZE_MB": "1000"})
 
+    def test_model_output_token_limit_is_configurable_and_bounded(self):
+        self.assertEqual(
+            self.load({"AGENT_MODEL_MAX_OUTPUT_TOKENS": "800"}).model_max_output_tokens,
+            800,
+        )
+        with self.assertRaisesRegex(ConfigError, "AGENT_MODEL_MAX_OUTPUT_TOKENS"):
+            self.load({"AGENT_MODEL_MAX_OUTPUT_TOKENS": "5001"})
+
     def test_csv_origin_parser(self):
         config = self.load({"ALLOWED_ORIGINS": "https://a.example, https://b.example"})
         self.assertEqual(config.allowed_origins, ("https://a.example", "https://b.example"))

@@ -79,6 +79,7 @@ class AppConfig:
     trusted_hosts: tuple[str, ...]
     max_upload_size_mb: int
     request_timeout_seconds: int
+    model_max_output_tokens: int
     enable_api_docs: bool
     log_level: str
     monitoring_admin_token_configured: bool
@@ -125,6 +126,13 @@ def load_config(*, validate_production: bool = True) -> AppConfig:
         request_timeout_seconds=parse_int(
             "REQUEST_TIMEOUT_SECONDS", os.getenv("REQUEST_TIMEOUT_SECONDS"), 60, 5, 300
         ),
+        model_max_output_tokens=parse_int(
+            "AGENT_MODEL_MAX_OUTPUT_TOKENS",
+            os.getenv("AGENT_MODEL_MAX_OUTPUT_TOKENS"),
+            1200,
+            100,
+            5000,
+        ),
         enable_api_docs=parse_bool("ENABLE_API_DOCS", os.getenv("ENABLE_API_DOCS"), not production),
         log_level=log_level,
         monitoring_admin_token_configured=bool(os.getenv("MONITORING_ADMIN_TOKEN", "")),
@@ -157,6 +165,7 @@ def safe_config_status(config: AppConfig) -> dict[str, object]:
         "trusted_host_count": len(config.trusted_hosts),
         "max_upload_size_mb": config.max_upload_size_mb,
         "request_timeout_seconds": config.request_timeout_seconds,
+        "model_max_output_tokens": config.model_max_output_tokens,
         "monitoring_admin_configured": config.monitoring_admin_token_configured,
         "monitoring_remote_admin_allowed": config.monitoring_allow_remote_admin,
     }
