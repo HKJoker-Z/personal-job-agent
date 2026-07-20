@@ -163,6 +163,7 @@ class WorkflowContext:
     json_parse_success: bool | None = None
     rag_reconciliation_count: int = 0
     llm_raw_response: str = ""
+    model_metadata: dict[str, Any] = field(default_factory=dict)
     normalized_result: dict[str, Any] = field(default_factory=dict)
     next_action: dict[str, Any] = field(default_factory=dict)
     application_id: int | None = None

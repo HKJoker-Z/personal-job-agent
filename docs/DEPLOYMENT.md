@@ -1,151 +1,53 @@
-# Version 1.9 Deployment Guide
+# Version 2.0.1 deployment and rollback
 
-This remains the guide for the live Version 1.9 runtime. Version 2.0 Phase 1 is a development foundation and is not authorized for production deployment by this document. See [Version 2 Phase 1](V2_PHASE_1.md) for architecture and test-only guidance.
+This runbook promotes immutable Version 2.0.1 images without deleting production data or changing the host routing/Mihomo design.
 
-## Overview and Architecture
+## Production artifacts
 
-Version 1.9 provides a repeatable, single-instance Docker Compose topology:
+The reviewed production definition is `deploy/production/compose.yaml`. Stage these repository files under the restricted release directory:
 
-`Browser → Frontend/Nginx → /api → Backend/FastAPI → SQLite + Project Knowledge`
+- `deploy/postgres/init-roles.sh` as `init-roles.sh`
+- `deploy/production/redis-init-idempotent.sh`
+- `deploy/production/frontend-nginx.conf`
+- `deploy/production/edge-nginx.conf`
 
-Only the frontend publishes a host port. The backend is reachable only on the dedicated Compose network and requires outbound access for DeepSeek when Analyze is used.
+Keep `production.env`, TLS private keys, and the host Redis configuration outside Git. Set `BACKEND_IMAGE` and `FRONTEND_IMAGE` to full GHCR `@sha256` references. `RELEASE_VERSION` must be `2.0.1`.
 
-## Prerequisites and Ubuntu Requirements
+## Pre-deployment audit
 
-- A maintained Ubuntu server with Docker Engine and Docker Compose v2 installed and running
-- Git for source-build deployments, or GHCR access for image deployments
-- Adequate disk space and restricted filesystem permissions for runtime data and backups
-- A user permitted to run Docker commands
+1. Record `docker compose ps`, health, restart counts, Alembic current/heads/check, public HTTPS, certificate expiry, disk space, networks, routes, and volumes.
+2. Save the Version 2.0.0 backend/frontend digests, Compose file, overrides, and exact rollback commands.
+3. Verify Version 1.9 rollback assets remain present.
+4. Create and verify PostgreSQL, Files, and runtime Project Knowledge backups. Record the Git and runtime Project Knowledge hashes separately.
+5. Rehearse restore into an isolated empty database and directories.
+6. Run all tests, Docker builds, Compose validation, ShellCheck, repository safety, and `scripts/test-v201-production-runtime.sh`.
+7. If a credential appeared in an operator transcript, rotate it before candidate startup and update only host-managed secret configuration.
 
-Install Docker before running Compose. If `docker compose ps` reports `docker: command not found`, no Version 1.9 containers have been started. The project does not automatically modify cloud firewalls, DNS, system Nginx, systemd, or HTTPS configuration.
+## Project Knowledge update
 
-## Production Access URL and Ports
+Never overwrite the runtime Project Knowledge blindly. Hash and back it up first, compare it with the Git baseline, and record whether it contains operator changes. Only after review, install the approved baseline atomically, call the authenticated rebuild endpoint, check status and PostgreSQL FTS search, and run RAG-off/RAG-on fictional analysis comparisons.
 
-The Version 1.9 browser entry point is `http://SERVER_IP:8080`. Nginx publishes host TCP 8080 and proxies same-origin `/api/...` requests to the backend over the private Compose network.
+## Isolated candidate
 
-- Open TCP 8080 in the Ubuntu firewall and cloud security group when required.
-- Do not publish backend port 8000; it is internal to Docker Compose.
-- Do not expose Vite port 5173; it is only used by the development workflow.
-- Verify the entry point with `curl http://127.0.0.1:8080/api/health` and `curl http://SERVER_IP:8080/api/health`.
+Start an independent Compose project bound only to `127.0.0.1:18089`. Do not use 8080, 18088, 8000, 5173, 5432, or 6379. Use Mock LLM for normal smoke. Validate PostgreSQL, Redis, Alembic, admin login, Remember Me cookie policy, CSRF, navigation build/tests, removed route 410s, Profile, Resume, Analyze off/on, evidence mapping, History, Worker/Outbox, SSE where retained, restart persistence, backup, and restore.
 
-## Mihomo TUN and Docker Return Routing
+Run `scripts/assert-release-health.sh` against the candidate; a response other than exactly `2.0.1` fails promotion.
 
-Mihomo TUN policy routing may capture the SYN-ACK return path for a Docker published port. In that failure mode, the host listens on `0.0.0.0:8080` and localhost succeeds, but a remote client never completes the TCP handshake because the Frontend response is sent to the TUN routing table instead of the main table.
+## Optional controlled real-provider check
 
-The Compose `application` network has the stable Linux bridge name `pja-br0`. Stable naming is required because Docker's default `br-<network-id>` interface changes when the Compose network is recreated. The project routing rule is deliberately narrow:
+After all deterministic gates pass, use one completely fictional Resume/JD pair for one RAG-off and one RAG-on request with low output-token limits. Confirm Project Knowledge changes evidence-backed matching and sources without unsupported claims. Never use production personal data and never generate or send an application.
 
-```text
-pref 8999 iif pja-br0 ipproto tcp sport 8080 lookup main
-```
+## Cutover
 
-This selects the main IPv4 routing table only for Frontend TCP responses sourced from port 8080. It does not bypass TUN for all Docker traffic, does not publish Backend port 8000, and does not change iptables, nftables, sysctl, the default route, or Mihomo configuration. Backend HTTPS traffic, including DeepSeek access, retains the host's existing policy routing.
+1. Confirm the backup and rollback digest/config again.
+2. Disconnect the stopped/retained Version 1.9 application container from `job-agent_application`, recording the exact `docker network connect --alias ...` rollback command. Do not delete the container or assets.
+3. Start the Version 2.0.1 production services from immutable digests, with Edge connected only to `job-agent_application` and unique aliases.
+4. Switch Edge publication from candidate `127.0.0.1:18089` to `0.0.0.0:8080` using the existing safe Compose switch.
+5. Verify exact health version, readiness, trusted HTTPS, Login/Remember Me/Logout, Secure Cookie, CSRF, 401/403, navigation, removed routes, Analyze off/on, source metadata, History, PostgreSQL, Redis, Worker, Outbox, restart counts, and backup.
+6. Verify `pja-br0`, policy rule preference 8999, routing service, and Mihomo are unchanged.
 
-The repository provides `scripts/configure-production-routing.sh` with `install`, `remove`, and `status` commands. Install it at the absolute path referenced by the unit, then install the unit:
+## Rollback
 
-```bash
-sudo install -Dm0755 scripts/configure-production-routing.sh \
-  /usr/local/libexec/personal-job-agent/configure-production-routing.sh
-sudo install -Dm0644 deploy/systemd/personal-job-agent-routing.service \
-  /etc/systemd/system/personal-job-agent-routing.service
-sudo systemctl daemon-reload
-sudo systemctl enable --now personal-job-agent-routing.service
-```
+On any failure, restore the saved Version 2.0.0 immutable image digests and Compose/runtime configuration. If required, detach the Version 2 Edge, reconnect the retained Version 1.9 container with its saved alias, and restore public 8080. Do not run `down -v`, remove PostgreSQL/Redis volumes, delete old images, drop tables, remove backups, or edit Mihomo/routing policy.
 
-The service waits up to 120 seconds for `pja-br0`; `TimeoutStartSec` is longer than that wait and `Restart=on-failure` retries a late Docker network. `PJA_ROUTING_WAIT_SECONDS` may be set to an integer from 1 through 600, although the production unit intentionally uses 120. Check it with:
-
-```bash
-sudo /usr/local/libexec/personal-job-agent/configure-production-routing.sh status
-systemctl is-enabled personal-job-agent-routing.service
-systemctl is-active personal-job-agent-routing.service
-ip -4 rule show
-```
-
-Do not enable the service until the Compose network has been migrated to `pja-br0`. Network migration recreates containers and the Compose network, so create a verified runtime backup first and use `docker compose down` without `-v`. Never use `down -v`, delete bind-mounted runtime directories, or flush iptables/nftables to troubleshoot this condition. See [Client Proxy Troubleshooting](CLIENT_PROXY_TROUBLESHOOTING.md) for diagnosis and rollback guidance.
-
-## Environment Configuration
-
-Copy `.env.production.example` to an ignored `.env.production` and set values on the deployment host. Production requires a non-empty `DEEPSEEK_API_KEY` and explicit `TRUSTED_HOSTS`. `ALLOWED_ORIGINS` may be empty for same-origin operation but cannot contain `*`. API docs default to disabled.
-
-For a direct IP deployment, set `PUBLIC_HTTP_PORT=8080`, `ALLOWED_ORIGINS=http://SERVER_IP:8080`, and `TRUSTED_HOSTS=SERVER_IP,localhost,127.0.0.1`. Never use wildcard origins or trusted hosts. Recreate the containers after changing `.env.production` so the backend receives the new values.
-
-Never commit the production env file or place the Monitoring admin token in frontend source code. Keep `MONITORING_ALLOW_REMOTE_ADMIN=false` unless destructive APIs are deliberately exposed behind HTTPS and additional access controls.
-
-## Runtime Directories and First Bootstrap
-
-For a fresh deployment, run bootstrap. If migrating an existing `backend/data/app.db`, perform the migration workflow below **before** bootstrap so the migration target remains absent as required.
-
-Run:
-
-```bash
-sudo scripts/bootstrap-runtime.sh
-```
-
-This creates `runtime/data`, `runtime/project-knowledge`, and `runtime/backups` without overwriting existing data and assigns them to the fixed container UID/GID 10001 without using mode 777. The initial Project Knowledge file is copied from the repository seed only when the runtime copy does not exist.
-
-## Existing Data Migration
-
-For an existing non-container installation, preview migration before running bootstrap:
-
-```bash
-scripts/migrate-existing-data.sh
-```
-
-Stop writes from the old backend before migrating, then explicitly confirm:
-
-```bash
-scripts/migrate-existing-data.sh --confirmation "MIGRATE EXISTING DATA"
-```
-
-The migration uses the SQLite backup API, creates a backup first, refuses to overwrite runtime targets, and preserves the source files.
-
-## Source-Build Deployment
-
-Validate and build without starting current services:
-
-```bash
-APP_ENV_FILE=.env.production docker compose --env-file .env.production \
-  -f compose.yaml -f compose.prod.yaml config --quiet
-APP_ENV_FILE=.env.production docker compose --env-file .env.production \
-  -f compose.yaml -f compose.prod.yaml build
-```
-
-Start through the guarded deployment script:
-
-```bash
-scripts/deploy.sh --build --env-file .env.production
-```
-
-## Image-Based Deployment
-
-Use the production override with a published image tag:
-
-```bash
-IMAGE_TAG=v1.9.0 docker compose --env-file .env.production \
-  -f compose.yaml -f compose.prod.yaml up -d --no-build
-```
-
-Version 1.9 development does not publish a tag automatically.
-
-## Health, Readiness, and Logs
-
-Run `scripts/health-check.sh http://127.0.0.1:8080`. For a complete host-side check, run `scripts/check-production-access.sh .env.production SERVER_IP`. `/api/health` is lightweight liveness. `/api/ready` verifies local configuration, SQLite connectivity/schema/writeability, Project Knowledge initialization/index status, and production LLM configuration without calling DeepSeek.
-
-Use `docker compose -f compose.yaml -f compose.prod.yaml ps` and `docker compose -f compose.yaml -f compose.prod.yaml logs --tail=100 backend frontend`. A browser error after the homepage loads should be checked for stale requests to ports 8000/5173, Nginx 502 responses, backend health, trusted hosts, and stale browser cache. Application request logs are structured and exclude bodies, query strings, credentials, prompts, resumes, job descriptions, and token headers.
-
-## Updates and Rollback Guidance
-
-Create a verified backup before every update. Pull or build the intended version, run Compose config validation, start it, then check readiness. If an update fails, select the previous image tag or source commit and restart it manually. Do not delete runtime directories or volumes. Deployment scripts do not guarantee zero downtime or complete automatic rollback.
-
-When rolling back the stable bridge migration, do not assume the regenerated dynamic bridge has its old name. Inspect the current Compose network ID, derive the actual `br-<network-id>` interface, and apply only the exact TCP source-port 8080 return-routing rule. Preserve a verified `pja-br0` pref 8998 rule if permanent unit installation fails, and stop before removing the last working return-path rule.
-
-## Firewall and HTTPS Guidance
-
-Expose only frontend TCP 8080. Place it behind a properly configured HTTPS reverse proxy for public use. HSTS belongs on the component that actually terminates HTTPS, not the HTTP-only container. Review cloud firewalls manually; if localhost succeeds but public access fails while Docker listens on `0.0.0.0:8080`, allow inbound TCP 8080 in the cloud security group. Do not open 8000 or 5173.
-
-## Persistent Storage and Monitoring Administration
-
-Host bind mounts persist `runtime/data/app.db` and `runtime/project-knowledge/PROJECT_KNOWLEDGE.md`. Backups live under `runtime/backups`. SQLite is appropriate for this current single-instance topology; never run multiple backend writers against the same SQLite file.
-
-## Troubleshooting and Limitations
-
-Use `docker compose config --quiet`, `docker compose ps`, container health status, and `/api/ready`. Check directory ownership for UID/GID 10001. This release does not claim Kubernetes, high availability, distributed tracing, zero-downtime deployment, automatic cloud deployment, or production deployment already completed.
+If Version 2.0.1 made no schema change, image/config rollback is sufficient. Restore data only when a separately verified data incident requires it.

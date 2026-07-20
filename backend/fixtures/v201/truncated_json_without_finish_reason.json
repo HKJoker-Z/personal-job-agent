@@ -1,0 +1,12 @@
+{
+  "id": "mock-truncated-without-signal",
+  "choices": [
+    {
+      "finish_reason": null,
+      "message": {
+        "content": "{\"matched_skills\":[\"Redis\"],\"missing_skills\":["
+      }
+    }
+  ],
+  "usage": {"prompt_tokens": 400, "completion_tokens": 120, "total_tokens": 520}
+}

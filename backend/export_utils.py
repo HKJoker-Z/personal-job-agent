@@ -425,12 +425,12 @@ def add_next_action(
     story.append(Paragraph(f"Reason: {reason}", body_style))
 
     tasks = as_list(next_action.get("recommended_tasks"))
-    story.append(Paragraph("<b>Recommended Tasks</b>", body_style))
+    story.append(Paragraph("<b>Suggested Follow-ups</b>", body_style))
     if tasks:
         for task in tasks:
             story.append(Paragraph(f"- {paragraph_text(task)}", body_style))
     else:
-        story.append(Paragraph("No tasks recorded.", body_style))
+        story.append(Paragraph("No follow-ups recorded.", body_style))
 
     evidence = as_list(next_action.get("evidence"))
     story.append(Paragraph("<b>Evidence</b>", body_style))

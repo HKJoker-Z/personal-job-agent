@@ -1,0 +1,12 @@
+{
+  "id": "mock-rag-disabled",
+  "choices": [
+    {
+      "finish_reason": "stop",
+      "message": {
+        "content": "{\"matched_skills\":[\"FastAPI\"],\"missing_skills\":[\"PostgreSQL\"],\"unknown_skills\":[],\"concise_dimension_assessments\":{\"skills_match\":{\"score\":50,\"assessment\":\"One resume skill matches.\",\"evidence_ids\":[\"resume\"]},\"project_experience\":{\"score\":0,\"assessment\":\"Project evidence was disabled.\",\"evidence_ids\":[]},\"education\":{\"score\":0,\"assessment\":\"No education evidence.\",\"evidence_ids\":[]},\"work_experience\":{\"score\":20,\"assessment\":\"Limited resume evidence.\",\"evidence_ids\":[\"resume\"]},\"keyword_match\":{\"score\":50,\"assessment\":\"One keyword matches.\",\"evidence_ids\":[\"resume\"]}},\"evidence_references\":[{\"skill\":\"FastAPI\",\"evidence_ids\":[\"resume\"]}],\"unsupported_claim_candidates\":[],\"concise_recommendations\":[\"Verify PostgreSQL experience before claiming it.\"]}"
+      }
+    }
+  ],
+  "usage": {"prompt_tokens": 500, "completion_tokens": 180, "total_tokens": 680}
+}

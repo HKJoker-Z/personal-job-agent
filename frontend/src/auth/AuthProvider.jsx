@@ -39,8 +39,8 @@ export function AuthProvider({ children }) {
     configureApiSecurity({ csrf, refreshSession: bootstrap, onUnauthorized: clear });
   }, [csrf, bootstrap, clear]);
 
-  const login = useCallback(async (email, password) => {
-    const data = await apiJson("/api/auth/login", { method: "POST", body: { email, password } });
+  const login = useCallback(async (email, password, rememberMe = false) => {
+    const data = await apiJson("/api/auth/login", { method: "POST", body: { email, password, remember_me: Boolean(rememberMe) } });
     setUser(data.user);
     setCsrf(data.csrf_token || "");
     return data;

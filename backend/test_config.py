@@ -50,6 +50,15 @@ class ConfigTest(unittest.TestCase):
                 "TRUSTED_HOSTS": "*",
             })
 
+    def test_production_rejects_mock_provider(self):
+        with self.assertRaisesRegex(ConfigError, "MOCK_PROVIDER_ENABLED"):
+            self.load({
+                "APP_ENV": "production",
+                "DEEPSEEK_API_KEY": "TEST_ONLY_CONFIGURED",
+                "TRUSTED_HOSTS": "example.com",
+                "MOCK_PROVIDER_ENABLED": "true",
+            })
+
     def test_boolean_parser(self):
         self.assertTrue(parse_bool("FLAG", "yes", False))
         self.assertFalse(parse_bool("FLAG", "off", True))
@@ -59,6 +68,14 @@ class ConfigTest(unittest.TestCase):
     def test_integer_range_validation(self):
         with self.assertRaisesRegex(ConfigError, "MAX_UPLOAD_SIZE_MB"):
             self.load({"MAX_UPLOAD_SIZE_MB": "1000"})
+
+    def test_model_output_token_limit_is_configurable_and_bounded(self):
+        self.assertEqual(
+            self.load({"AGENT_MODEL_MAX_OUTPUT_TOKENS": "800"}).model_max_output_tokens,
+            800,
+        )
+        with self.assertRaisesRegex(ConfigError, "AGENT_MODEL_MAX_OUTPUT_TOKENS"):
+            self.load({"AGENT_MODEL_MAX_OUTPUT_TOKENS": "5001"})
 
     def test_csv_origin_parser(self):
         config = self.load({"ALLOWED_ORIGINS": "https://a.example, https://b.example"})

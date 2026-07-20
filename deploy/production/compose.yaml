@@ -1,0 +1,286 @@
+name: personal-job-agent-v2
+
+x-backend-image: &backend-image ${BACKEND_IMAGE:?immutable backend image digest is required}
+x-frontend-image: &frontend-image ${FRONTEND_IMAGE:?immutable frontend image digest is required}
+x-app-env: &app-env
+  APP_ENV: production
+  APP_VERSION: ${RELEASE_VERSION:?release version is required}
+  ENABLE_API_DOCS: "false"
+  AUTH_ENABLED: "true"
+  SESSION_COOKIE_NAME: pja_session
+  SESSION_COOKIE_SECURE: "true"
+  SESSION_IDLE_TIMEOUT_MINUTES: ${SESSION_IDLE_TIMEOUT_MINUTES:-30}
+  SESSION_ABSOLUTE_TIMEOUT_HOURS: ${SESSION_ABSOLUTE_TIMEOUT_HOURS:-24}
+  REMEMBER_ME_SESSION_TTL_DAYS: ${REMEMBER_ME_SESSION_TTL_DAYS:-30}
+  SESSION_TOUCH_INTERVAL_SECONDS: ${SESSION_TOUCH_INTERVAL_SECONDS:-60}
+  AUTH_TRUSTED_ORIGINS: ${AUTH_TRUSTED_ORIGINS:?trusted origin is required}
+  AUTH_FINGERPRINT_KEY: ${AUTH_FINGERPRINT_KEY:?fingerprint key is required}
+  ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:?allowed origin is required}
+  TRUSTED_HOSTS: ${TRUSTED_HOSTS:?trusted hosts are required}
+  DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:?provider key is required}
+  MOCK_PROVIDER_ENABLED: "false"
+  REDIS_URL: redis://:${REDIS_PASSWORD:?Redis password is required}@redis:6379/0
+  REDIS_QUEUE_NAMESPACE: personal-job-agent-v2
+  FILE_STORAGE_ROOT: /app/runtime/files
+  PROJECT_KNOWLEDGE_PATH: /app/project-knowledge/PROJECT_KNOWLEDGE.md
+  PROJECT_KNOWLEDGE_SEED_PATH: /app/seed/PROJECT_KNOWLEDGE.md
+  MODEL_INPUT_COST_PER_MILLION_USD: ${MODEL_INPUT_COST_PER_MILLION_USD:?input cost is required}
+  MODEL_OUTPUT_COST_PER_MILLION_USD: ${MODEL_OUTPUT_COST_PER_MILLION_USD:?output cost is required}
+  READINESS_REQUIRE_REDIS: "true"
+  READINESS_REQUIRE_WORKER: "true"
+
+x-app-security: &app-security
+  read_only: true
+  user: "10001:10001"
+  security_opt: ["no-new-privileges:true"]
+  cap_drop: ["ALL"]
+  logging:
+    driver: json-file
+    options: {max-size: "10m", max-file: "5"}
+
+services:
+  postgres:
+    image: postgres:16.9-alpine@sha256:7c688148e5e156d0e86df7ba8ae5a05a2386aaec1e2ad8e6d11bdf10504b1fb7
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:?database name is required}
+      POSTGRES_USER: ${POSTGRES_BOOTSTRAP_USER:?bootstrap user is required}
+      POSTGRES_PASSWORD: ${POSTGRES_BOOTSTRAP_PASSWORD:?bootstrap password is required}
+      POSTGRES_APP_USER: ${POSTGRES_APP_USER:?app user is required}
+      POSTGRES_APP_PASSWORD: ${POSTGRES_APP_PASSWORD:?app password is required}
+      POSTGRES_MIGRATION_USER: ${POSTGRES_MIGRATION_USER:?migration user is required}
+      POSTGRES_MIGRATION_PASSWORD: ${POSTGRES_MIGRATION_PASSWORD:?migration password is required}
+    command: ["postgres", "-c", "max_connections=80", "-c", "password_encryption=scram-sha-256", "-c", "log_statement=none"]
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ${RELEASE_ROOT:?release root is required}/init-roles.sh:/docker-entrypoint-initdb.d/10-init-roles.sh:ro
+    expose: ["5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+    restart: unless-stopped
+    stop_grace_period: 60s
+    security_opt: ["no-new-privileges:true"]
+    networks: [data]
+
+  redis-init:
+    image: redis:7.4.1-alpine@sha256:c1e88455c85225310bbea54816e9c3f4b5295815e6dbf80c34d40afc6df28275
+    user: "0:0"
+    entrypoint: ["/bin/sh", "/opt/pja/redis-init-idempotent.sh"]
+    command: []
+    volumes:
+      - redis-data:/data
+      - ${RELEASE_ROOT}/redis-init-idempotent.sh:/opt/pja/redis-init-idempotent.sh:ro
+    network_mode: none
+    restart: "no"
+    read_only: true
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+    cap_add: ["CHOWN", "FOWNER", "DAC_READ_SEARCH"]
+
+  redis:
+    image: redis:7.4.1-alpine@sha256:c1e88455c85225310bbea54816e9c3f4b5295815e6dbf80c34d40afc6df28275
+    user: "999:1000"
+    command: ["redis-server", "/usr/local/etc/redis/redis.conf"]
+    environment: {REDISCLI_AUTH: "${REDIS_PASSWORD}"}
+    volumes:
+      - redis-data:/data
+      - ${REDIS_CONFIG_FILE:?Redis config file is required}:/usr/local/etc/redis/redis.conf:ro
+    expose: ["6379"]
+    depends_on:
+      redis-init: {condition: service_completed_successfully}
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+    read_only: true
+    tmpfs: ["/tmp:size=8m,mode=1777"]
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+    networks: [data]
+
+  migrate:
+    image: *backend-image
+    environment:
+      <<: *app-env
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_MIGRATION_USER}:${POSTGRES_MIGRATION_PASSWORD}@postgres:5432/${POSTGRES_DB}
+    command: ["alembic", "-c", "alembic.ini", "upgrade", "head"]
+    depends_on:
+      postgres: {condition: service_healthy}
+    restart: "no"
+    <<: *app-security
+    tmpfs: ["/tmp:size=32m,mode=1777"]
+    networks: [data]
+
+  worker:
+    image: *backend-image
+    environment:
+      <<: *app-env
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_APP_USER}:${POSTGRES_APP_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      AGENT_WORKER_ID: worker-primary
+      OUTBOX_DISPATCH_IN_WORKER: "false"
+    command: ["python", "-m", "app.agent_runs.worker"]
+    volumes:
+      - ${FILES_DIR:?files directory is required}:/app/runtime/files
+      - ${PROJECT_KNOWLEDGE_DIR:?knowledge directory is required}:/app/project-knowledge:ro
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+      migrate: {condition: service_completed_successfully}
+    restart: unless-stopped
+    init: true
+    <<: *app-security
+    tmpfs: ["/tmp:size=64m,mode=1777"]
+    healthcheck:
+      test: ["CMD", "python", "-m", "app.agent_runs.healthcheck"]
+      interval: 10s
+      timeout: 5s
+      start_period: 30s
+      retries: 9
+    networks: [data]
+
+  outbox-dispatcher:
+    image: *backend-image
+    environment:
+      <<: *app-env
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_APP_USER}:${POSTGRES_APP_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      AGENT_DISPATCHER_ID: outbox-primary
+      OUTBOX_HEARTBEAT_FILE: /tmp/outbox-dispatcher.heartbeat
+    command: ["python", "-m", "app.agent_runs.dispatcher"]
+    volumes:
+      - ${FILES_DIR}:/app/runtime/files
+      - ${PROJECT_KNOWLEDGE_DIR}:/app/project-knowledge:ro
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+      migrate: {condition: service_completed_successfully}
+    restart: unless-stopped
+    init: true
+    <<: *app-security
+    tmpfs: ["/tmp:size=16m,mode=1777"]
+    healthcheck:
+      test: ["CMD", "python", "-m", "app.agent_runs.dispatcher_healthcheck"]
+      interval: 10s
+      timeout: 5s
+      start_period: 20s
+      retries: 6
+    networks: [data]
+
+  backend:
+    image: *backend-image
+    environment:
+      <<: *app-env
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_APP_USER}:${POSTGRES_APP_PASSWORD}@postgres:5432/${POSTGRES_DB}
+    expose: ["8000"]
+    volumes:
+      - ${FILES_DIR}:/app/runtime/files
+      - ${PROJECT_KNOWLEDGE_DIR}:/app/project-knowledge
+    depends_on:
+      worker: {condition: service_healthy}
+      outbox-dispatcher: {condition: service_healthy}
+    restart: unless-stopped
+    <<: *app-security
+    tmpfs: ["/tmp:size=64m,mode=1777"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import json,os,urllib.request; v=json.load(urllib.request.urlopen('http://127.0.0.1:8000/api/ready',timeout=3)); assert v['version']==os.environ['APP_VERSION']"]
+      interval: 15s
+      timeout: 5s
+      start_period: 30s
+      retries: 6
+    networks:
+      application: {aliases: [backend-v2]}
+      data: {}
+
+  frontend:
+    image: *frontend-image
+    volumes:
+      - ${RELEASE_ROOT}/frontend-nginx.conf:/etc/nginx/nginx.conf:ro
+    expose: ["8080"]
+    depends_on:
+      backend: {condition: service_healthy}
+    restart: unless-stopped
+    read_only: true
+    user: "101:101"
+    tmpfs:
+      - /tmp:size=1m,mode=0700,uid=101,gid=101
+      - /tmp/client_temp:size=8m,mode=0700,uid=101,gid=101
+      - /tmp/proxy_temp:size=8m,mode=0700,uid=101,gid=101
+      - /tmp/fastcgi_temp:size=1m,mode=0700,uid=101,gid=101
+      - /tmp/uwsgi_temp:size=1m,mode=0700,uid=101,gid=101
+      - /tmp/scgi_temp:size=1m,mode=0700,uid=101,gid=101
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:8080/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 6
+    networks:
+      application: {aliases: [frontend-v2]}
+
+  edge:
+    image: *frontend-image
+    user: "101:101"
+    entrypoint: ["/usr/sbin/nginx"]
+    command: ["-g", "daemon off;"]
+    ports:
+      - target: 8080
+        published: ${EDGE_HOST_PORT:-18089}
+        host_ip: ${EDGE_BIND_ADDRESS:-127.0.0.1}
+        protocol: tcp
+    volumes:
+      - ${RELEASE_ROOT}/edge-nginx.conf:/etc/nginx/nginx.conf:ro
+      - ${TLS_DIR:?TLS directory is required}:/run/pja-tls:ro
+    depends_on:
+      frontend: {condition: service_healthy}
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:size=1m,mode=0700,uid=101,gid=101
+      - /tmp/client_temp:size=8m,mode=0700,uid=101,gid=101
+      - /tmp/proxy_temp:size=8m,mode=0700,uid=101,gid=101
+      - /tmp/fastcgi_temp:size=1m,mode=0700,uid=101,gid=101
+      - /tmp/uwsgi_temp:size=1m,mode=0700,uid=101,gid=101
+      - /tmp/scgi_temp:size=1m,mode=0700,uid=101,gid=101
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+    healthcheck:
+      test: ["CMD", "wget", "--no-check-certificate", "--quiet", "--tries=1", "--spider", "https://127.0.0.1:8080/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+    networks: [application]
+
+  backup:
+    profiles: ["tools"]
+    image: *backend-image
+    environment:
+      <<: *app-env
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_MIGRATION_USER}:${POSTGRES_MIGRATION_PASSWORD}@postgres:5432/${POSTGRES_DB}
+    command: ["python", "/app/scripts/v2_backup_restore.py", "backup", "--database-url-env", "DATABASE_URL", "--backup-dir", "/backup", "--files-root", "/app/runtime/files", "--project-knowledge", "/app/project-knowledge/PROJECT_KNOWLEDGE.md"]
+    volumes:
+      - ${BACKUP_DIR:?backup directory is required}:/backup
+      - ${FILES_DIR}:/app/runtime/files:ro
+      - ${PROJECT_KNOWLEDGE_DIR}:/app/project-knowledge:ro
+    depends_on:
+      postgres: {condition: service_healthy}
+    restart: "no"
+    <<: *app-security
+    tmpfs: ["/tmp:size=32m,mode=1777"]
+    networks: [data]
+
+networks:
+  application:
+    external: true
+    name: ${APPLICATION_NETWORK_NAME:-job-agent_application}
+  data:
+    internal: true
+
+volumes:
+  postgres-data:
+    name: ${POSTGRES_VOLUME_NAME:-personal-job-agent-v2-postgres-data}
+  redis-data:
+    name: ${REDIS_VOLUME_NAME:-personal-job-agent-v2-redis-data}

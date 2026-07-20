@@ -12,7 +12,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 RUN python -m pip install --no-cache-dir --requirement requirements.txt
 
-COPY backend/agent_workflow.py backend/config.py backend/data_management_service.py ./
+COPY backend/agent_workflow.py backend/analysis_contract.py backend/config.py backend/data_management_service.py ./
 COPY backend/database.py backend/evaluation_service.py backend/export_utils.py ./
 COPY backend/knowledge_utils.py backend/logging_utils.py backend/main.py backend/legacy_application.py ./
 COPY backend/monitoring_service.py backend/project_knowledge_runtime.py ./

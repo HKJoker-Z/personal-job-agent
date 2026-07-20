@@ -49,7 +49,16 @@ class AuthService:
     def fingerprint(self, value: str) -> str:
         return keyed_fingerprint(value or "unknown", self.settings.auth_fingerprint_key)
 
-    def login(self, email: str, password: str, client_value: str, user_agent: str) -> SessionCredentials:
+    def login(
+        self,
+        email: str,
+        password: str,
+        client_value: str,
+        user_agent: str,
+        *,
+        remember_me: bool = False,
+        previous_token: str | None = None,
+    ) -> SessionCredentials:
         try:
             normalized = normalize_email(email)
         except ValueError:
@@ -65,13 +74,30 @@ class AuthService:
             self.repository.audit("auth.login_failed", outcome="failure")
             raise InvalidCredentials("Invalid email or password.")
         limiter.success(subject_hash)
-        credentials = self._new_session(user, user_agent)
+        if previous_token:
+            self.revoke_token(previous_token, "login_rotation")
+        credentials = self._new_session(user, user_agent, remember_me=remember_me)
         user.last_login_at = utc_now()
         self.repository.audit("auth.login_succeeded", user_id=user.id)
         return credentials
 
-    def _new_session(self, user: User, user_agent: str) -> SessionCredentials:
+    def _new_session(
+        self,
+        user: User,
+        user_agent: str,
+        *,
+        remember_me: bool = False,
+    ) -> SessionCredentials:
         now = utc_now()
+        if remember_me:
+            absolute_expiry = now + timedelta(days=self.settings.remember_me_session_ttl_days)
+            idle_expiry = absolute_expiry
+        else:
+            absolute_expiry = now + timedelta(hours=self.settings.session_absolute_timeout_hours)
+            idle_expiry = min(
+                now + timedelta(minutes=self.settings.session_idle_timeout_minutes),
+                absolute_expiry,
+            )
         raw_token = random_token()
         csrf_token = random_token()
         user_session = UserSession(
@@ -80,12 +106,19 @@ class AuthService:
             csrf_token_hash=token_hash(csrf_token),
             created_at=now,
             last_seen_at=now,
-            idle_expires_at=now + timedelta(minutes=self.settings.session_idle_timeout_minutes),
-            absolute_expires_at=now + timedelta(hours=self.settings.session_absolute_timeout_hours),
+            idle_expires_at=idle_expiry,
+            absolute_expires_at=absolute_expiry,
             user_agent_hash=self.fingerprint(f"ua:{user_agent}"),
         )
         self.repository.add_session(user_session)
         return SessionCredentials(raw_token, csrf_token, user_session, user)
+
+    def revoke_token(self, raw_token: str, reason: str) -> None:
+        if not raw_token or len(raw_token) > 256:
+            return
+        user_session = self.repository.session_by_hash(token_hash(raw_token))
+        if user_session is not None and tokens_match(raw_token, user_session.token_hash):
+            self.revoke_current(user_session, reason)
 
     def authenticate(self, raw_token: str | None, *, touch: bool = True) -> tuple[UserSession, User]:
         if not raw_token or len(raw_token) > 256:
@@ -109,9 +142,17 @@ class AuthService:
             raise InvalidSession("Authentication required.")
         if touch and (now - last_seen_at).total_seconds() >= self.settings.session_touch_interval_seconds:
             user_session.last_seen_at = now
-            user_session.idle_expires_at = min(
-                now + timedelta(minutes=self.settings.session_idle_timeout_minutes),
-                absolute_expires_at,
+            # Remembered sessions are created with idle expiry equal to their
+            # absolute expiry. This keeps the absolute deadline immutable and
+            # avoids adding a migration solely for a persistence marker.
+            remembered = idle_expires_at == absolute_expires_at
+            user_session.idle_expires_at = (
+                absolute_expires_at
+                if remembered
+                else min(
+                    now + timedelta(minutes=self.settings.session_idle_timeout_minutes),
+                    absolute_expires_at,
+                )
             )
         return user_session, user
 
@@ -140,22 +181,20 @@ class AuthService:
         current_session: UserSession,
         current_password: str,
         new_password: str,
-    ) -> str:
+        user_agent: str = "",
+    ) -> SessionCredentials:
         if not verify_password(current_password, user.password_hash):
             raise InvalidCredentials("Current password is incorrect.")
         validate_password(new_password)
         user.password_hash = hash_password(new_password)
         user.password_changed_at = utc_now()
         user.version += 1
-        self.repository.revoke_user_sessions(
-            user.id,
-            utc_now(),
-            "password_changed",
-            exclude_session_id=current_session.id,
-        )
-        csrf = self.rotate_csrf(current_session)
+        self.repository.revoke_user_sessions(user.id, utc_now(), "password_changed")
+        # A password change is a security boundary. The replacement session is
+        # intentionally short-lived even when the previous login was remembered.
+        credentials = self._new_session(user, user_agent, remember_me=False)
         self.repository.audit("auth.password_changed", user_id=user.id)
-        return csrf
+        return credentials
 
     def create_user(self, email: str, password: str, display_name: str, role: str) -> User:
         normalized = normalize_email(email)

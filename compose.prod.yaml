@@ -1,16 +1,16 @@
 services:
   backup-before-migrate:
-    image: ghcr.io/hkjoker-z/personal-job-agent-backend:${IMAGE_TAG:-2.0.0}
-    pull_policy: missing
+    image: ${BACKEND_IMAGE:?BACKEND_IMAGE immutable digest is required}
+    pull_policy: always
   migrate:
-    image: ghcr.io/hkjoker-z/personal-job-agent-backend:${IMAGE_TAG:-2.0.0}
-    pull_policy: missing
+    image: ${BACKEND_IMAGE:?BACKEND_IMAGE immutable digest is required}
+    pull_policy: always
   backend:
-    image: ghcr.io/hkjoker-z/personal-job-agent-backend:${IMAGE_TAG:-2.0.0}
-    pull_policy: missing
+    image: ${BACKEND_IMAGE:?BACKEND_IMAGE immutable digest is required}
+    pull_policy: always
   frontend:
-    image: ghcr.io/hkjoker-z/personal-job-agent-frontend:${IMAGE_TAG:-2.0.0}
-    pull_policy: missing
+    image: ${FRONTEND_IMAGE:?FRONTEND_IMAGE immutable digest is required}
+    pull_policy: always
   worker:
-    image: ghcr.io/hkjoker-z/personal-job-agent-backend:${IMAGE_TAG:-2.0.0}
-    pull_policy: missing
+    image: ${BACKEND_IMAGE:?BACKEND_IMAGE immutable digest is required}
+    pull_policy: always

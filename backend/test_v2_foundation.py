@@ -157,6 +157,83 @@ class V2FoundationTest(unittest.TestCase):
         finally:
             db.close()
 
+    def test_normal_and_remembered_session_ttls_are_bounded(self):
+        normal_response = self.client.post(
+            "/api/auth/login",
+            json={"email": "admin@example.com", "password": "correct horse battery staple", "remember_me": False},
+        )
+        self.assertNotIn("Max-Age", normal_response.headers["set-cookie"])
+        db = session_factory(self.settings.database_url)()
+        try:
+            normal = db.scalar(select(UserSession).order_by(UserSession.created_at.desc()))
+            normal_idle = normal.idle_expires_at - normal.created_at
+            normal_absolute = normal.absolute_expires_at - normal.created_at
+            self.assertAlmostEqual(normal_idle.total_seconds(), 30 * 60, delta=5)
+            self.assertAlmostEqual(normal_absolute.total_seconds(), 24 * 3600, delta=5)
+        finally:
+            db.close()
+
+        remembered_response = self.client.post(
+            "/api/auth/login",
+            json={"email": "admin@example.com", "password": "correct horse battery staple", "remember_me": True},
+        )
+        cookie = remembered_response.headers["set-cookie"]
+        self.assertIn("Max-Age=2592000", cookie)
+        db = session_factory(self.settings.database_url)()
+        try:
+            remembered = db.scalar(select(UserSession).order_by(UserSession.created_at.desc()))
+            lifetime = remembered.absolute_expires_at - remembered.created_at
+            self.assertAlmostEqual(lifetime.total_seconds(), 30 * 86400, delta=5)
+            self.assertEqual(remembered.idle_expires_at, remembered.absolute_expires_at)
+        finally:
+            db.close()
+
+    def test_login_rotates_previous_session(self):
+        self.login()
+        first_token = self.client.cookies.get("pja_session")
+        self.login()
+        second_token = self.client.cookies.get("pja_session")
+        self.assertNotEqual(first_token, second_token)
+        db = session_factory(self.settings.database_url)()
+        try:
+            revoked = db.scalar(select(UserSession).where(UserSession.token_hash != "").order_by(UserSession.created_at.asc()))
+            self.assertIsNotNone(revoked.revoked_at)
+            self.assertEqual(revoked.revoke_reason, "login_rotation")
+        finally:
+            db.close()
+
+    def test_password_change_revokes_old_sessions_and_rotates_current(self):
+        csrf = self.login()
+        old_token = self.client.cookies.get("pja_session")
+        response = self.client.post(
+            "/api/auth/change-password",
+            json={"current_password": "correct horse battery staple", "new_password": "new correct horse battery staple"},
+            headers=self.unsafe_headers(csrf),
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertNotEqual(old_token, self.client.cookies.get("pja_session"))
+        db = session_factory(self.settings.database_url)()
+        try:
+            sessions = list(db.scalars(select(UserSession).order_by(UserSession.created_at.asc())))
+            self.assertTrue(all(item.revoked_at is not None for item in sessions[:-1]))
+            self.assertEqual(sessions[-1].revoked_at, None)
+        finally:
+            db.close()
+
+    def test_absolute_expiry_rejects_a_remembered_session(self):
+        self.client.post(
+            "/api/auth/login",
+            json={"email": "admin@example.com", "password": "correct horse battery staple", "remember_me": True},
+        )
+        db = session_factory(self.settings.database_url)()
+        try:
+            value = db.scalar(select(UserSession).order_by(UserSession.created_at.desc()))
+            value.absolute_expires_at = utc_now() - timedelta(seconds=1)
+            db.commit()
+        finally:
+            db.close()
+        self.assertEqual(self.client.get("/api/profile").status_code, 401)
+
     def test_session_bootstrap_rotates_and_returns_csrf_only(self):
         login_csrf = self.login()
         payload = self.client.get("/api/auth/session").json()

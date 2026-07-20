@@ -2,11 +2,20 @@
 set -Eeuo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+if [[ -z "${PYTHON_BIN:-}" && -x "${ROOT_DIR}/.venv/bin/python" ]]; then
+  PYTHON_BIN="${ROOT_DIR}/.venv/bin/python"
+fi
+PYTHON_BIN="${PYTHON_BIN:-python3}"
 STAMP="$(date +%s)-$$"
 SMOKE_MILESTONE="${PJA_SMOKE_MILESTONE:-2.0.1}"
 REAL_LLM_VALIDATION="${PJA_REAL_LLM_VALIDATION:-0}"
+HOLD_SECONDS="${PJA_SMOKE_HOLD_SECONDS:-0}"
 if [[ "${REAL_LLM_VALIDATION}" != "0" && "${REAL_LLM_VALIDATION}" != "1" ]]; then
   printf '%s\n' 'PJA_REAL_LLM_VALIDATION must be 0 or 1.' >&2
+  exit 1
+fi
+if [[ ! "${HOLD_SECONDS}" =~ ^[0-9]+$ ]] || (( HOLD_SECONDS > 300 )); then
+  printf '%s\n' 'PJA_SMOKE_HOLD_SECONDS must be an integer from 0 to 300.' >&2
   exit 1
 fi
 if [[ "${REAL_LLM_VALIDATION}" == "1" && -z "${PJA_REAL_DEEPSEEK_API_KEY:-}" ]]; then
@@ -35,9 +44,9 @@ elif [[ "${SMOKE_MILESTONE}" == "2.0.2" ]]; then
   DEFAULT_POSTGRES_PORT=15434
   V202_SCOPE=1
 elif [[ "${SMOKE_MILESTONE}" == "2.0.1" ]]; then
-  TEST_PREFIX='pja-v2-phase1'
-  DEFAULT_HTTP_PORT=18080
-  DEFAULT_POSTGRES_PORT=15432
+  TEST_PREFIX='pja-v2-0-1'
+  DEFAULT_HTTP_PORT=18089
+  DEFAULT_POSTGRES_PORT=15439
 else
   printf '%s\n' 'Refusing to run: unsupported isolated Smoke milestone.' >&2
   exit 1
@@ -49,6 +58,7 @@ TEST_ROOT="$(mktemp -d "/tmp/${TEST_PREFIX}-${STAMP}.XXXXXX")"
 ENV_FILE="${TEST_ROOT}/test.env"
 COOKIE_JAR="${TEST_ROOT}/cookies.txt"
 RESPONSE_FILE="${TEST_ROOT}/response.json"
+HEADER_FILE="${TEST_ROOT}/headers.txt"
 ORIGIN="http://127.0.0.1:${HTTP_PORT}"
 ADMIN_EMAIL="phase1-admin@example.com"
 ADMIN_PASSWORD="Phase-1-Smoke-Passphrase-Only-2026"
@@ -151,6 +161,8 @@ chmod 0644 "${TEST_ROOT}/mock-job/job.html"
   printf 'BACKUP_DIR=%s\n' "${TEST_ROOT}/backup"
   printf 'MOCK_JOB_DIR=%s\n' "${TEST_ROOT}/mock-job"
   printf 'SESSION_COOKIE_SECURE=false\n'
+  printf 'REMEMBER_ME_SESSION_TTL_DAYS=30\n'
+  printf 'APP_VERSION=2.0.1\n'
   printf 'AUTH_TRUSTED_ORIGINS=%s\n' "${ORIGIN}"
   printf 'AUTH_FINGERPRINT_KEY=phase1-smoke-fingerprint-key-2026-only\n'
   printf 'AUTH_ENABLED=true\n'
@@ -164,6 +176,7 @@ chmod 0644 "${TEST_ROOT}/mock-job/job.html"
     printf 'MODEL_OUTPUT_COST_PER_MILLION_USD=1\n'
   else
     printf '%s=%s\n' 'DEEPSEEK_API_KEY' 'TEST_ONLY_NEVER_SENT'
+    printf 'MOCK_PROVIDER_ENABLED=true\n'
   fi
   printf '%s=%s\n' 'MONITORING_ADMIN_TOKEN' 'TEST_ONLY_MONITORING_TOKEN'
 } >"${ENV_FILE}"
@@ -210,11 +223,20 @@ for attempt in $(seq 1 60); do
   sleep 2
 done
 
+"${ROOT_DIR}/scripts/assert-release-health.sh" "${ORIGIN}/api/health" 2.0.1 >/dev/null
+smoke_step 'health version equals the target release'
+
 curl --noproxy '*' --fail --silent --show-error \
+  --dump-header "${HEADER_FILE}" \
   --cookie-jar "${COOKIE_JAR}" \
   -H 'Content-Type: application/json' \
-  -d "{\"email\":\"${ADMIN_EMAIL}\",\"password\":\"${ADMIN_PASSWORD}\"}" \
+  -d "{\"email\":\"${ADMIN_EMAIL}\",\"password\":\"${ADMIN_PASSWORD}\",\"remember_me\":true}" \
   "${ORIGIN}/api/auth/login" >"${RESPONSE_FILE}"
+
+grep -qi '^set-cookie: pja_session=' "${HEADER_FILE}"
+grep -qi '^set-cookie: pja_session=.*HttpOnly' "${HEADER_FILE}"
+grep -qi '^set-cookie: pja_session=.*Max-Age=2592000' "${HEADER_FILE}"
+grep -qi '^set-cookie: pja_session=.*SameSite=lax' "${HEADER_FILE}"
 
 CSRF_TOKEN="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["csrf_token"])' "${RESPONSE_FILE}")"
 if [[ -z "${CSRF_TOKEN}" ]]; then
@@ -232,7 +254,7 @@ WRONG_CSRF_STATUS="$(curl --noproxy '*' --silent --output /dev/null --write-out 
   -H 'Content-Type: application/json' --data '{"revision":1,"headline":"Rejected"}' \
   "${ORIGIN}/api/profile")"
 test "${WRONG_CSRF_STATUS}" = 403
-smoke_step 'login, Session Cookie, and negative CSRF enforcement'
+smoke_step 'Remember Me, opaque HttpOnly Session Cookie, and negative CSRF enforcement'
 
 api_write() {
   local method=$1
@@ -255,6 +277,18 @@ curl --noproxy '*' --fail --silent --show-error --cookie "${COOKIE_JAR}" \
   "${ORIGIN}/api/project-knowledge/search?query=FastAPI&top_k=3" >"${RESPONSE_FILE}"
 python3 -c 'import json,sys; value=json.load(open(sys.argv[1])); assert value["retrieval_method"] == "postgresql_fts"; assert value["items"]' "${RESPONSE_FILE}"
 smoke_step 'existing Project Knowledge workflow with PostgreSQL full-text search'
+
+for removed_path in /api/jobs /api/applications /api/approvals /api/tasks /api/job-rank-runs; do
+  REMOVED_GET_STATUS="$(curl --noproxy '*' --silent --output "${RESPONSE_FILE}" --write-out '%{http_code}' \
+    --cookie "${COOKIE_JAR}" "${ORIGIN}${removed_path}")"
+  test "${REMOVED_GET_STATUS}" = 410
+  python3 -c 'import json,sys; value=json.load(open(sys.argv[1])); assert value["error"]["code"] == "FEATURE_REMOVED"' "${RESPONSE_FILE}"
+  REMOVED_POST_STATUS="$(curl --noproxy '*' --silent --output "${RESPONSE_FILE}" --write-out '%{http_code}' \
+    --cookie "${COOKIE_JAR}" -X POST -H "Origin: ${ORIGIN}" -H "X-CSRF-Token: ${CSRF_TOKEN}" \
+    -H 'Content-Type: application/json' --data '{}' "${ORIGIN}${removed_path}")"
+  test "${REMOVED_POST_STATUS}" = 410
+done
+smoke_step 'retired routes and mutations return the uniform Feature Removed response'
 
 curl --noproxy '*' --fail --silent --cookie "${COOKIE_JAR}" \
   "${ORIGIN}/api/profile" >"${RESPONSE_FILE}"
@@ -282,6 +316,28 @@ VERSION_ID="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["i
 api_write POST "/api/resumes/${RESUME_ID}/versions/${VERSION_ID}/finalize"
 python3 -c 'import json,sys; assert json.load(open(sys.argv[1]))["status"] == "final"' "${RESPONSE_FILE}"
 smoke_step 'Resume Library, empty request body, and immutable finalize flow'
+
+curl --noproxy '*' --fail --silent --show-error \
+  --cookie "${COOKIE_JAR}" -H "Origin: ${ORIGIN}" -H "X-CSRF-Token: ${CSRF_TOKEN}" \
+  -F "resume_version_id=${VERSION_ID}" \
+  -F 'job_text=Synthetic role requiring FastAPI PostgreSQL RAG and Redis.' \
+  -F 'save_to_history=false' -F 'use_project_knowledge=false' -F 'project_knowledge_top_k=5' \
+  "${ORIGIN}/api/analyze" >"${RESPONSE_FILE}"
+python3 -c 'import json,sys; value=json.load(open(sys.argv[1])); assert value["used_knowledge_base"] is False; assert value["retrieval_count"] == 0; assert value["rag_sources"] == []' "${RESPONSE_FILE}"
+smoke_step 'direct Resume-to-JD Analyze with Project Knowledge disabled'
+
+curl --noproxy '*' --fail --silent --show-error \
+  --cookie "${COOKIE_JAR}" -H "Origin: ${ORIGIN}" -H "X-CSRF-Token: ${CSRF_TOKEN}" \
+  -F "resume_version_id=${VERSION_ID}" \
+  -F 'job_text=Synthetic role requiring FastAPI PostgreSQL RAG and Redis.' \
+  -F 'save_to_history=true' -F 'use_project_knowledge=true' -F 'project_knowledge_top_k=5' \
+  "${ORIGIN}/api/analyze" >"${RESPONSE_FILE}"
+python3 -c 'import json,sys; value=json.load(open(sys.argv[1])); assert value["used_knowledge_base"] is True; assert 1 <= value["retrieval_count"] <= 5; assert value["rag_sources"]; assert all(set(item) == {"document","section","chunk_id","relevance_score","supported_skills"} for item in value["rag_sources"]); assert any(item["source"] == "project_knowledge" for item in value["evidence_mapping"]); assert not (set(value["matched_skills"]) & set(value["missing_skills"])); claims=value["claim_validation"]; assert claims["unsupported_claim_count"] == 0 or (claims.get("output_blocked") is True and value["cover_letter"] == "" and value["upgraded_resume_bullets"] == [])' "${RESPONSE_FILE}"
+HISTORY_ID="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["application_id"])' "${RESPONSE_FILE}")"
+curl --noproxy '*' --fail --silent --show-error --cookie "${COOKIE_JAR}" \
+  "${ORIGIN}/api/history/${HISTORY_ID}" >"${RESPONSE_FILE}"
+python3 -c 'import json,sys; value=json.load(open(sys.argv[1])); assert value["id"] == int(sys.argv[2]); assert value["rag_sources"]' "${RESPONSE_FILE}" "${HISTORY_ID}"
+smoke_step 'Project Knowledge RAG changes matching with safe sources, evidence mapping, grounding, and History persistence'
 
 DOCX_FIXTURE="${TEST_ROOT}/smoke-resume.docx"
 python3 - "${DOCX_FIXTURE}" <<'PY'
@@ -769,4 +825,8 @@ sudo -n cmp --silent "${TEST_ROOT}/knowledge/PROJECT_KNOWLEDGE.md" \
 smoke_step 'isolated restore row counts and file checksums'
 
 "${COMPOSE[@]}" ps
+if (( HOLD_SECONDS > 0 )); then
+  printf 'Holding the verified isolated candidate for %s second(s).\n' "${HOLD_SECONDS}"
+  sleep "${HOLD_SECONDS}"
+fi
 printf 'Version %s isolated Smoke Test passed. Project: %s\n' "${SMOKE_MILESTONE}" "${PROJECT_NAME}"
