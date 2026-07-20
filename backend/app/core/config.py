@@ -83,6 +83,7 @@ class V2Settings:
     session_cookie_secure: bool
     session_idle_timeout_minutes: int
     session_absolute_timeout_hours: int
+    remember_me_session_ttl_days: int
     session_touch_interval_seconds: int
     auth_max_failed_attempts: int
     auth_lockout_minutes: int
@@ -171,6 +172,7 @@ def load_v2_settings() -> V2Settings:
         session_cookie_secure=secure_cookie,
         session_idle_timeout_minutes=_int("SESSION_IDLE_TIMEOUT_MINUTES", 30, 5, 1440),
         session_absolute_timeout_hours=_int("SESSION_ABSOLUTE_TIMEOUT_HOURS", 24, 1, 720),
+        remember_me_session_ttl_days=_int("REMEMBER_ME_SESSION_TTL_DAYS", 30, 1, 30),
         session_touch_interval_seconds=_int("SESSION_TOUCH_INTERVAL_SECONDS", 60, 15, 900),
         auth_max_failed_attempts=_int("AUTH_MAX_FAILED_ATTEMPTS", 5, 2, 50),
         auth_lockout_minutes=_int("AUTH_LOCKOUT_MINUTES", 15, 1, 1440),

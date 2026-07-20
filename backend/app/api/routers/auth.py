@@ -18,6 +18,7 @@ router = APIRouter(prefix="/api/auth", tags=["authentication"])
 class LoginRequest(BaseModel):
     email: EmailStr
     password: str = Field(min_length=1, max_length=1024)
+    remember_me: bool = False
 
 
 class ChangePasswordRequest(BaseModel):
@@ -40,6 +41,8 @@ def login(payload: LoginRequest, request: Request, response: Response, db: DbSes
             payload.password,
             client_host,
             request.headers.get("user-agent", ""),
+            remember_me=payload.remember_me,
+            previous_token=request.cookies.get(settings.session_cookie_name),
         )
     except LoginRateLimited as exc:
         raise HTTPException(status_code=429, detail=str(exc)) from exc
@@ -48,7 +51,7 @@ def login(payload: LoginRequest, request: Request, response: Response, db: DbSes
     response.set_cookie(
         key=settings.session_cookie_name,
         value=credentials.token,
-        max_age=settings.session_absolute_timeout_hours * 3600,
+        max_age=(settings.remember_me_session_ttl_days * 86400) if payload.remember_me else None,
         httponly=True,
         secure=settings.session_cookie_secure,
         samesite="lax",
@@ -86,7 +89,13 @@ def session_status(request: Request, db: DbSession) -> dict[str, object]:
 def logout(response: Response, db: DbSession, user_session: CurrentSession) -> dict[str, bool]:
     settings = load_v2_settings()
     AuthService(db, settings).revoke_current(user_session)
-    response.delete_cookie(settings.session_cookie_name, path="/", samesite="lax")
+    response.delete_cookie(
+        settings.session_cookie_name,
+        path="/",
+        secure=settings.session_cookie_secure,
+        httponly=True,
+        samesite="lax",
+    )
     return {"logged_out": True}
 
 
@@ -94,24 +103,43 @@ def logout(response: Response, db: DbSession, user_session: CurrentSession) -> d
 def logout_all(response: Response, db: DbSession, user: CurrentUser) -> dict[str, object]:
     settings = load_v2_settings()
     count = AuthService(db, settings).revoke_all(user)
-    response.delete_cookie(settings.session_cookie_name, path="/", samesite="lax")
+    response.delete_cookie(
+        settings.session_cookie_name,
+        path="/",
+        secure=settings.session_cookie_secure,
+        httponly=True,
+        samesite="lax",
+    )
     return {"logged_out": True, "revoked_sessions": count}
 
 
 @router.post("/change-password")
 def change_password(
     payload: ChangePasswordRequest,
+    request: Request,
+    response: Response,
     db: DbSession,
     user: CurrentUser,
     user_session: CurrentSession,
 ) -> dict[str, object]:
     try:
-        csrf = AuthService(db, load_v2_settings()).change_password(
+        settings = load_v2_settings()
+        credentials = AuthService(db, settings).change_password(
             user,
             user_session,
             payload.current_password,
             payload.new_password,
+            request.headers.get("user-agent", ""),
         )
     except (InvalidCredentials, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return {"password_changed": True, "csrf_token": csrf}
+    response.set_cookie(
+        key=settings.session_cookie_name,
+        value=credentials.token,
+        max_age=None,
+        httponly=True,
+        secure=settings.session_cookie_secure,
+        samesite="lax",
+        path="/",
+    )
+    return {"password_changed": True, "csrf_token": credentials.csrf_token}
