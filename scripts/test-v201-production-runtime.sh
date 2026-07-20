@@ -78,15 +78,15 @@ assert services["redis-init"]["cap_add"] == ["CHOWN", "FOWNER", "DAC_READ_SEARCH
 assert all("@sha256:" in services[name]["image"] for name in ("backend", "worker", "outbox-dispatcher", "frontend", "edge"))
 PY
 
-if rg -n 'proxy_pass http://(frontend|backend):' \
+if grep -En 'proxy_pass http://(frontend|backend):' \
   "${ROOT_DIR}/deploy/production/edge-nginx.conf" \
   "${ROOT_DIR}/deploy/production/frontend-nginx.conf"; then
   printf '%s\n' 'Ambiguous Docker upstream detected.' >&2
   exit 1
 fi
-rg -q 'frontend-v2' "${ROOT_DIR}/deploy/production/edge-nginx.conf"
-rg -q 'backend-v2' "${ROOT_DIR}/deploy/production/frontend-nginx.conf"
-if rg -n 'chown[[:space:]]+-R' "${ROOT_DIR}/deploy/production/redis-init-idempotent.sh"; then
+grep -q 'frontend-v2' "${ROOT_DIR}/deploy/production/edge-nginx.conf"
+grep -q 'backend-v2' "${ROOT_DIR}/deploy/production/frontend-nginx.conf"
+if grep -En 'chown[[:space:]]+-R' "${ROOT_DIR}/deploy/production/redis-init-idempotent.sh"; then
   printf '%s\n' 'Redis initialization must not perform an unconditional recursive chown.' >&2
   exit 1
 fi

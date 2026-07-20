@@ -39,7 +39,7 @@ describe("Version 2.0.1 simplified workspace", () => {
     render(<AnalyzePage />);
     await waitFor(() => expect(global.fetch).toHaveBeenCalled());
     const [requestUrl, requestOptions] = global.fetch.mock.calls[0];
-    expect(new URL(requestUrl).pathname).toBe("/api/resumes");
+    expect(new URL(requestUrl, "http://localhost").pathname).toBe("/api/resumes");
     expect(requestOptions.credentials).toBe("same-origin");
     expect(screen.getByLabelText("Use Project Knowledge (RAG)")).toBeChecked();
     fireEvent.click(screen.getByLabelText("Use Project Knowledge (RAG)"));
