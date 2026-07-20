@@ -19,7 +19,7 @@ from uuid import uuid4
 import psycopg
 
 
-APPLICATION_VERSION = "2.0.0"
+APPLICATION_VERSION = "2.0.1"
 REQUIRED_TABLES = (
     "users", "application_records", "analysis_metrics", "evaluation_runs",
     "knowledge_documents", "resumes", "resume_versions", "file_assets",

@@ -74,6 +74,7 @@ services:
       APP_ENV: ${APP_ENV:-production}
       DATABASE_URL: postgresql+psycopg://${POSTGRES_MIGRATION_USER}:${POSTGRES_MIGRATION_PASSWORD}@database:5432/${POSTGRES_DB}
       SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-true}
+      REMEMBER_ME_SESSION_TTL_DAYS: ${REMEMBER_ME_SESSION_TTL_DAYS:-30}
       AUTH_TRUSTED_ORIGINS: ${AUTH_TRUSTED_ORIGINS:-}
       AUTH_FINGERPRINT_KEY: ${AUTH_FINGERPRINT_KEY:-}
       REDIS_URL: redis://redis:6379/0
@@ -118,6 +119,7 @@ services:
       APP_ENV: ${APP_ENV:-production}
       DATABASE_URL: postgresql+psycopg://${POSTGRES_MIGRATION_USER}:${POSTGRES_MIGRATION_PASSWORD}@database:5432/${POSTGRES_DB}
       SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-true}
+      REMEMBER_ME_SESSION_TTL_DAYS: ${REMEMBER_ME_SESSION_TTL_DAYS:-30}
       AUTH_TRUSTED_ORIGINS: ${AUTH_TRUSTED_ORIGINS:-}
       AUTH_FINGERPRINT_KEY: ${AUTH_FINGERPRINT_KEY:-}
       FILE_STORAGE_ROOT: /app/runtime/files
@@ -148,11 +150,13 @@ services:
       - ${APP_ENV_FILE:-.env.production}
     environment:
       APP_ENV: ${APP_ENV:-production}
+      APP_VERSION: ${APP_VERSION:-2.0.1}
       DATABASE_URL: postgresql+psycopg://${POSTGRES_APP_USER}:${POSTGRES_APP_PASSWORD}@database:5432/${POSTGRES_DB}
       PROJECT_KNOWLEDGE_PATH: /app/project-knowledge/PROJECT_KNOWLEDGE.md
       PROJECT_KNOWLEDGE_SEED_PATH: /app/seed/PROJECT_KNOWLEDGE.md
       FILE_STORAGE_ROOT: /app/runtime/files
       SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-true}
+      REMEMBER_ME_SESSION_TTL_DAYS: ${REMEMBER_ME_SESSION_TTL_DAYS:-30}
       AUTH_TRUSTED_ORIGINS: ${AUTH_TRUSTED_ORIGINS:-}
       AUTH_FINGERPRINT_KEY: ${AUTH_FINGERPRINT_KEY:-}
       REDIS_URL: redis://redis:6379/0
@@ -198,8 +202,10 @@ services:
       start_period: 20s
       retries: 3
     networks:
-      - application
-      - data
+      application:
+        aliases:
+          - backend-v2
+      data: {}
 
   worker:
     build:
@@ -209,9 +215,11 @@ services:
       - ${APP_ENV_FILE:-.env.production}
     environment:
       APP_ENV: ${APP_ENV:-production}
+      APP_VERSION: ${APP_VERSION:-2.0.1}
       DATABASE_URL: postgresql+psycopg://${POSTGRES_APP_USER}:${POSTGRES_APP_PASSWORD}@database:5432/${POSTGRES_DB}
       FILE_STORAGE_ROOT: /app/runtime/files
       SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-true}
+      REMEMBER_ME_SESSION_TTL_DAYS: ${REMEMBER_ME_SESSION_TTL_DAYS:-30}
       AUTH_TRUSTED_ORIGINS: ${AUTH_TRUSTED_ORIGINS:-}
       AUTH_FINGERPRINT_KEY: ${AUTH_FINGERPRINT_KEY:-}
       REDIS_URL: redis://redis:6379/0
@@ -269,9 +277,12 @@ services:
     restart: unless-stopped
     read_only: true
     tmpfs:
-      - /tmp:size=32m,mode=1777
-      - /var/cache/nginx:size=16m,mode=0755
-      - /var/run:size=1m,mode=0755
+      - /tmp:size=32m,mode=0700,uid=101,gid=101
+      - /tmp/client_temp:size=8m,mode=0700,uid=101,gid=101
+      - /tmp/proxy_temp:size=8m,mode=0700,uid=101,gid=101
+      - /tmp/fastcgi_temp:size=1m,mode=0700,uid=101,gid=101
+      - /tmp/uwsgi_temp:size=1m,mode=0700,uid=101,gid=101
+      - /tmp/scgi_temp:size=1m,mode=0700,uid=101,gid=101
     security_opt:
       - no-new-privileges:true
     cap_drop:
@@ -284,8 +295,11 @@ services:
       options:
         max-size: "10m"
         max-file: "5"
+    user: "101:101"
     networks:
-      - application
+      application:
+        aliases:
+          - frontend-v2
 
 networks:
   application:

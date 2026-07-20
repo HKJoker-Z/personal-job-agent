@@ -25,6 +25,10 @@ def _worker_id() -> str:
     return (os.getenv("AGENT_WORKER_ID", "").strip() or f"{socket.gethostname()}:{os.getpid()}")[:120]
 
 
+def embedded_dispatcher_enabled() -> bool:
+    return os.getenv("OUTBOX_DISPATCH_IN_WORKER", "true").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def heartbeat(worker_id: str, status: str, active_tasks: int = 0) -> None:
     settings = load_v2_settings()
     db = session_factory()()
@@ -118,9 +122,14 @@ def main() -> int:
         "--processes", "1", "--threads", str(settings.worker_concurrency),
     ])
     heartbeat(worker_id, "ready")
-    dispatcher = threading.Thread(target=run_dispatcher, args=(worker_id, stop), daemon=True)
+    dispatcher = (
+        threading.Thread(target=run_dispatcher, args=(worker_id, stop), daemon=True)
+        if embedded_dispatcher_enabled()
+        else None
+    )
     maintainer = threading.Thread(target=_maintenance, args=(worker_id, stop), daemon=True)
-    dispatcher.start()
+    if dispatcher is not None:
+        dispatcher.start()
     maintainer.start()
 
     def shutdown(_signum: int, _frame: object) -> None:
@@ -135,7 +144,8 @@ def main() -> int:
         return process.wait()
     finally:
         stop.set()
-        dispatcher.join(timeout=5)
+        if dispatcher is not None:
+            dispatcher.join(timeout=5)
         maintainer.join(timeout=5)
         if process.poll() is None:
             process.kill()
