@@ -1,38 +1,34 @@
-# Version 2 Production Readiness
+# Version 2.0.1 production readiness
 
-Version 2.0.0 provides deployable configuration and validation, but publishing the release does not deploy production.
+Production promotion is allowed only after PR checks, main CI, immutable image publication, verified backups, an isolated candidate on `127.0.0.1:18089`, and exact health-version assertions all pass.
 
-## Required configuration
+## Required security configuration
 
-Production startup rejects SQLite, absent or public/non-private Redis targets, insecure Session Cookies, missing trusted Origins or fingerprint key, missing model cost rates, invalid database/Worker limits, and enabled API docs. Secrets belong only in the untracked production environment file. Run `docker compose --env-file .env.production config --quiet` before change control.
+Production must use PostgreSQL, a private authenticated Redis service, Secure/HttpOnly/SameSite=Lax Session cookies, explicit trusted Origins/Hosts, an authentication fingerprint key, provider cost rates, disabled API docs, and `MOCK_PROVIDER_ENABLED=false`. Normal Session defaults are 30 idle minutes and 24 absolute hours. `REMEMBER_ME_SESSION_TTL_DAYS` is bounded to 1–30 and defaults to 30.
 
-## Network and container boundary
+Only Edge 8080 is public. Backend 8000, PostgreSQL 5432, and Redis 6379 remain un-published. Production images are supplied as full GHCR `@sha256` references.
 
-Only the frontend port is published. Backend 8000, PostgreSQL 5432, and Redis 6379 use Compose `expose` on private networks and must not be host-published. PostgreSQL and Redis live on an internal data network. Application containers use a non-root UID where practical, read-only roots, bounded tmpfs, `no-new-privileges`, dropped capabilities, CPU/memory limits, stop grace periods, and rotated JSON logs.
+## Retired features and data
 
-## Security controls
+Jobs, Rankings, Applications, Approvals, and Tasks return 410 through the full authenticated app and cannot mutate. No Version 2.0.1 migration drops their tables. Backup and restore must still include all historical rows. Waiting Approval Agent Runs are read-only/cancellable.
 
-Use Secure/HttpOnly/SameSite Cookies, Session-bound CSRF, trusted Origin/Host/CORS lists, CSP and security headers, bounded request/upload bodies, login throttling/lockout, privacy-aware logs, and the existing admin Session revoke CLI. Queue data is JSON and safe-ID only. PostgreSQL remains authoritative. Never place credentials or business text in Redis, Events, Outbox safe payloads, logs, or URLs.
+## Runtime regression gates
 
-## Migration and backup runbook
+`scripts/test-v201-production-runtime.sh` verifies:
 
-1. Check free disk space and database connectivity.
-2. Create and verify a PostgreSQL/private-files/Project-Knowledge backup before migration.
-3. Allow the Compose pre-migration backup job to complete.
-4. Run Alembic under the PostgreSQL advisory migration lock.
-5. Confirm `alembic current` equals the single head `20260717_04` and run `alembic check`.
-6. Confirm PostgreSQL, Redis, Worker heartbeat, backend, and frontend readiness.
-7. Retain the verified backup according to the operator retention policy.
+- Redis initialization succeeds three consecutive times without unconditional recursive ownership changes
+- Edge is read-only, UID/GID 101, writable tmpfs, `no-new-privileges`, and `cap_drop: ALL`
+- Backend and Frontend use unique `backend-v2` and `frontend-v2` aliases
+- Nginx contains no ambiguous `backend` or `frontend` upstream
+- Edge joins only the application network
+- an Edge-side network probe resolves the v2 alias but cannot resolve an isolated v1 service or its legacy alias
+- all application images are immutable digest references
+- health assertions reject a mismatched release version
 
-Restore requires the exact confirmation phrase and an empty target database/files directory. Verification compares the Alembic revision, table row counts, manifest hashes, and restored private-file checksums. Practice restore in an isolated environment before any production change.
+At cutover, the retained Version 1.9 container must be detached from the shared `job-agent_application` network so the Version 2 Edge cannot resolve it. Preserve the exact reconnect command for rollback. Do not alter `pja-br0`, policy rule preference 8999, the routing service, or Mihomo.
 
-## Operational checks
+## Backup and migration gate
 
-- Alert when no ready/busy Worker heartbeat is current, Outbox failed/pending age grows, a Dead Letter is created, Redis readiness fails, disk crosses the configured minimum, or database connections approach the configured pool limit.
-- Restarting Redis or a Worker must not change PostgreSQL Run state. The dispatcher recovers orphaned deliveries, and Worker leases recover interrupted Steps.
-- Cancellation is cooperative at Step boundaries; a provider request already in flight may finish and its usage must still be recorded.
-- Do not bypass Approval, evidence validation, budget checks, or retry acknowledgment during incidents.
+Before deployment, create and verify a PostgreSQL/private-files/Project-Knowledge backup, save current Compose/runtime overrides and Version 2.0.0 image digests, check disk and certificate renewal state, and rehearse restore into an isolated database. Alembic must report current=head=`20260717_04` and `alembic check` clean. There is no new Version 2.0.1 revision.
 
-## Release boundary
-
-The `v2.0.0` tag workflow publishes only versioned GHCR images. It does not use SSH or production secrets and does not deploy. Production database migration, container replacement, routing changes, and any change to the current Version 1.9 service on port 8080 require a separate reviewed deployment procedure.
+Stop the release on any failed test, backup, restore, candidate, HTTPS, Secure Cookie, CSRF, RAG evidence, unsupported-claim, or version assertion.

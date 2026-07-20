@@ -1,58 +1,32 @@
-# Version 2 Development Guide
+# Version 2.0.1 development
 
-Version 2.0.4 was developed on `version-2.0.4-final-release` and merged through PR #9. The formal runtime marker is `2.0.0`. Release preparation changes only stable version and release metadata; Version 2 remains undeployed until a separate production migration and deployment task.
+Use Python 3.12 and Node 22. Tests must use temporary SQLite or a database whose name contains `test`; never point test configuration at production data. CI and normal local smoke use Mock LLM and must not call DeepSeek.
 
-## Local checks
+## Setup and checks
 
 ```bash
 python3 -m venv .venv
-. .venv/bin/activate
-python -m pip install -r backend/requirements.txt
+.venv/bin/pip install -r backend/requirements.txt
+cd frontend && npm ci && cd ..
 
-cd backend
-APP_ENV=test python -m unittest discover -v
-python -m compileall -q . ../scripts
-cd ../frontend
-npm ci
-npm run test
-npm run build
-cd ..
-find scripts -maxdepth 1 -type f -name '*.sh' -print0 | xargs -0 -n1 bash -n
-shellcheck scripts/*.sh deploy/postgres/*.sh
+APP_ENV=test .venv/bin/python -m unittest discover -s backend -p 'test_*.py'
+cd frontend && npm test && npm run build && cd ..
+scripts/test-v201-production-runtime.sh
+PJA_SMOKE_MILESTONE=2.0.1 scripts/docker-smoke-v2.sh
 ```
 
-PostgreSQL integration requires an explicitly test-named database and both `PJA_RUN_POSTGRES_TESTS=1` and `TEST_DATABASE_URL`. Never point these commands at a live database.
+Run PostgreSQL integration with a dedicated test database and `PJA_RUN_POSTGRES_TESTS=1`. Run Docker/Compose, ShellCheck, secret/path safety, Alembic fresh-upgrade/current/heads/check, backup/restore, and isolated smoke before opening or merging a release PR.
 
-Alembic development:
+## Product boundaries
 
-```bash
-cd backend
-alembic heads
-alembic upgrade head
-alembic downgrade 20260713_03
-alembic upgrade head
-alembic check
-```
+Do not add Version 2.1 features. Do not restore public Jobs, Job Rankings, Applications, Approvals, or Tasks. Their models and migrations remain for compatibility, but the full application must return 410 for old APIs. Analyze must remain independent of retired entities.
 
-Use only an isolated development/test URL. Do not edit `20260712_01`, `20260713_02`, or `20260713_03`; final workflow changes belong in `20260717_04` or a later revision.
+Do not persist passwords or tokens in frontend storage. Do not add arbitrary user-upload RAG. Do not bypass prompt injection, secret/PII scans, output scanning, evidence reconciliation, or claim validation. Mock provider mode must fail closed in production.
 
-## Domain rules
+## Project Knowledge workflow
 
-- Routers validate and translate errors; repositories query; services own business transactions.
-- Every business query must be ownership-scoped.
-- Stage changes must use the transition service and append history.
-- Job merge must preserve all relations and stop on two active Applications.
-- Job Description, Notes, CSV, Resume, and files never enter ordinary logs.
-- URL import must retain pinned-address SSRF checks; tests use only the explicit test override.
-- LLM tests must inject a Mock invoker. Never put a real API key in tests.
-- `reminder_at` does not authorize scheduling or notifications.
-- Matching uses confirmed Profile facts and confirmed Job Requirements; unknown is never silently converted to unmet.
-- LLM output cannot set scores. It may rewrite a grounded local Draft only and must pass strict schema, output scan, and independent claim validation.
-- Material edits create a new immutable Version. Unsupported claims block approval/finalization unless edited or explicitly user-confirmed for that Version.
-- PostgreSQL is the system of record. Redis carries only allow-listed IDs and short-lived coordination state; queue messages are JSON and never contain Resume/JD/Material text, PII, Sessions, Cookies, CSRF values, API keys, or database URLs.
-- Every Run/Step transition is transactional, row-locked, revisioned, and accompanied by an append-only Agent Event and Audit Event. Usage keys make accounting exactly-once under duplicate delivery.
-- Approval waits do not occupy a Worker. Completed steps and generated Materials are reused during retry and crash recovery.
+Update `docs/PROJECT_KNOWLEDGE.md` only with facts verified in code, tests, CI, or production configuration. Test chunk rebuild and PostgreSQL search for the changed technologies. Production runtime replacement is a deployment action with hash, backup, comparison, explicit replace, rebuild, and Analyze verification.
 
-## Stable release safety
+## Git and releases
 
-Before push, compare against `origin/main`, run `git diff --check`, scan tracked/generated paths and secrets, and confirm no runtime files, databases, uploads, generated Materials, backups, logs, `node_modules`, or `frontend/dist` are tracked. Use only the isolated `pja-v2-final-*` Smoke project on `127.0.0.1:18088`. Stable release changes must use reviewed PRs and an immutable annotated `v2.0.0` tag. Publishing the release does not authorize deployment or any change to the existing 8080 service.
+Use a feature branch, normal commits, a PR, required checks, and a merge commit. Do not force-push or rebase shared history. Annotated release tags trigger GHCR publication. Production selects immutable component digests, never mutable tags.

@@ -1,16 +1,25 @@
-# Version 2 Roadmap
+# Version 2 roadmap status
 
-The formal release is `v2.0.0`. The numbered Version 2.0.x entries below were development milestones, not separate production releases or stable Git tags.
+## Current release: 2.0.1
 
-| Milestone | Scope | Runtime marker | Status |
-| --- | --- | --- | --- |
-| Version 2.0.1 | Identity, PostgreSQL, Career Profile, Resume foundation | `2.0.0-alpha.1` | Included in Alpha 2 |
-| Version 2.0.2 | Job Library, Application Pipeline, Tasks, Dashboard | `2.0.0-alpha.2` | Published as `v2.0.0-alpha.2`; not deployed |
-| Version 2.0.3 | Explainable Matching, Ranking, Application Materials | `2.0.0-alpha.3` | Published prerelease; not deployed |
-| Version 2.0.4 | Reliable Agent workflows and final v2 production readiness | `2.0.0` | Included in formal `v2.0.0` |
+Version 2.0.1 is a patch release focused on safe usability and operational correctness:
 
-PR #6 and PR #7 were merged in dependency order before `v2.0.0-alpha.2` was tagged. Alpha 2 is a GitHub prerelease and GHCR image set, not a production deployment.
+- bounded Remember Me and email-only persistence
+- one responsive authenticated navigation
+- direct Resume-to-JD Analyze flow
+- retirement of Jobs, Job Rankings, Applications, Approvals, and Tasks without deleting data
+- verified Project Knowledge updated for the PostgreSQL/Redis/Dramatiq production stack
+- actual Project Knowledge retrieval, prompt evidence, source reporting, and skill reconciliation
+- formal Redis-init, Nginx tmpfs, Docker alias, health-version, and rollback deployment fixes
 
-Version 2.0.4 is the final feature foundation included in formal `v2.0.0`. It adds Redis/Dramatiq, a Transactional Outbox, durable Runs/Steps/Events, retry/cancellation/resume, approvals, SSE, budgets, concurrency controls, heartbeat/Dead Letter recovery, a 20-step asynchronous Application Package workflow, hardened production Compose, and backup/restore validation. The formal release does not deploy production, submit applications, or send email.
+## Retained foundations
 
-Interview Center, Mock Interview, the formal STAR Story module, automatic applications, automatic email, browser extensions, and multi-model intelligent routing are deferred to Version 2.1.x.
+Profile, Resume Versions, History, Project Knowledge, Monitoring/Evaluation, PostgreSQL, Redis, Dramatiq, Transactional Outbox, SSE, backup/restore, and historical Agent Runs remain supported. Retired-feature tables remain compatible for rollback.
+
+## Historical documents
+
+The `V2_0_2`, `V2_0_3`, and `V2_0_4` architecture/API/test documents record how Version 2.0.0 was built. They do not define the Version 2.0.1 public product surface. Public retirement behavior is defined by the 2.0.1 release notes and tests.
+
+## Future work
+
+Future work is deliberately uncommitted. Version 2.0.1 does not implement Version 2.1 capabilities, automatic job application, a browser extension, an interview platform, or high-availability orchestration.
