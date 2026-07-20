@@ -1,6 +1,6 @@
 services:
   database:
-    image: postgres:16.9-alpine
+    image: postgres:16.9-alpine@sha256:7c688148e5e156d0e86df7ba8ae5a05a2386aaec1e2ad8e6d11bdf10504b1fb7
     environment:
       POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB is required}
       POSTGRES_USER: ${POSTGRES_BOOTSTRAP_USER:?POSTGRES_BOOTSTRAP_USER is required}
@@ -79,6 +79,8 @@ services:
       AUTH_FINGERPRINT_KEY: ${AUTH_FINGERPRINT_KEY:-}
       REDIS_URL: redis://redis:6379/0
       FILE_STORAGE_ROOT: /app/runtime/files
+      POSTGRES_SERVER_IMAGE: postgres:16.9-alpine@sha256:7c688148e5e156d0e86df7ba8ae5a05a2386aaec1e2ad8e6d11bdf10504b1fb7
+      POSTGRES_TOOL_IMAGE: ${POSTGRES_TOOL_IMAGE:?immutable PostgreSQL tool image digest is required}
     command: ["python", "/app/scripts/v2_backup_restore.py", "backup", "--database-url-env", "DATABASE_URL", "--backup-dir", "/backup", "--files-root", "/app/runtime/files", "--project-knowledge", "/app/project-knowledge/PROJECT_KNOWLEDGE.md"]
     volumes:
       - type: bind
@@ -150,7 +152,7 @@ services:
       - ${APP_ENV_FILE:-.env.production}
     environment:
       APP_ENV: ${APP_ENV:-production}
-      APP_VERSION: ${APP_VERSION:-2.0.1}
+      APP_VERSION: ${APP_VERSION:-2.0.2}
       DATABASE_URL: postgresql+psycopg://${POSTGRES_APP_USER}:${POSTGRES_APP_PASSWORD}@database:5432/${POSTGRES_DB}
       PROJECT_KNOWLEDGE_PATH: /app/project-knowledge/PROJECT_KNOWLEDGE.md
       PROJECT_KNOWLEDGE_SEED_PATH: /app/seed/PROJECT_KNOWLEDGE.md
@@ -215,7 +217,7 @@ services:
       - ${APP_ENV_FILE:-.env.production}
     environment:
       APP_ENV: ${APP_ENV:-production}
-      APP_VERSION: ${APP_VERSION:-2.0.1}
+      APP_VERSION: ${APP_VERSION:-2.0.2}
       DATABASE_URL: postgresql+psycopg://${POSTGRES_APP_USER}:${POSTGRES_APP_PASSWORD}@database:5432/${POSTGRES_DB}
       FILE_STORAGE_ROOT: /app/runtime/files
       SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-true}
