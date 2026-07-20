@@ -1,0 +1,96 @@
+services:
+  source-db:
+    image: postgres:16.9-alpine@sha256:7c688148e5e156d0e86df7ba8ae5a05a2386aaec1e2ad8e6d11bdf10504b1fb7
+    environment:
+      POSTGRES_DB: ${PJA_TEST_SOURCE_DATABASE:?source test database is required}
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${PJA_TEST_POSTGRES_PASSWORD:?test password is required}
+    volumes:
+      - source-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d ${PJA_TEST_SOURCE_DATABASE:?source test database is required}"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    networks: [source-data]
+
+  target-db:
+    image: postgres:16.9-alpine@sha256:7c688148e5e156d0e86df7ba8ae5a05a2386aaec1e2ad8e6d11bdf10504b1fb7
+    environment:
+      POSTGRES_DB: postgres
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${PJA_TEST_POSTGRES_PASSWORD:?test password is required}
+    volumes:
+      - target-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d postgres"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    networks: [restore-data]
+
+  source-tool:
+    image: ${PJA_TEST_BACKEND_IMAGE:?backend test image is required}
+    pull_policy: never
+    environment:
+      APP_ENV: test
+      APP_VERSION: 2.0.2
+      TEST_DATABASE_URL: ${PJA_TEST_SOURCE_DATABASE_URL:?source test database URL is required}
+      DATABASE_URL: ${PJA_TEST_SOURCE_DATABASE_URL:?source test database URL is required}
+      PJA_TEST_ADMIN_PASSWORD: ${PJA_TEST_ADMIN_PASSWORD:?synthetic admin password is required}
+      PJA_TEST_ADMIN_EMAIL: ${PJA_TEST_ADMIN_EMAIL:?synthetic admin email is required}
+      FILE_STORAGE_ROOT: /work/files
+      PROJECT_KNOWLEDGE_PATH: /work/knowledge/PROJECT_KNOWLEDGE.md
+      POSTGRES_SERVER_IMAGE: postgres:16.9-alpine@sha256:7c688148e5e156d0e86df7ba8ae5a05a2386aaec1e2ad8e6d11bdf10504b1fb7
+      POSTGRES_TOOL_IMAGE: ${PJA_TEST_TOOL_IMAGE_REFERENCE:?immutable tool image reference is required}
+      SESSION_COOKIE_SECURE: "false"
+      READINESS_REQUIRE_REDIS: "false"
+      READINESS_REQUIRE_WORKER: "false"
+      DEEPSEEK_API_KEY: TEST_ONLY_NEVER_SENT
+    volumes:
+      - ${PJA_TEST_ROOT:?test root is required}/backups:/work/backups
+      - ${PJA_TEST_ROOT}/files:/work/files:ro
+      - ${PJA_TEST_ROOT}/knowledge:/work/knowledge:ro
+    depends_on:
+      source-db: {condition: service_healthy}
+    networks: [source-data]
+
+  target-tool:
+    image: ${PJA_TEST_BACKEND_IMAGE:?backend test image is required}
+    pull_policy: never
+    environment:
+      APP_ENV: test
+      APP_VERSION: 2.0.2
+      TEST_DATABASE_URL: ${PJA_TEST_TARGET_DATABASE_URL:?target test database URL is required}
+      DATABASE_URL: ${PJA_TEST_TARGET_DATABASE_URL:?target test database URL is required}
+      PJA_TEST_ADMIN_PASSWORD: ${PJA_TEST_ADMIN_PASSWORD:?synthetic admin password is required}
+      PJA_TEST_ADMIN_EMAIL: ${PJA_TEST_ADMIN_EMAIL:?synthetic admin email is required}
+      FILE_STORAGE_ROOT: /work/restored-files
+      PROJECT_KNOWLEDGE_PATH: /work/restored-knowledge/PROJECT_KNOWLEDGE.md
+      POSTGRES_SERVER_IMAGE: postgres:16.9-alpine@sha256:7c688148e5e156d0e86df7ba8ae5a05a2386aaec1e2ad8e6d11bdf10504b1fb7
+      POSTGRES_TOOL_IMAGE: ${PJA_TEST_TOOL_IMAGE_REFERENCE:?immutable tool image reference is required}
+      PJA_RESTORE_DISPOSABLE_TARGET: "1"
+      PJA_RESTORE_COMPOSE_PROJECT: ${PJA_TEST_PROJECT_NAME:?test project name is required}
+      PJA_RESTORE_EXPECTED_DATABASE: ${PJA_TEST_TARGET_DATABASE:?target database is required}
+      PJA_RESTORE_TARGET_VOLUME: ${PJA_TEST_TARGET_VOLUME:?target volume is required}
+      SESSION_COOKIE_SECURE: "false"
+      READINESS_REQUIRE_REDIS: "false"
+      READINESS_REQUIRE_WORKER: "false"
+      DEEPSEEK_API_KEY: TEST_ONLY_NEVER_SENT
+    volumes:
+      - ${PJA_TEST_ROOT:?test root is required}/backups:/work/backups:ro
+      - ${PJA_TEST_ROOT}/restored-files:/work/restored-files
+      - ${PJA_TEST_ROOT}/restored-knowledge:/work/restored-knowledge
+    depends_on:
+      target-db: {condition: service_healthy}
+    networks: [restore-data]
+
+networks:
+  source-data:
+    internal: true
+  restore-data:
+    internal: true
+
+volumes:
+  source-data:
+  target-data:
