@@ -403,8 +403,10 @@ class JobPipelineTest(unittest.TestCase):
         }, headers=self.headers())
         self.assertEqual(reopened.status_code, 200, reopened.text)
         summary = self.client.get("/api/dashboard/summary").json()
-        self.assertEqual(summary["jobs_total"], 1)
-        self.assertEqual(summary["applications_total"], 1)
+        self.assertNotIn("jobs_total", summary)
+        self.assertNotIn("applications_total", summary)
+        self.assertNotIn("tasks_pending", summary)
+        self.assertEqual(summary["resumes_total"], 1)
 
     def test_stage_history_is_immutable(self):
         job_id = self.manual()["job"]["id"]
@@ -514,10 +516,10 @@ class JobPipelineTest(unittest.TestCase):
         }, headers=self.headers(True))
         admin_summary = self.client.get("/api/dashboard/summary").json()
         other_summary = self.other_client.get("/api/dashboard/summary").json()
-        self.assertEqual(admin_summary["applications_total"], 1)
-        self.assertEqual(admin_summary["tasks_overdue"], 1)
-        self.assertEqual(other_summary["applications_total"], 1)
-        self.assertEqual(other_summary["tasks_overdue"], 0)
+        for summary in (admin_summary, other_summary):
+            self.assertNotIn("applications_total", summary)
+            self.assertNotIn("tasks_overdue", summary)
+            self.assertEqual(summary["history_total"], 0)
 
 
 if __name__ == "__main__":

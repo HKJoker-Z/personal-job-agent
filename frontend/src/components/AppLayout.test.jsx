@@ -1,0 +1,50 @@
+import React from "react";
+import { readFileSync } from "node:fs";
+import { fireEvent, render, screen } from "@testing-library/react";
+import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { describe, expect, it, vi } from "vitest";
+import { AppLayout } from "./AppLayout";
+
+const styles = readFileSync("src/styles.css", "utf8");
+
+const logout = vi.fn();
+vi.mock("../auth/AuthProvider", () => ({
+  useAuth: () => ({ user: { display_name: "Admin", role: "admin" }, logout }),
+}));
+
+function view(path = "/analyze") {
+  return render(<MemoryRouter initialEntries={[path]}><Routes>
+    <Route element={<AppLayout />}><Route path="*" element={<p>Page body</p>} /></Route>
+  </Routes></MemoryRouter>);
+}
+
+describe("unified navigation", () => {
+  it("renders one primary navigation with a clear active state", () => {
+    view();
+    expect(screen.getAllByRole("navigation")).toHaveLength(1);
+    expect(screen.getByRole("link", { name: "Analyze" })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("link", { name: "Analyze" })).toHaveClass("active");
+  });
+
+  it("uses the same component for its collapsible mobile menu", () => {
+    view();
+    const menu = screen.getByRole("button", { name: /Menu/ });
+    expect(menu).toHaveAttribute("aria-expanded", "false");
+    fireEvent.click(menu);
+    expect(menu).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByRole("navigation")).toHaveClass("is-open");
+  });
+
+  it("does not expose retired module navigation", () => {
+    view();
+    for (const label of ["Jobs", "Job Rankings", "Applications", "Approvals", "Tasks"]) {
+      expect(screen.queryByRole("link", { name: label })).not.toBeInTheDocument();
+    }
+  });
+
+  it("uses a rounded active navigation treatment instead of underlined text", () => {
+    expect(styles).toMatch(/\.nav-links a[\s\S]*?border-radius:\s*10px/);
+    expect(styles).toMatch(/\.nav-links a[\s\S]*?text-decoration:\s*none/);
+    expect(styles).toMatch(/\.nav-links a\.active[\s\S]*?background:/);
+  });
+});
