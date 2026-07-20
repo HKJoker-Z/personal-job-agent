@@ -67,12 +67,18 @@ class V2PostgreSQLIntegrationTest(unittest.TestCase):
             title="PostgreSQL Integration Knowledge",
             category="Project Experience",
             source_filename="integration.md",
-            content="FastAPI PostgreSQL integration evidence",
-            chunks=["FastAPI PostgreSQL integration evidence"],
+            content="FastAPI PostgreSQL integration evidence. Redis 7 and Dramatiq background worker evidence.",
+            chunks=[
+                "FastAPI PostgreSQL integration evidence",
+                "Redis 7 and Dramatiq background worker evidence",
+            ],
         )
         items, mode = database.search_knowledge_chunks("FastAPI PostgreSQL", 5)
         self.assertEqual(mode, "postgresql_fts")
         self.assertEqual(items[0]["document_id"], document["id"])
+        worker_items, worker_mode = database.search_knowledge_chunks("Redis Dramatiq", 5)
+        self.assertEqual(worker_mode, "postgresql_fts")
+        self.assertTrue(worker_items)
         database.rebuild_project_knowledge_document(
             title="PostgreSQL Integration Knowledge",
             category="Project Experience",

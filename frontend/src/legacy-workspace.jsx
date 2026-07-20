@@ -2,8 +2,7 @@ import React, { Component, useEffect, useState } from "react";
 import { apiFetch } from "./api/client";
 
 const API_BASE_URL = import.meta.env.DEV ? (import.meta.env.VITE_API_BASE_URL || "") : "";
-const APP_VERSION = "2.0.0";
-const APPLICATION_STATUSES = ["Saved", "Applied", "Interview", "Rejected", "Offer"];
+const APP_VERSION = "2.0.1";
 const NEXT_ACTION_DECISIONS = [
   { value: "accepted", label: "Accept Recommendation" },
   { value: "dismissed", label: "Dismiss" },
@@ -183,16 +182,6 @@ async function downloadBlob(url, fallbackFilename, fallbackError) {
   window.URL.revokeObjectURL(objectUrl);
 }
 
-function statusClassName(status) {
-  const cleanStatus = String(status || "Saved").toLowerCase();
-  return `status-pill status-${cleanStatus}`;
-}
-
-function StatusBadge({ status }) {
-  const displayStatus = APPLICATION_STATUSES.includes(status) ? status : "Saved";
-  return <span className={statusClassName(displayStatus)}>{displayStatus}</span>;
-}
-
 function securityStatusLabel(status) {
   const cleanStatus = String(status || "not_available").toLowerCase();
   if (cleanStatus === "passed") {
@@ -345,7 +334,7 @@ function ExportActions({ applicationId, enabled = true }) {
     setError("");
     try {
       await downloadBlob(
-        `${API_BASE_URL}/api/applications/${applicationId}/${endpoint}`,
+        `${API_BASE_URL}/api/history/${applicationId}/${endpoint}`,
         fallbackFilename,
         fallbackError,
       );
@@ -505,10 +494,12 @@ function UpgradedResumeBulletsSection({ bullets }) {
   );
 }
 
-function RagSourcesSection({ sources, ragMode, usedKnowledgeBase }) {
-  const safeSources = asArray(sources).filter((source) => asObject(source).document_title || asObject(source).document_id);
+function RagSourcesSection({ sources, ragMode, usedKnowledgeBase, retrievalCount }) {
+  const safeSources = asArray(sources).filter((source) => asObject(source).document || asObject(source).document_title || asObject(source).chunk_id);
   const ragEnabled = isRagEnabled(ragMode);
   const usedKnowledge = usedKnowledgeBase ?? safeSources.length > 0;
+
+  if (!ragEnabled) return null;
 
   return (
     <section className="result-section rag-section">
@@ -521,7 +512,7 @@ function RagSourcesSection({ sources, ragMode, usedKnowledgeBase }) {
           <strong>Used Knowledge Base:</strong> {usedKnowledge ? "Yes" : "No"}
         </p>
         <p>
-          <strong>RAG Sources Count:</strong> {safeSources.length}
+          <strong>Retrieval Count:</strong> {Number.isFinite(Number(retrievalCount)) ? Number(retrievalCount) : safeSources.length}
         </p>
       </div>
       {ragEnabled && safeSources.length > 0 && (
@@ -539,14 +530,11 @@ function RagSourcesSection({ sources, ragMode, usedKnowledgeBase }) {
             return (
               <article className="source-card" key={`rag-source-${index}`}>
                 <div className="source-card-header">
-                  <strong>{displayText(item.document_title, "Untitled knowledge document")}</strong>
-                  <span>{displayText(item.category, "Other")}</span>
+                  <strong>{displayText(item.document || item.document_title, "Project Knowledge")}</strong>
+                  <span>{displayText(item.section || item.category, "Project Knowledge")}</span>
                 </div>
-                <p className="muted">Chunk #{Number.parseInt(item.chunk_index, 10) || 0}</p>
-                <p>{displayText(item.relevance_reason, "No relevance reason provided.")}</p>
-                {item.content_preview && (
-                  <p className="muted">{displayText(String(item.content_preview).slice(0, 320))}</p>
-                )}
+                <p className="muted">Chunk {displayText(item.chunk_id, String(Number.parseInt(item.chunk_index, 10) || 0))} · relevance {Number(item.relevance_score || 0).toFixed(4)}</p>
+                {asArray(item.supported_skills).length ? <p>Supports: {asArray(item.supported_skills).join(", ")}</p> : <p className="muted">No matched skill was supported by this chunk.</p>}
               </article>
             );
           })}
@@ -556,6 +544,22 @@ function RagSourcesSection({ sources, ragMode, usedKnowledgeBase }) {
       )}
     </section>
   );
+}
+
+function EvidenceMappingSection({ mappings }) {
+  const safeMappings = asArray(mappings);
+  if (!safeMappings.length) return null;
+  return <section className="result-section evidence-mapping-section">
+    <h3>Skill Evidence</h3>
+    <div className="source-grid">{safeMappings.map((mapping, index) => {
+      const item = asObject(mapping);
+      return <article className="source-card" key={`${displayText(item.skill, "skill")}-${index}`}>
+        <strong>{displayText(item.skill, "Unknown skill")}</strong>
+        <p>Source: {displayText(item.source, "unknown")}</p>
+        {asArray(item.evidence).length ? <p className="muted">Evidence: {asArray(item.evidence).join(", ")}</p> : null}
+      </article>;
+    })}</div>
+  </section>;
 }
 
 function AgentWorkflowSection({ steps, workflowDurationMs, workflowDurationUs }) {
@@ -617,7 +621,7 @@ function NextActionSection({ nextAction, decision, applicationId, canPersistDeci
     setError("");
     try {
       const data = await requestJson(
-        `${API_BASE_URL}/api/applications/${applicationId}/next-action`,
+        `${API_BASE_URL}/api/history/${applicationId}/next-action`,
         {
           method: "PATCH",
           headers: {
@@ -665,7 +669,7 @@ function NextActionSection({ nextAction, decision, applicationId, canPersistDeci
             </div>
           </div>
           <p>{displayText(action.reason, "No reason recorded.")}</p>
-          <ResultList title="Recommended Tasks" items={action.recommended_tasks} />
+          <ResultList title="Suggested Follow-ups" items={action.recommended_tasks} />
           <ResultList title="Recommendation Evidence" items={action.evidence} />
         </>
       ) : (
@@ -748,7 +752,7 @@ function AnalysisResult({ result }) {
 
       <div className={savedToHistory ? "history-message" : "history-message muted-message"}>
         {savedToHistory
-          ? `Saved to history. Application ID: ${result.application_id}`
+          ? `Saved to history. Analysis ID: ${result.application_id}`
           : "Not saved to history."}
       </div>
 
@@ -778,7 +782,9 @@ function AnalysisResult({ result }) {
         sources={result.rag_sources}
         ragMode={result.rag_mode}
         usedKnowledgeBase={Boolean(result.used_knowledge_base)}
+        retrievalCount={result.retrieval_count}
       />
+      <EvidenceMappingSection mappings={result.evidence_mapping} />
       <AgentWorkflowSection
         steps={result.workflow_steps}
         workflowDurationMs={result.workflow_duration_ms}
@@ -802,20 +808,30 @@ function AnalysisResult({ result }) {
 
 function AnalyzePage() {
   const [resume, setResume] = useState(null);
+  const [resumeInputKey, setResumeInputKey] = useState(0);
+  const [resumeVersionId, setResumeVersionId] = useState("");
+  const [storedResumes, setStoredResumes] = useState([]);
   const [jobText, setJobText] = useState("");
   const [jobUrl, setJobUrl] = useState("");
   const [saveToHistory, setSaveToHistory] = useState(true);
-  const [ragMode, setRagMode] = useState("project");
+  const [useProjectKnowledge, setUseProjectKnowledge] = useState(true);
   const [ragTopK, setRagTopK] = useState(5);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [securityError, setSecurityError] = useState(null);
   const [result, setResult] = useState(null);
 
+  useEffect(() => {
+    requestJson(`${API_BASE_URL}/api/resumes`, undefined, "Stored resumes are unavailable.")
+      .then((items) => setStoredResumes(asArray(items).filter((item) => item.active_version_id)))
+      .catch(() => setStoredResumes([]));
+  }, []);
+
   function handleResumeChange(event) {
     const file = event.target.files?.[0] || null;
     setResume(file);
     if (file) {
+      setResumeVersionId("");
       setError("");
     }
   }
@@ -830,13 +846,13 @@ function AnalyzePage() {
     setSecurityError(null);
     setResult(null);
 
-    if (!resume) {
-      setError("Please upload a PDF or DOCX resume.");
+    if (!resume && !resumeVersionId) {
+      setError("Please select a Resume Version or upload a PDF or DOCX resume.");
       return;
     }
 
-    const fileName = resume.name.toLowerCase();
-    if (!fileName.endsWith(".pdf") && !fileName.endsWith(".docx")) {
+    const fileName = resume?.name.toLowerCase() || "";
+    if (resume && !fileName.endsWith(".pdf") && !fileName.endsWith(".docx")) {
       setError("Please upload a PDF or DOCX resume.");
       return;
     }
@@ -847,13 +863,16 @@ function AnalyzePage() {
     }
 
     const formData = new FormData();
-    formData.append("resume", resume);
-    formData.append("job_text", jobText);
-    formData.append("job_url", jobUrl);
+    if (resumeVersionId) formData.append("resume_version_id", resumeVersionId);
+    else formData.append("resume", resume);
+    if (jobText.trim()) formData.append("job_text", jobText.trim());
+    else formData.append("job_url", jobUrl.trim());
     formData.append("save_to_history", saveToHistory ? "true" : "false");
-    formData.append("rag_mode", ragMode);
-    formData.append("use_knowledge_base", ragMode !== "off" ? "true" : "false");
+    formData.append("rag_mode", useProjectKnowledge ? "project" : "off");
+    formData.append("use_project_knowledge", useProjectKnowledge ? "true" : "false");
+    formData.append("use_knowledge_base", useProjectKnowledge ? "true" : "false");
     formData.append("rag_top_k", String(Math.max(1, Math.min(10, Number(ragTopK) || 5))));
+    formData.append("project_knowledge_top_k", String(Math.max(1, Math.min(10, Number(ragTopK) || 5))));
 
     setLoading(true);
     try {
@@ -890,8 +909,17 @@ function AnalyzePage() {
           <span className="version-pill">v{APP_VERSION}</span>
         </div>
         <label>
-          Resume
+          Stored Resume Version
+          <select aria-label="Stored Resume Version" value={resumeVersionId} onChange={(event) => { setResumeVersionId(event.target.value); if (event.target.value) { setResume(null); setResumeInputKey((value) => value + 1); } }}>
+            <option value="">Upload a resume instead</option>
+            {storedResumes.map((item) => <option key={item.active_version_id} value={item.active_version_id}>{item.title} · active version</option>)}
+          </select>
+        </label>
+        <label>
+          Or upload a Resume
           <input
+            key={resumeInputKey}
+            aria-label="Resume upload"
             type="file"
             accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
             onChange={handleResumeChange}
@@ -904,7 +932,7 @@ function AnalyzePage() {
             rows="10"
             value={jobText}
             onChange={(event) => setJobText(event.target.value)}
-            placeholder="Paste the JD text here. This will be used before the URL if both are provided."
+            placeholder="Paste the JD text here, or leave it blank and provide one job URL below."
           />
         </label>
 
@@ -928,23 +956,20 @@ function AnalyzePage() {
         </label>
 
         <div className="rag-controls">
-          <label>
-            RAG Mode
-            <select value={ragMode} onChange={(event) => setRagMode(event.target.value)}>
-              <option value="project">Project Knowledge RAG</option>
-              <option value="off">Off</option>
-            </select>
-          </label>
+          <div>
+            <label className="checkbox-label"><input type="checkbox" checked={useProjectKnowledge} onChange={(event) => setUseProjectKnowledge(event.target.checked)} /> Use Project Knowledge (RAG)</label>
+            <p className="field-help">Use verified evidence from this project to identify transferable skills and strengthen the match analysis.</p>
+          </div>
 
           <label>
-            RAG Top K
+            Project Knowledge top-k
             <input
               type="number"
               min="1"
               max="10"
               value={ragTopK}
               onChange={(event) => setRagTopK(event.target.value)}
-              disabled={ragMode === "off"}
+              disabled={!useProjectKnowledge}
             />
           </label>
         </div>
@@ -985,7 +1010,7 @@ function AnalyzePage() {
 
       {!hasResult && !loading && !error && (
         <section className="panel state-panel">
-          <strong>Ready for one focused application analysis.</strong>
+          <strong>Ready for one focused resume-to-role analysis.</strong>
           <p className="muted">Upload your resume and provide a job description or URL to start analysis.</p>
         </section>
       )}
@@ -998,19 +1023,15 @@ function AnalyzePage() {
 function HistoryPage() {
   const [records, setRecords] = useState([]);
   const [total, setTotal] = useState(0);
-  const [statusFilter, setStatusFilter] = useState("All");
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [selectedRecord, setSelectedRecord] = useState(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState("");
-  const [detailStatus, setDetailStatus] = useState("Saved");
-  const [notes, setNotes] = useState("");
-  const [saving, setSaving] = useState(false);
   const [deletingId, setDeletingId] = useState(null);
 
-  async function loadApplications() {
+  async function loadHistory() {
     if (loading) {
       return;
     }
@@ -1021,16 +1042,13 @@ function HistoryPage() {
     const params = new URLSearchParams();
     params.set("limit", "50");
     params.set("offset", "0");
-    if (statusFilter !== "All") {
-      params.set("status", statusFilter);
-    }
     if (search.trim()) {
       params.set("search", search.trim());
     }
 
     try {
       const data = await requestJson(
-        `${API_BASE_URL}/api/applications?${params.toString()}`,
+        `${API_BASE_URL}/api/history?${params.toString()}`,
         undefined,
         "Failed to load history.",
       );
@@ -1046,7 +1064,7 @@ function HistoryPage() {
   }
 
   useEffect(() => {
-    loadApplications();
+    loadHistory();
   }, []);
 
   async function handleView(applicationId) {
@@ -1059,56 +1077,20 @@ function HistoryPage() {
 
     try {
       const data = await requestJson(
-        `${API_BASE_URL}/api/applications/${applicationId}`,
+        `${API_BASE_URL}/api/history/${applicationId}`,
         undefined,
-        "Failed to load application details.",
+        "Failed to load analysis details.",
       );
       setSelectedRecord(data);
-      setDetailStatus(data.application_status || "Saved");
-      setNotes(data.notes || "");
     } catch (err) {
-      setDetailError(getRequestErrorMessage(err, "Failed to load application details."));
+      setDetailError(getRequestErrorMessage(err, "Failed to load analysis details."));
     } finally {
       setDetailLoading(false);
     }
   }
 
-  async function handleSaveChanges() {
-    if (!selectedRecord || saving) {
-      return;
-    }
-
-    setSaving(true);
-    setDetailError("");
-
-    try {
-      const data = await requestJson(
-        `${API_BASE_URL}/api/applications/${selectedRecord.id}`,
-        {
-          method: "PATCH",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            application_status: detailStatus,
-            notes,
-          }),
-        },
-        "Failed to save changes.",
-      );
-      setSelectedRecord(data);
-      setDetailStatus(data.application_status || "Saved");
-      setNotes(data.notes || "");
-      await loadApplications();
-    } catch (err) {
-      setDetailError(getRequestErrorMessage(err, "Failed to save changes."));
-    } finally {
-      setSaving(false);
-    }
-  }
-
   async function handleDelete(applicationId) {
-    if (deletingId || !window.confirm("Delete this application record?")) {
+    if (deletingId || !window.confirm("Delete this saved analysis?")) {
       return;
     }
 
@@ -1118,16 +1100,16 @@ function HistoryPage() {
 
     try {
       await requestJson(
-        `${API_BASE_URL}/api/applications/${applicationId}`,
+        `${API_BASE_URL}/api/history/${applicationId}`,
         { method: "DELETE" },
-        "Failed to delete application record.",
+        "Failed to delete saved analysis.",
       );
       if (selectedRecord?.id === applicationId) {
         setSelectedRecord(null);
       }
-      await loadApplications();
+      await loadHistory();
     } catch (err) {
-      setError(getRequestErrorMessage(err, "Failed to delete application record."));
+      setError(getRequestErrorMessage(err, "Failed to delete saved analysis."));
     } finally {
       setDeletingId(null);
     }
@@ -1145,7 +1127,7 @@ function HistoryPage() {
         next_action_decided_at: data.decided_at,
       };
     });
-    loadApplications();
+    loadHistory();
   }
 
   return (
@@ -1154,23 +1136,11 @@ function HistoryPage() {
         <div className="panel-heading">
           <div>
             <span className="eyebrow">History</span>
-            <h2>Application Records</h2>
+            <h2>Saved Analyses</h2>
           </div>
           <span className="version-pill">{total} saved</span>
         </div>
         <div className="history-toolbar">
-          <label>
-            Status
-            <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}>
-              <option value="All">All</option>
-              {APPLICATION_STATUSES.map((status) => (
-                <option key={status} value={status}>
-                  {status}
-                </option>
-              ))}
-            </select>
-          </label>
-
           <label>
             Search
             <input
@@ -1181,7 +1151,7 @@ function HistoryPage() {
             />
           </label>
 
-          <button type="button" onClick={loadApplications} disabled={loading}>
+          <button type="button" onClick={loadHistory} disabled={loading}>
             {loading ? "Loading history..." : "Refresh"}
           </button>
         </div>
@@ -1197,14 +1167,14 @@ function HistoryPage() {
       {loading && (
         <section className="panel state-panel">
           <strong>Loading history...</strong>
-          <p className="muted">Fetching application records from the local database.</p>
+          <p className="muted">Fetching saved analysis records.</p>
         </section>
       )}
 
       {!loading && !error && records.length === 0 && (
         <section className="panel state-panel">
-          <strong>No application records yet.</strong>
-          <p className="muted">Save an analysis result to build your application history.</p>
+          <strong>No saved analyses yet.</strong>
+          <p className="muted">Save an analysis result to build your private analysis history.</p>
         </section>
       )}
 
@@ -1222,7 +1192,6 @@ function HistoryPage() {
                   <th>Company</th>
                   <th>Position</th>
                   <th>Score</th>
-                  <th>Status</th>
                   <th>Security</th>
                   <th>Next Action</th>
                   <th>Decision</th>
@@ -1236,9 +1205,6 @@ function HistoryPage() {
                     <td>{displayCompany(record.company_name)}</td>
                     <td>{displayPosition(record.job_title)}</td>
                     <td>{clampScore(record.match_score)}/100</td>
-                    <td>
-                      <StatusBadge status={record.application_status} />
-                    </td>
                     <td>
                       <SecurityBadge status={record.security_status} />
                     </td>
@@ -1271,7 +1237,7 @@ function HistoryPage() {
       {detailLoading && (
         <section className="panel state-panel">
           <strong>Loading history...</strong>
-          <p className="muted">Fetching application details.</p>
+          <p className="muted">Fetching saved analysis details.</p>
         </section>
       )}
 
@@ -1286,7 +1252,7 @@ function HistoryPage() {
         <section className="panel detail-panel">
           <div className="detail-header">
             <div>
-              <span className="label">Application #{selectedRecord.id}</span>
+              <span className="label">Saved Analysis #{selectedRecord.id}</span>
               <h2>{displayPosition(selectedRecord.job_title)}</h2>
               <p>{displayCompany(selectedRecord.company_name)}</p>
             </div>
@@ -1294,12 +1260,6 @@ function HistoryPage() {
           </div>
 
           <div className="detail-grid">
-            <div>
-              <span className="label">Status</span>
-              <p>
-                <StatusBadge status={selectedRecord.application_status} />
-              </p>
-            </div>
             <div>
               <span className="label">Created</span>
               <p>{formatDate(selectedRecord.created_at)}</p>
@@ -1350,6 +1310,7 @@ function HistoryPage() {
             sources={selectedRecord.rag_sources}
             ragMode={selectedRecord.rag_mode}
             usedKnowledgeBase={asArray(selectedRecord.rag_sources).length > 0}
+            retrievalCount={asArray(selectedRecord.rag_sources).length}
           />
           <AgentWorkflowSection
             steps={selectedRecord.workflow_steps}
@@ -1376,26 +1337,6 @@ function HistoryPage() {
             <pre>{selectedRecord.cover_letter || "No cover letter generated."}</pre>
           </section>
 
-          <section className="edit-section">
-            <h3>Update Application</h3>
-            <label>
-              Status
-              <select value={detailStatus} onChange={(event) => setDetailStatus(event.target.value)}>
-                {APPLICATION_STATUSES.map((status) => (
-                  <option key={status} value={status}>
-                    {status}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              Notes
-              <textarea rows="4" value={notes} onChange={(event) => setNotes(event.target.value)} />
-            </label>
-            <button type="button" onClick={handleSaveChanges} disabled={saving}>
-              {saving ? "Saving changes..." : "Save Changes"}
-            </button>
-          </section>
         </section>
       )}
     </>
@@ -1644,7 +1585,7 @@ function MonitoringPage() {
     if (!selectedTrace?.workflow_id || !adminToken || managementBusy || traceConfirmation !== "DELETE TRACE") {
       return;
     }
-    if (!window.confirm("Delete this trace metadata permanently? Application history will be preserved.")) {
+    if (!window.confirm("Delete this trace metadata permanently? Saved analysis history will be preserved.")) {
       return;
     }
     setManagementBusy("trace-delete");
@@ -1766,7 +1707,7 @@ function MonitoringPage() {
               <span className="status-pill security-blocked">Permanent cleanup</span>
             </div>
             <p className="muted">
-              Monitoring cleanup deletes monitoring and trace metadata only. It does not delete application history or Project Knowledge.
+              Monitoring cleanup deletes monitoring and trace metadata only. It does not delete saved analysis history or Project Knowledge.
             </p>
             <div className="metrics-grid">
               <MetricCard label="Admin Token" value={dataManagementStatus.admin_token_configured ? "Configured" : "Not configured"} />
@@ -1801,7 +1742,7 @@ function MonitoringPage() {
             <div className="cleanup-grid">
               <article className="cleanup-card">
                 <h4>Monitoring Cleanup</h4>
-                <p>Delete analysis and step metadata. Application history, Project Knowledge, and evaluation history are preserved.</p>
+                <p>Delete analysis and step metadata. Saved analysis history, Project Knowledge, and evaluation history are preserved.</p>
                 <label>
                   Cleanup Scope
                   <select value={monitoringCleanupMode} onChange={(event) => setMonitoringCleanupMode(event.target.value)}>
@@ -2129,7 +2070,7 @@ function MonitoringPage() {
               </div>
               <div className="trace-delete-panel">
                 <h4>Delete Trace Metadata</h4>
-                <p className="muted">Workflow ID: {selectedTrace.workflow_id}. Application history remains preserved.</p>
+                <p className="muted">Workflow ID: {selectedTrace.workflow_id}. Saved analysis history remains preserved.</p>
                 <label>
                   Type DELETE TRACE to confirm
                   <input value={traceConfirmation} onChange={(event) => setTraceConfirmation(event.target.value)} />
@@ -2356,7 +2297,7 @@ function ProjectKnowledgePage() {
       <section className="panel state-panel">
         <p className="muted">
           This project intentionally uses a curated project knowledge file instead of arbitrary knowledge uploads. It
-          keeps the RAG source focused, auditable, and aligned with AI job application use cases.
+          keeps the RAG source focused, auditable, and aligned with resume-to-role analysis.
         </p>
       </section>
 
@@ -2545,7 +2486,7 @@ class ErrorBoundary extends Component {
       return (
         <main className="app-shell">
           <section className="panel form-panel">
-            <h1>Personal Job Application Agent</h1>
+            <h1>Personal Job Agent</h1>
             <div className="error">Frontend failed to render: {this.state.error.message}</div>
           </section>
         </main>
@@ -2557,73 +2498,12 @@ class ErrorBoundary extends Component {
 }
 
 export function LegacyWorkspace({ initialTab = "analyze" }) {
-  const [activeTab, setActiveTab] = useState(initialTab);
-
-  useEffect(() => { setActiveTab(initialTab); }, [initialTab]);
-
-  return (
-    <main className="app-shell">
-      <header className="page-header">
-        <div className="header-title-row">
-          <h1>Personal Job Application Agent</h1>
-          <span className="version-pill">v{APP_VERSION}</span>
-        </div>
-        <p>
-          Resume-JD matching, Project Knowledge RAG, AI security checks, monitoring, behavioral evaluation, ATS analysis, cover letter generation, and application tracking.
-        </p>
-        <p className="security-notice">
-          This tool uses heuristic security controls and cannot guarantee complete protection against every prompt injection attack. Users should review generated content before use.
-        </p>
-        <div className="feature-strip" aria-label="Core product features">
-          <span>Project Knowledge RAG</span>
-          <span>AI Security</span>
-          <span>Monitoring</span>
-          <span>Explainable scoring</span>
-          <span>ATS keywords</span>
-          <span>DOCX/PDF exports</span>
-          <span>SQLite history</span>
-        </div>
-      </header>
-
-      <nav className="tabs" aria-label="Main sections">
-        <button
-          type="button"
-          className={activeTab === "analyze" ? "active-tab" : ""}
-          onClick={() => setActiveTab("analyze")}
-        >
-          Analyze
-        </button>
-        <button
-          type="button"
-          className={activeTab === "history" ? "active-tab" : ""}
-          onClick={() => setActiveTab("history")}
-        >
-          History
-        </button>
-        <button
-          type="button"
-          className={activeTab === "knowledge" ? "active-tab" : ""}
-          onClick={() => setActiveTab("knowledge")}
-        >
-          Project Knowledge
-        </button>
-        <button
-          type="button"
-          className={activeTab === "monitoring" ? "active-tab" : ""}
-          onClick={() => setActiveTab("monitoring")}
-        >
-          Monitoring
-        </button>
-      </nav>
-
-      {activeTab === "analyze" && <AnalyzePage />}
-      {activeTab === "history" && <HistoryPage />}
-      {activeTab === "knowledge" && <ProjectKnowledgePage />}
-      {activeTab === "monitoring" && <MonitoringPage />}
-
-      <footer className="app-footer">API: {API_BASE_URL || "same origin"}</footer>
-    </main>
-  );
+  return <section className="workspace-page">
+    {initialTab === "analyze" && <AnalyzePage />}
+    {initialTab === "history" && <HistoryPage />}
+    {initialTab === "knowledge" && <ProjectKnowledgePage />}
+    {initialTab === "monitoring" && <MonitoringPage />}
+  </section>;
 }
 
-export { ErrorBoundary };
+export { AnalyzePage, ErrorBoundary, RagSourcesSection };

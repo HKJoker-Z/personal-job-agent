@@ -22,15 +22,15 @@ class SafePromptTest(unittest.TestCase):
         )[0]
         self.assertIn(jd, section)
 
-    def test_project_knowledge_is_inside_untrusted_tags(self):
+    def test_project_knowledge_is_inside_trusted_evidence_tags(self):
         evidence = "Project Knowledge RAG uses SQLite FTS5 retrieval."
         prompt = build_safe_analysis_prompt(
             resume_text="Python engineer",
             job_description="RAG role",
             rag_chunks=[{"content": evidence, "chunk_id": 1}],
         )
-        section = prompt.split("<UNTRUSTED_PROJECT_KNOWLEDGE_EVIDENCE>", 1)[1].split(
-            "</UNTRUSTED_PROJECT_KNOWLEDGE_EVIDENCE>",
+        section = prompt.split("<TRUSTED_PROJECT_EVIDENCE>", 1)[1].split(
+            "</TRUSTED_PROJECT_EVIDENCE>",
             1,
         )[0]
         self.assertIn(evidence, section)

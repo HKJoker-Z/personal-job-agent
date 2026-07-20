@@ -50,6 +50,15 @@ class ConfigTest(unittest.TestCase):
                 "TRUSTED_HOSTS": "*",
             })
 
+    def test_production_rejects_mock_provider(self):
+        with self.assertRaisesRegex(ConfigError, "MOCK_PROVIDER_ENABLED"):
+            self.load({
+                "APP_ENV": "production",
+                "DEEPSEEK_API_KEY": "TEST_ONLY_CONFIGURED",
+                "TRUSTED_HOSTS": "example.com",
+                "MOCK_PROVIDER_ENABLED": "true",
+            })
+
     def test_boolean_parser(self):
         self.assertTrue(parse_bool("FLAG", "yes", False))
         self.assertFalse(parse_bool("FLAG", "off", True))

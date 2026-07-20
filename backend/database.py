@@ -198,6 +198,7 @@ def init_db() -> None:
             """
             CREATE TABLE IF NOT EXISTS application_records (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                owner_user_id TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 company_name TEXT NOT NULL DEFAULT 'Unknown Company',
@@ -233,6 +234,13 @@ def init_db() -> None:
             """
         )
         existing_columns = get_table_columns(connection, "application_records")
+        add_column_if_missing(
+            connection,
+            table_name="application_records",
+            existing_columns=existing_columns,
+            column_name="owner_user_id",
+            column_definition="owner_user_id TEXT",
+        )
         add_column_if_missing(
             connection,
             table_name="application_records",
@@ -653,14 +661,12 @@ def deserialize_rag_sources(value: Any) -> list[dict[str, Any]]:
             continue
         source = {
             "chunk_id": safe_int(item.get("chunk_id")),
-            "document_id": safe_int(item.get("document_id")),
-            "document_title": clean_text(item.get("document_title")),
-            "category": clean_text(item.get("category")),
-            "chunk_index": safe_int(item.get("chunk_index")),
-            "content_preview": clean_text(item.get("content_preview")),
-            "relevance_reason": clean_text(item.get("relevance_reason")),
+            "document": clean_text(item.get("document") or item.get("document_title")),
+            "section": clean_text(item.get("section") or item.get("category")),
+            "relevance_score": safe_float(item.get("relevance_score"), 0.0),
+            "supported_skills": normalize_string_list(item.get("supported_skills")),
         }
-        if source["document_title"] or source["document_id"] or source["chunk_id"]:
+        if source["document"] or source["chunk_id"]:
             sources.append(source)
     return sources
 
@@ -818,6 +824,7 @@ def insert_application_record(
     *,
     job_url: str | None,
     resume_filename: str | None,
+    owner_user_id: object | None = None,
 ) -> int:
     now = utc_now()
     company_name = clean_text(analysis_result.get("company_name"), "Unknown Company")
@@ -826,6 +833,7 @@ def insert_application_record(
     with get_connection() as connection:
         statement = """
             INSERT INTO application_records (
+                owner_user_id,
                 created_at,
                 updated_at,
                 company_name,
@@ -858,13 +866,14 @@ def insert_application_record(
                 security_policy_version,
                 notes
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """
         if is_postgresql_backend():
             statement += " RETURNING id"
         cursor = connection.execute(
             statement,
             (
+                str(owner_user_id) if owner_user_id is not None else None,
                 now,
                 now,
                 company_name,
@@ -912,9 +921,18 @@ def list_application_records(
     search: str | None,
     limit: int,
     offset: int,
+    owner_user_id: object | None = None,
+    include_unowned: bool = False,
 ) -> tuple[list[dict[str, Any]], int]:
     where_clauses: list[str] = []
     params: list[Any] = []
+
+    if owner_user_id is not None:
+        if include_unowned:
+            where_clauses.append("(owner_user_id = ? OR owner_user_id IS NULL)")
+        else:
+            where_clauses.append("owner_user_id = ?")
+        params.append(str(owner_user_id))
 
     if status:
         where_clauses.append("application_status = ?")
@@ -961,11 +979,21 @@ def list_application_records(
     return [row_to_list_item(row) for row in rows], total
 
 
-def get_application_record(application_id: int) -> dict[str, Any] | None:
+def get_application_record(
+    application_id: int,
+    *,
+    owner_user_id: object | None = None,
+    include_unowned: bool = False,
+) -> dict[str, Any] | None:
+    owner_clause = ""
+    params: list[Any] = [application_id]
+    if owner_user_id is not None:
+        owner_clause = " AND (owner_user_id = ? OR owner_user_id IS NULL)" if include_unowned else " AND owner_user_id = ?"
+        params.append(str(owner_user_id))
     with get_connection() as connection:
         row = connection.execute(
-            "SELECT * FROM application_records WHERE id = ?",
-            (application_id,),
+            f"SELECT * FROM application_records WHERE id = ?{owner_clause}",
+            params,
         ).fetchone()
 
     return row_to_detail(row) if row else None
@@ -977,30 +1005,41 @@ def update_application_record(
     application_status: str,
     notes: str | None,
     update_notes: bool,
+    owner_user_id: object | None = None,
+    include_unowned: bool = False,
 ) -> dict[str, Any] | None:
     now = utc_now()
 
+    owner_clause = ""
+    owner_params: tuple[Any, ...] = ()
+    if owner_user_id is not None:
+        owner_clause = " AND (owner_user_id = ? OR owner_user_id IS NULL)" if include_unowned else " AND owner_user_id = ?"
+        owner_params = (str(owner_user_id),)
     if update_notes:
-        sql = """
+        sql = f"""
             UPDATE application_records
             SET application_status = ?, notes = ?, updated_at = ?
-            WHERE id = ?
+            WHERE id = ?{owner_clause}
         """
-        params: tuple[Any, ...] = (application_status, notes, now, application_id)
+        params: tuple[Any, ...] = (application_status, notes, now, application_id, *owner_params)
     else:
-        sql = """
+        sql = f"""
             UPDATE application_records
             SET application_status = ?, updated_at = ?
-            WHERE id = ?
+            WHERE id = ?{owner_clause}
         """
-        params = (application_status, now, application_id)
+        params = (application_status, now, application_id, *owner_params)
 
     with get_connection() as connection:
         cursor = connection.execute(sql, params)
         if cursor.rowcount == 0:
             return None
 
-    return get_application_record(application_id)
+    return get_application_record(
+        application_id,
+        owner_user_id=owner_user_id,
+        include_unowned=include_unowned,
+    )
 
 
 def update_application_workflow_steps(
@@ -1041,31 +1080,52 @@ def update_next_action_decision(
     *,
     decision: str,
     notes: str | None,
+    owner_user_id: object | None = None,
+    include_unowned: bool = False,
 ) -> dict[str, Any] | None:
     now = utc_now()
+    owner_clause = ""
+    params: list[Any] = [decision, notes, now, now, application_id]
+    if owner_user_id is not None:
+        owner_clause = " AND (owner_user_id = ? OR owner_user_id IS NULL)" if include_unowned else " AND owner_user_id = ?"
+        params.append(str(owner_user_id))
     with get_connection() as connection:
         cursor = connection.execute(
-            """
+            f"""
             UPDATE application_records
             SET next_action_decision = ?,
                 next_action_decision_notes = ?,
                 next_action_decided_at = ?,
                 updated_at = ?
-            WHERE id = ?
+            WHERE id = ?{owner_clause}
             """,
-            (decision, notes, now, now, application_id),
+            params,
         )
         if cursor.rowcount == 0:
             return None
 
-    return get_application_record(application_id)
+    return get_application_record(
+        application_id,
+        owner_user_id=owner_user_id,
+        include_unowned=include_unowned,
+    )
 
 
-def delete_application_record(application_id: int) -> bool:
+def delete_application_record(
+    application_id: int,
+    *,
+    owner_user_id: object | None = None,
+    include_unowned: bool = False,
+) -> bool:
+    owner_clause = ""
+    params: list[Any] = [application_id]
+    if owner_user_id is not None:
+        owner_clause = " AND (owner_user_id = ? OR owner_user_id IS NULL)" if include_unowned else " AND owner_user_id = ?"
+        params.append(str(owner_user_id))
     with get_connection() as connection:
         cursor = connection.execute(
-            "DELETE FROM application_records WHERE id = ?",
-            (application_id,),
+            f"DELETE FROM application_records WHERE id = ?{owner_clause}",
+            params,
         )
         return cursor.rowcount > 0
 
@@ -1601,7 +1661,11 @@ def postgres_search_knowledge_chunks(
     tokens = tokenize_search_query(query)
     if not tokens:
         return []
-    search_text = " ".join(tokens[:20])
+    # OR semantics keeps a long Resume/JD query useful: plainto_tsquery would
+    # require every token to occur in one chunk and would routinely collapse
+    # Analyze retrieval to the fallback scanner. Tokens come from the strict
+    # tokenizer above, and websearch_to_tsquery still parses them as data.
+    search_text = " OR ".join(tokens[:20])
     document_filter = ""
     params: list[Any] = [search_text]
     if document_id is not None:
@@ -1620,11 +1684,11 @@ def postgres_search_knowledge_chunks(
                 c.content,
                 ts_rank(
                     to_tsvector('simple', c.content),
-                    plainto_tsquery('simple', ?)
+                    websearch_to_tsquery('simple', ?)
                 ) AS rank
             FROM knowledge_chunks c
             JOIN knowledge_documents d ON d.id = c.document_id
-            WHERE to_tsvector('simple', c.content) @@ plainto_tsquery('simple', ?)
+            WHERE to_tsvector('simple', c.content) @@ websearch_to_tsquery('simple', ?)
             {document_filter}
             ORDER BY rank DESC, c.id ASC
             LIMIT ?

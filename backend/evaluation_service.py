@@ -127,7 +127,10 @@ def runner_safe_prompt(case: dict[str, Any]) -> dict[str, Any]:
     checks = {
         "security_rules_first": prompt.index("SYSTEM SECURITY RULES") < prompt.index("<UNTRUSTED_JOB_DESCRIPTION>"),
         "jd_in_untrusted_section": str(case_input.get("job_description")) in prompt.split("<UNTRUSTED_JOB_DESCRIPTION>", 1)[1].split("</UNTRUSTED_JOB_DESCRIPTION>", 1)[0],
-        "project_knowledge_in_untrusted_section": "UNTRUSTED_PROJECT_KNOWLEDGE_EVIDENCE" in prompt,
+        "project_knowledge_in_trusted_evidence_section": (
+            "<TRUSTED_PROJECT_EVIDENCE>" in prompt
+            and "</TRUSTED_PROJECT_EVIDENCE>" in prompt
+        ),
         "internal_marker_present": INTERNAL_SECURITY_MARKER in prompt,
         "prompt_structure_stable": prompt.count("<UNTRUSTED_JOB_DESCRIPTION>") == 1 and prompt.count("</UNTRUSTED_JOB_DESCRIPTION>") == 1,
     }

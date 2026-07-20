@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
-APP_VERSION = "2.0.0"
+APP_VERSION = os.getenv("APP_VERSION", "2.0.1-dev+ff901dc").strip() or "2.0.1-dev+ff901dc"
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 BACKEND_DIR = Path(__file__).resolve().parent
 DEFAULT_DEVELOPMENT_DATABASE_PATH = (BACKEND_DIR / "data" / "app.db").resolve(strict=False)
@@ -83,6 +83,7 @@ class AppConfig:
     log_level: str
     monitoring_admin_token_configured: bool
     monitoring_allow_remote_admin: bool
+    mock_provider_enabled: bool
 
     @property
     def max_upload_size_bytes(self) -> int:
@@ -130,6 +131,9 @@ def load_config(*, validate_production: bool = True) -> AppConfig:
         monitoring_allow_remote_admin=parse_bool(
             "MONITORING_ALLOW_REMOTE_ADMIN", os.getenv("MONITORING_ALLOW_REMOTE_ADMIN"), False
         ),
+        mock_provider_enabled=parse_bool(
+            "MOCK_PROVIDER_ENABLED", os.getenv("MOCK_PROVIDER_ENABLED"), False
+        ),
     )
     if production and validate_production:
         if not config.deepseek_api_key:
@@ -140,6 +144,8 @@ def load_config(*, validate_production: bool = True) -> AppConfig:
             raise ConfigError("TRUSTED_HOSTS must contain explicit hosts in production.")
         if config.enable_api_docs and os.getenv("ENABLE_API_DOCS") is None:
             raise ConfigError("API documentation must default to disabled in production.")
+        if config.mock_provider_enabled:
+            raise ConfigError("MOCK_PROVIDER_ENABLED must be false in production.")
     return config
 
 

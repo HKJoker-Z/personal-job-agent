@@ -19,6 +19,7 @@ from pypdf import PdfReader
 
 from agent_workflow import AgentWorkflow, WorkflowContext
 from app.jobs.acquisition import SafeJobUrlFetcher, UnsafeJobUrl
+from app.materials.grounding import EvidenceSource, validate_claims, validation_summary
 from config import APP_VERSION, load_config
 from database import (
     ALLOWED_APPLICATION_STATUSES,
@@ -112,11 +113,11 @@ MAX_RESUME_TEXT_CHARS = 18000
 MAX_JOB_TEXT_CHARS = 12000
 PROJECT_KNOWLEDGE_SOURCE_PATH = PROJECT_KNOWLEDGE_LOGICAL_NAME
 LEGACY_PROJECT_KNOWLEDGE_SOURCE_PATH = "docs/PROJECT_KNOWLEDGE.md"
-PROJECT_KNOWLEDGE_TITLE = "Personal Job Application Agent Project Knowledge"
+PROJECT_KNOWLEDGE_TITLE = "Personal Job Agent Project Knowledge"
 PROJECT_KNOWLEDGE_CATEGORY = "Other"
 PROJECT_KNOWLEDGE_MAX_UPLOAD_BYTES = settings.max_upload_size_bytes
 GENERIC_KNOWLEDGE_DISABLED_DETAIL = (
-    "Generic knowledge base upload is disabled in v1.9. "
+    "Generic knowledge base upload is disabled for this release. "
     "Use Project Knowledge RAG instead."
 )
 MAX_RESUME_UPLOAD_BYTES = settings.max_upload_size_bytes
@@ -239,13 +240,21 @@ SKILL_SYNONYM_GROUPS: dict[str, tuple[str, ...]] = {
         ".env ignored",
         "safe logging",
     ),
+    "PostgreSQL": ("PostgreSQL", "Postgres", "PostgreSQL 16"),
+    "Redis": ("Redis", "Redis 7", "message broker", "queue broker"),
+    "Dramatiq": ("Dramatiq", "background worker", "worker queue"),
+    "FastAPI": ("FastAPI", "Python API", "REST API"),
+    "React": ("React", "React frontend", "frontend"),
+    "Docker Compose": ("Docker Compose", "Compose", "container orchestration"),
+    "SSE": ("SSE", "Server-Sent Events", "live progress"),
+    "CI/CD": ("CI/CD", "GitHub Actions", "continuous integration", "continuous delivery"),
 }
 
 configure_logging(settings.log_level)
 logger = logging.getLogger(APP_NAME)
 
 app = FastAPI(
-    title="Personal Job Application Agent API",
+    title="Personal Job Agent API",
     version=APP_VERSION,
     docs_url="/docs" if settings.enable_api_docs else None,
     redoc_url="/redoc" if settings.enable_api_docs else None,
@@ -496,13 +505,10 @@ def skill_synonym_variants(skill: str) -> list[str]:
     normalized_skill = normalize_skill_text(skill)
     for group_name, group_variants in SKILL_SYNONYM_GROUPS.items():
         normalized_group_terms = [normalize_skill_text(item) for item in (group_name, *group_variants)]
-        if any(
-            normalized_skill == term
-            or normalized_skill in term
-            or term in normalized_skill
-            for term in normalized_group_terms
-            if term
-        ):
+        # Synonym expansion is deliberately exact. A generic term such as
+        # "Python" or "worker" must not inherit evidence for the more specific
+        # "Python API" or "background worker" synonym.
+        if normalized_skill in {term for term in normalized_group_terms if term}:
             variants.extend(group_variants)
 
     deduped: list[str] = []
@@ -517,10 +523,25 @@ def skill_synonym_variants(skill: str) -> list[str]:
 
 
 def rag_evidence_contains_skill(skill: str, retrieved_chunks_text: str) -> bool:
-    return any(
-        normalized_phrase_exists(variant, retrieved_chunks_text)
-        for variant in skill_synonym_variants(skill)
-    )
+    heading = normalize_skill_text(chunk_heading(retrieved_chunks_text))
+    if heading.startswith(("known limitations", "future roadmap", "removed features")):
+        return False
+    negation_terms = {"not", "no", "never", "without", "lack", "lacks", "missing", "future", "planned"}
+    for segment in re.split(r"[.;\n]+", normalize_string(retrieved_chunks_text)):
+        segment_tokens = normalize_skill_text(segment).split()
+        if not segment_tokens:
+            continue
+        for variant in skill_synonym_variants(skill):
+            variant_tokens = normalize_skill_text(variant).split()
+            if not variant_tokens or len(variant_tokens) > len(segment_tokens):
+                continue
+            for index in range(len(segment_tokens) - len(variant_tokens) + 1):
+                if segment_tokens[index:index + len(variant_tokens)] != variant_tokens:
+                    continue
+                context = segment_tokens[max(0, index - 3):index + len(variant_tokens) + 3]
+                if not negation_terms.intersection(context):
+                    return True
+    return False
 
 
 def append_unique_skill(items: list[str], skill: str) -> None:
@@ -613,26 +634,29 @@ def normalize_upgraded_resume_bullets(value: Any) -> list[dict[str, str]]:
     return bullets
 
 
-def rag_source_key(source: dict[str, Any]) -> tuple[str, str, int]:
-    return (
-        normalize_string(source.get("document_title")).strip().lower(),
-        normalize_string(source.get("category")).strip().lower(),
-        normalize_int(source.get("chunk_index")),
-    )
+def chunk_heading(content: Any) -> str:
+    for line in normalize_string(content).splitlines():
+        clean = line.strip()
+        if clean.startswith("#"):
+            return clean.lstrip("#").strip()[:160] or "Project Knowledge"
+    return "Project Knowledge"
 
 
-def build_default_rag_sources(retrieved_chunks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def build_default_rag_sources(
+    retrieved_chunks: list[dict[str, Any]],
+    matched_skills: list[str] | None = None,
+) -> list[dict[str, Any]]:
+    matched_skills = matched_skills or []
     return [
         {
+            "document": PROJECT_KNOWLEDGE_SOURCE_PATH,
+            "section": chunk_heading(chunk.get("content")),
             "chunk_id": normalize_int(chunk.get("chunk_id")),
-            "document_id": normalize_int(chunk.get("document_id")),
-            "document_title": normalize_string(chunk.get("document_title")),
-            "category": normalize_string(chunk.get("category")),
-            "chunk_index": normalize_int(chunk.get("chunk_index")),
-            "content_preview": normalize_string(chunk.get("content"))[
-                :RAG_CONTENT_PREVIEW_CHARS
+            "relevance_score": round(float(chunk.get("score") or 0), 4),
+            "supported_skills": [
+                skill for skill in matched_skills
+                if rag_evidence_contains_skill(skill, normalize_string(chunk.get("content")))
             ],
-            "relevance_reason": "该知识库片段与当前岗位描述中的技能、项目或公司信息相关。",
         }
         for chunk in retrieved_chunks
     ]
@@ -642,36 +666,10 @@ def normalize_rag_sources(
     value: Any,
     retrieved_chunks: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
-    retrieved_chunks = retrieved_chunks or []
-    default_sources = build_default_rag_sources(retrieved_chunks)
-    if not isinstance(value, list):
-        return default_sources
-
-    default_by_key = {rag_source_key(source): source for source in default_sources}
-    normalized_sources: list[dict[str, Any]] = []
-
-    for item in value:
-        if not isinstance(item, dict):
-            continue
-
-        source = {
-            "document_title": normalize_string(item.get("document_title")).strip(),
-            "category": normalize_string(item.get("category")).strip(),
-            "chunk_index": normalize_int(item.get("chunk_index")),
-            "relevance_reason": normalize_string(item.get("relevance_reason")).strip(),
-        }
-        matching_source = default_by_key.get(rag_source_key(source))
-        if matching_source:
-            merged_source = {
-                **matching_source,
-                "relevance_reason": source["relevance_reason"]
-                or matching_source["relevance_reason"],
-            }
-            normalized_sources.append(merged_source)
-
-    if normalized_sources:
-        return normalized_sources
-    return default_sources
+    # Source metadata comes exclusively from the trusted retrieval layer. The
+    # model cannot add paths, chunk ids, scores, or content to the response.
+    del value
+    return build_default_rag_sources(retrieved_chunks or [])
 
 
 def apply_rag_supported_skill_corrections(
@@ -685,14 +683,14 @@ def apply_rag_supported_skill_corrections(
     if not retrieved_chunks:
         return []
 
-    retrieved_chunks_text = "\n".join(
-        normalize_string(chunk.get("content")) for chunk in retrieved_chunks
-    )
     corrected_terms: list[str] = []
     remaining_missing_skills: list[str] = []
 
     for skill in missing_skills:
-        if rag_evidence_contains_skill(skill, retrieved_chunks_text):
+        if any(
+            rag_evidence_contains_skill(skill, normalize_string(chunk.get("content")))
+            for chunk in retrieved_chunks
+        ):
             append_unique_skill(matched_skills, skill)
             append_unique_skill(corrected_terms, skill)
         else:
@@ -703,7 +701,10 @@ def apply_rag_supported_skill_corrections(
     missing_keywords = ats_analysis.setdefault("missing_keywords", [])
     remaining_missing_keywords: list[str] = []
     for keyword in missing_keywords:
-        if rag_evidence_contains_skill(keyword, retrieved_chunks_text):
+        if any(
+            rag_evidence_contains_skill(keyword, normalize_string(chunk.get("content")))
+            for chunk in retrieved_chunks
+        ):
             append_unique_skill(matched_keywords, keyword)
             append_unique_skill(corrected_terms, keyword)
         else:
@@ -863,6 +864,97 @@ def reconcile_result_with_rag_evidence(
     return corrected_terms
 
 
+def build_evidence_mapping(
+    matched_skills: list[str],
+    resume_text: str,
+    retrieved_chunks: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    mapping: list[dict[str, Any]] = []
+    for skill in matched_skills:
+        resume_supported = rag_evidence_contains_skill(skill, resume_text)
+        chunk_ids = [
+            normalize_int(chunk.get("chunk_id"))
+            for chunk in retrieved_chunks
+            if rag_evidence_contains_skill(skill, normalize_string(chunk.get("content")))
+        ]
+        if resume_supported:
+            source = "resume"
+        elif chunk_ids:
+            source = "project_knowledge"
+        else:
+            source = "unknown"
+        mapping.append({
+            "skill": skill,
+            "source": source,
+            "evidence": [f"project-knowledge-chunk:{chunk_id}" for chunk_id in chunk_ids],
+        })
+    return mapping
+
+
+def enforce_analysis_grounding(
+    result: dict[str, Any],
+    resume_text: str,
+    retrieved_chunks: list[dict[str, Any]],
+) -> None:
+    mapping = build_evidence_mapping(
+        result.get("matched_skills") or [], resume_text, retrieved_chunks
+    )
+    unsupported_skills = {
+        item["skill"] for item in mapping if item["source"] == "unknown"
+    }
+    if unsupported_skills:
+        result["matched_skills"] = [
+            skill for skill in result.get("matched_skills") or []
+            if skill not in unsupported_skills
+        ]
+        for skill in sorted(unsupported_skills):
+            append_unique_skill(result.setdefault("missing_skills", []), skill)
+        mapping = [item for item in mapping if item["source"] != "unknown"]
+    result["evidence_mapping"] = mapping
+
+    evidence_sources = [EvidenceSource("resume", None, None, resume_text)]
+    evidence_sources.extend(
+        EvidenceSource(
+            "project_knowledge",
+            str(chunk.get("chunk_id") or ""),
+            None,
+            normalize_string(chunk.get("content")),
+        )
+        for chunk in retrieved_chunks
+    )
+    generated_claim_text = "\n".join([
+        normalize_string(result.get("cover_letter")),
+        *[
+            normalize_string(item.get("improved"))
+            for item in result.get("upgraded_resume_bullets") or []
+            if isinstance(item, dict)
+        ],
+    ])
+    claim_links = validate_claims(generated_claim_text, evidence_sources)
+    validation_status, unsupported_count, coverage = validation_summary(claim_links)
+    result["claim_validation"] = {
+        "status": validation_status,
+        "unsupported_claim_count": unsupported_count,
+        "evidence_coverage": coverage,
+        "claims": [
+            {
+                "claim_key": item["claim_key"],
+                "claim_text_hash": item["claim_text_hash"],
+                "source": item["source_type"],
+                "source_id": item["source_id"],
+                "support_status": item["support_status"],
+            }
+            for item in claim_links
+        ],
+    }
+    if unsupported_count:
+        # Never persist or return unsupported application material. The match
+        # analysis remains useful and explicitly reports the blocked output.
+        result["cover_letter"] = ""
+        result["upgraded_resume_bullets"] = []
+        result["claim_validation"]["output_blocked"] = True
+
+
 def call_deepseek_raw(
     resume_text: str,
     job_description: str,
@@ -870,6 +962,35 @@ def call_deepseek_raw(
     analysis_prompt: str | None = None,
 ) -> str:
     runtime_settings = load_config(validate_production=False)
+    if runtime_settings.mock_provider_enabled:
+        if runtime_settings.app_env == "production":
+            raise HTTPException(status_code=500, detail="Mock provider is unavailable in production.")
+        return json.dumps({
+            "company_name": "Synthetic Company",
+            "job_title": "Synthetic Platform Engineer",
+            "job_summary": "A fictional role requiring FastAPI, PostgreSQL, and RAG.",
+            "match_score": 60,
+            "match_reason": "The supplied evidence supports relevant platform engineering skills.",
+            "matched_skills": ["FastAPI"],
+            "missing_skills": ["PostgreSQL", "RAG"],
+            "resume_suggestions": ["Add only evidence-backed project skills."],
+            "cover_letter": "I built FastAPI, PostgreSQL, and RAG systems.",
+            "scoring_breakdown": {
+                "skills_match": {"score": 60, "reason": "Grounded skills.", "evidence": ["FastAPI"]},
+                "project_experience": {"score": 60, "reason": "Grounded project evidence.", "evidence": ["Project Knowledge"]},
+                "education": {"score": 0, "reason": "No evidence.", "evidence": []},
+                "work_experience": {"score": 0, "reason": "No evidence.", "evidence": []},
+                "keyword_match": {"score": 60, "reason": "Grounded keywords.", "evidence": ["FastAPI"]},
+            },
+            "ats_analysis": {
+                "important_keywords": ["FastAPI", "PostgreSQL", "RAG"],
+                "matched_keywords": ["FastAPI"],
+                "missing_keywords": ["PostgreSQL", "RAG"],
+                "keyword_suggestions": [],
+            },
+            "upgraded_resume_bullets": [],
+            "rag_sources": [],
+        })
     api_key = runtime_settings.deepseek_api_key
     if not api_key:
         logger.error("DeepSeek configuration failed error_type=MissingApiKey")
@@ -1097,6 +1218,18 @@ def get_existing_application_record(application_id: int) -> dict[str, Any]:
     record = get_application_record(application_id)
     if record is None:
         raise HTTPException(status_code=404, detail="Application record not found.")
+    return record
+
+
+def get_owned_history_record(application_id: int, request: Request) -> dict[str, Any]:
+    user = getattr(request.state, "v2_user", None)
+    record = get_application_record(
+        application_id,
+        owner_user_id=getattr(user, "id", None),
+        include_unowned=getattr(user, "role", "") == "admin",
+    )
+    if record is None:
+        raise HTTPException(status_code=404, detail="History record not found.")
     return record
 
 
@@ -1434,7 +1567,7 @@ def fail_analysis_and_raise(
 @app.get("/")
 def root() -> dict[str, str]:
     response = {
-        "message": "Personal Job Application Agent API",
+        "message": "Personal Job Agent API",
         "version": APP_VERSION,
         "health": "/api/health",
     }
@@ -1733,6 +1866,7 @@ def search_knowledge(
     raise_generic_knowledge_disabled()
 
 
+@app.get("/api/history")
 @app.get("/api/applications")
 def get_applications(
     request: Request,
@@ -1743,6 +1877,19 @@ def get_applications(
     stage: str | None = Query(None),
     archived: bool = Query(False),
 ) -> Any:
+    current_user = getattr(request.state, "v2_user", None)
+    if request.url.path == "/api/history":
+        clean_status = validate_application_status(status, required=False)
+        clean_search = (search or "").strip() or None
+        items, total = list_application_records(
+            status=clean_status,
+            search=clean_search,
+            limit=limit,
+            offset=offset,
+            owner_user_id=getattr(current_user, "id", None),
+            include_unowned=getattr(current_user, "role", "") == "admin",
+        )
+        return {"items": items, "total": total, "limit": limit, "offset": offset}
     legacy_query = any(key in request.query_params for key in ("status", "search", "limit", "offset"))
     if not legacy_query:
         from app.applications.service import ApplicationService
@@ -1763,6 +1910,7 @@ def get_applications(
     return {"items": items, "total": total, "limit": limit, "offset": offset}
 
 
+@app.get("/api/history/{application_id}")
 @app.get("/api/applications/{application_id}")
 def get_application(application_id: str, request: Request) -> dict[str, Any]:
     from uuid import UUID
@@ -1774,6 +1922,8 @@ def get_application(application_id: str, request: Request) -> dict[str, Any]:
             legacy_id = int(application_id)
         except ValueError as exc:
             raise HTTPException(status_code=404, detail="Application not found.") from exc
+        if request.url.path.startswith("/api/history/"):
+            return get_owned_history_record(legacy_id, request)
         return get_existing_application_record(legacy_id)
     from app.applications.service import ApplicationNotFound, ApplicationService
 
@@ -1787,9 +1937,10 @@ def get_application(application_id: str, request: Request) -> dict[str, Any]:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
+@app.get("/api/history/{application_id}/cover-letter.docx")
 @app.get("/api/applications/{application_id}/cover-letter.docx")
-def export_cover_letter_docx(application_id: int) -> StreamingResponse:
-    record = get_existing_application_record(application_id)
+def export_cover_letter_docx(application_id: int, request: Request) -> StreamingResponse:
+    record = get_owned_history_record(application_id, request) if request.url.path.startswith("/api/history/") else get_existing_application_record(application_id)
     buffer = build_cover_letter_docx(record)
     filename = build_export_filename("cover-letter", record, "docx")
     logger.info("Cover letter export generated application_id=%s", application_id)
@@ -1800,16 +1951,18 @@ def export_cover_letter_docx(application_id: int) -> StreamingResponse:
     )
 
 
+@app.head("/api/history/{application_id}/cover-letter.docx")
 @app.head("/api/applications/{application_id}/cover-letter.docx")
-def head_cover_letter_docx(application_id: int) -> Response:
-    record = get_existing_application_record(application_id)
+def head_cover_letter_docx(application_id: int, request: Request) -> Response:
+    record = get_owned_history_record(application_id, request) if request.url.path.startswith("/api/history/") else get_existing_application_record(application_id)
     filename = build_export_filename("cover-letter", record, "docx")
     return Response(media_type=DOCX_MEDIA_TYPE, headers=attachment_headers(filename))
 
 
+@app.get("/api/history/{application_id}/report.pdf")
 @app.get("/api/applications/{application_id}/report.pdf")
-def export_analysis_report_pdf(application_id: int) -> StreamingResponse:
-    record = get_existing_application_record(application_id)
+def export_analysis_report_pdf(application_id: int, request: Request) -> StreamingResponse:
+    record = get_owned_history_record(application_id, request) if request.url.path.startswith("/api/history/") else get_existing_application_record(application_id)
     buffer = build_analysis_report_pdf(record)
     filename = build_export_filename("analysis-report", record, "pdf")
     logger.info("Analysis report export generated application_id=%s", application_id)
@@ -1820,13 +1973,15 @@ def export_analysis_report_pdf(application_id: int) -> StreamingResponse:
     )
 
 
+@app.head("/api/history/{application_id}/report.pdf")
 @app.head("/api/applications/{application_id}/report.pdf")
-def head_analysis_report_pdf(application_id: int) -> Response:
-    record = get_existing_application_record(application_id)
+def head_analysis_report_pdf(application_id: int, request: Request) -> Response:
+    record = get_owned_history_record(application_id, request) if request.url.path.startswith("/api/history/") else get_existing_application_record(application_id)
     filename = build_export_filename("analysis-report", record, "pdf")
     return Response(media_type=PDF_MEDIA_TYPE, headers=attachment_headers(filename))
 
 
+@app.patch("/api/history/{application_id}")
 @app.patch("/api/applications/{application_id}")
 async def patch_application(application_id: str, request: Request) -> dict[str, Any]:
     from uuid import UUID
@@ -1850,6 +2005,8 @@ async def patch_application(application_id: str, request: Request) -> dict[str, 
             application_status=clean_status,
             notes=payload.notes,
             update_notes=notes_provided,
+            owner_user_id=getattr(getattr(request.state, "v2_user", None), "id", None) if request.url.path.startswith("/api/history/") else None,
+            include_unowned=getattr(getattr(request.state, "v2_user", None), "role", "") == "admin" if request.url.path.startswith("/api/history/") else False,
         )
 
         if updated_record is None:
@@ -1877,16 +2034,20 @@ async def patch_application(application_id: str, request: Request) -> dict[str, 
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
+@app.patch("/api/history/{application_id}/next-action")
 @app.patch("/api/applications/{application_id}/next-action")
 def patch_next_action_decision(
     application_id: int,
     payload: NextActionDecisionUpdate,
+    request: Request,
 ) -> dict[str, Any]:
     decision = validate_next_action_decision(payload.decision)
     updated_record = update_next_action_decision(
         application_id,
         decision=decision,
         notes=payload.notes,
+        owner_user_id=getattr(getattr(request.state, "v2_user", None), "id", None) if request.url.path.startswith("/api/history/") else None,
+        include_unowned=getattr(getattr(request.state, "v2_user", None), "role", "") == "admin" if request.url.path.startswith("/api/history/") else False,
     )
     if updated_record is None:
         raise HTTPException(status_code=404, detail="Application record not found.")
@@ -1900,6 +2061,7 @@ def patch_next_action_decision(
     }
 
 
+@app.delete("/api/history/{application_id}")
 @app.delete("/api/applications/{application_id}")
 async def delete_application(application_id: str, request: Request) -> dict[str, Any]:
     from uuid import UUID
@@ -1911,7 +2073,11 @@ async def delete_application(application_id: str, request: Request) -> dict[str,
             legacy_id = int(application_id)
         except ValueError as exc:
             raise HTTPException(status_code=404, detail="Application not found.") from exc
-        deleted = delete_application_record(legacy_id)
+        deleted = delete_application_record(
+            legacy_id,
+            owner_user_id=getattr(getattr(request.state, "v2_user", None), "id", None) if request.url.path.startswith("/api/history/") else None,
+            include_unowned=getattr(getattr(request.state, "v2_user", None), "role", "") == "admin" if request.url.path.startswith("/api/history/") else False,
+        )
         if not deleted:
             raise HTTPException(status_code=404, detail="Application record not found.")
         return {"deleted": True, "id": legacy_id}
@@ -1945,10 +2111,11 @@ async def analyze(
     job_url: str | None = Form(None),
     save_to_history: bool = Form(True),
     use_knowledge_base: bool = Form(True),
+    use_project_knowledge: bool | None = Form(None),
     rag_top_k: int = Form(5),
+    project_knowledge_top_k: int | None = Form(None),
     rag_mode: str | None = Form(None),
     resume_version_id: str | None = Form(None),
-    job_id: str | None = Form(None),
 ) -> dict[str, Any]:
     logger.info("Received analysis request")
     workflow = AgentWorkflow()
@@ -1982,19 +2149,19 @@ async def analyze(
 
         clean_job_text = (job_text or "").strip()
         clean_job_url = (job_url or "").strip()
-        clean_job_id = (job_id or "").strip()
-        if sum(bool(value) for value in (clean_job_text, clean_job_url, clean_job_id)) != 1:
+        if sum(bool(value) for value in (clean_job_text, clean_job_url)) != 1:
             logger.warning("Analyze request rejected error_type=MissingJobInput")
             raise HTTPException(
                 status_code=400,
-                detail="Provide exactly one Job source: job_id, job description text, or job URL.",
+                detail="Provide exactly one job source: job description text or job URL.",
             )
 
         context.resume_filename = resume_filename or ("Stored Resume Version" if clean_resume_version_id else None)
         context.job_url = clean_job_url or None
-        context.source_type = "saved_job" if clean_job_id else "text" if clean_job_text else "url"
-        context.rag_mode = resolve_rag_mode(use_knowledge_base, rag_mode)
-        context.rag_top_k = clamp_rag_top_k(rag_top_k)
+        context.source_type = "text" if clean_job_text else "url"
+        effective_use_project_knowledge = use_knowledge_base if use_project_knowledge is None else use_project_knowledge
+        context.rag_mode = resolve_rag_mode(effective_use_project_knowledge, rag_mode)
+        context.rag_top_k = clamp_rag_top_k(project_knowledge_top_k if project_knowledge_top_k is not None else rag_top_k)
         workflow.complete_step(
             "validate_input",
             f"Input accepted. RAG mode: {context.rag_mode}; top_k: {context.rag_top_k}.",
@@ -2048,19 +2215,7 @@ async def analyze(
 
     workflow.start_step("acquire_job_description", "Acquire Job Description")
     try:
-        if clean_job_id:
-            from uuid import UUID
-
-            from app.jobs.service import JobService
-
-            current_user = getattr(request.state, "v2_user", None)
-            current_db = getattr(request.state, "v2_db", None)
-            if current_user is None or current_db is None:
-                raise HTTPException(status_code=401, detail="Authentication required.")
-            job_description = str(JobService(current_db, current_user.id).get(UUID(clean_job_id))["description"])
-            source_message = "Used an owned Job Library description."
-            logger.info("Owned Job description received characters=%s", len(job_description))
-        elif clean_job_text:
+        if clean_job_text:
             job_description = clean_job_text
             source_message = "Used pasted job description text."
             logger.info("JD text received characters=%s", len(job_description))
@@ -2126,7 +2281,7 @@ async def analyze(
     logger.info(
         "Analyze RAG settings rag_mode=%s use_knowledge_base=%s rag_top_k=%s",
         context.rag_mode,
-        use_knowledge_base,
+        context.rag_mode == "project",
         context.rag_top_k,
     )
     if context.rag_mode == "off":
@@ -2342,13 +2497,18 @@ async def analyze(
         result["used_knowledge_base"] = bool(
             context.rag_mode == "project" and context.retrieved_chunks
         )
+        result["retrieval_count"] = len(context.retrieved_chunks)
+        enforce_analysis_grounding(
+            result,
+            context.sanitized_resume_text,
+            context.retrieved_chunks,
+        )
+        result["rag_sources"] = build_default_rag_sources(
+            context.retrieved_chunks,
+            result.get("matched_skills") or [],
+        )
         if not result["used_knowledge_base"]:
             result["rag_sources"] = []
-        if context.security_filtered_rag_sources:
-            result["rag_sources"] = [
-                *(result.get("rag_sources") or []),
-                *context.security_filtered_rag_sources,
-            ]
         workflow.complete_step(
             "reconcile_evidence",
             (
@@ -2400,6 +2560,7 @@ async def analyze(
                 result,
                 job_url=context.job_url,
                 resume_filename=context.resume_filename,
+                owner_user_id=getattr(getattr(request.state, "v2_user", None), "id", None),
             )
             context.saved_to_history = True
             workflow.complete_step(
