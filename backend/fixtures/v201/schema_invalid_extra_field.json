@@ -1,0 +1,12 @@
+{
+  "id": "mock-schema-invalid",
+  "choices": [
+    {
+      "finish_reason": "stop",
+      "message": {
+        "content": "{\"matched_skills\":[],\"missing_skills\":[],\"unknown_skills\":[],\"concise_dimension_assessments\":{\"skills_match\":{\"score\":0,\"assessment\":\"No evidence.\",\"evidence_ids\":[]},\"project_experience\":{\"score\":0,\"assessment\":\"No evidence.\",\"evidence_ids\":[]},\"education\":{\"score\":0,\"assessment\":\"No evidence.\",\"evidence_ids\":[]},\"work_experience\":{\"score\":0,\"assessment\":\"No evidence.\",\"evidence_ids\":[]},\"keyword_match\":{\"score\":0,\"assessment\":\"No evidence.\",\"evidence_ids\":[]}},\"evidence_references\":[],\"unsupported_claim_candidates\":[],\"concise_recommendations\":[],\"rag_sources\":[{\"content\":\"must be rejected\"}]}"
+      }
+    }
+  ],
+  "usage": {"prompt_tokens": 500, "completion_tokens": 190, "total_tokens": 690}
+}

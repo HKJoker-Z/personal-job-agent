@@ -1,0 +1,12 @@
+{
+  "id": "mock-valid-with-unsupported-claim",
+  "choices": [
+    {
+      "finish_reason": "stop",
+      "message": {
+        "content": "{\"matched_skills\":[\"PostgreSQL\"],\"missing_skills\":[\"Kubernetes\"],\"unknown_skills\":[],\"concise_dimension_assessments\":{\"skills_match\":{\"score\":70,\"assessment\":\"PostgreSQL has direct project evidence.\",\"evidence_ids\":[\"pk:11\"]},\"project_experience\":{\"score\":70,\"assessment\":\"Implementation evidence is available.\",\"evidence_ids\":[\"pk:11\"]},\"education\":{\"score\":0,\"assessment\":\"No education evidence.\",\"evidence_ids\":[]},\"work_experience\":{\"score\":0,\"assessment\":\"No work evidence.\",\"evidence_ids\":[]},\"keyword_match\":{\"score\":70,\"assessment\":\"One requested keyword is supported.\",\"evidence_ids\":[\"pk:11\"]}},\"evidence_references\":[{\"skill\":\"PostgreSQL\",\"evidence_ids\":[\"pk:11\"]}],\"unsupported_claim_candidates\":[\"Led 20 engineers and increased revenue by 75%.\"],\"concise_recommendations\":[\"Use only the verified implementation evidence.\"]}"
+      }
+    }
+  ],
+  "usage": {"prompt_tokens": 850, "completion_tokens": 230, "total_tokens": 1080}
+}

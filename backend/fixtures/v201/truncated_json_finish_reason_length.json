@@ -1,0 +1,12 @@
+{
+  "id": "mock-truncated-length",
+  "choices": [
+    {
+      "finish_reason": "length",
+      "message": {
+        "content": "{\"matched_skills\":[\"PostgreSQL\"],\"missing_skills\":[\"Kubernetes\"],\"unknown_skills\":[],\"concise_dimension_assessments\":{"
+      }
+    }
+  ],
+  "usage": {"prompt_tokens": 2923, "completion_tokens": 800, "total_tokens": 3723}
+}

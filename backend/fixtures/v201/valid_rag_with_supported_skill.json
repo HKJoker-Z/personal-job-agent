@@ -1,0 +1,12 @@
+{
+  "id": "mock-valid-supported-skill",
+  "choices": [
+    {
+      "finish_reason": "stop",
+      "message": {
+        "content": "{\"matched_skills\":[\"PostgreSQL\",\"Redis\"],\"missing_skills\":[\"Kubernetes\"],\"unknown_skills\":[],\"concise_dimension_assessments\":{\"skills_match\":{\"score\":80,\"assessment\":\"Two required skills are supported.\",\"evidence_ids\":[\"pk:11\",\"pk:17\"]},\"project_experience\":{\"score\":75,\"assessment\":\"Project implementation evidence is relevant.\",\"evidence_ids\":[\"pk:11\",\"pk:17\"]},\"education\":{\"score\":0,\"assessment\":\"No education evidence.\",\"evidence_ids\":[]},\"work_experience\":{\"score\":0,\"assessment\":\"No work evidence.\",\"evidence_ids\":[]},\"keyword_match\":{\"score\":80,\"assessment\":\"Supported keywords match.\",\"evidence_ids\":[\"pk:11\",\"pk:17\"]}},\"evidence_references\":[{\"skill\":\"PostgreSQL\",\"evidence_ids\":[\"pk:11\"]},{\"skill\":\"Redis\",\"evidence_ids\":[\"pk:17\"]}],\"unsupported_claim_candidates\":[],\"concise_recommendations\":[\"Keep Kubernetes listed as a gap unless verified evidence is added.\"]}"
+      }
+    }
+  ],
+  "usage": {"prompt_tokens": 900, "completion_tokens": 250, "total_tokens": 1150}
+}

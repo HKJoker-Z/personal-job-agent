@@ -2,6 +2,7 @@ import json
 import logging
 import os
 import re
+import time
 from io import BytesIO
 from pathlib import Path
 from typing import Any
@@ -18,6 +19,16 @@ from pydantic import BaseModel, ValidationError
 from pypdf import PdfReader
 
 from agent_workflow import AgentWorkflow, WorkflowContext
+from analysis_contract import (
+    MODEL_PROVIDER_ERROR,
+    CompactAnalysisOutput,
+    ModelOutputError,
+    ProviderAnalysisResponse,
+    adapt_provider_completion,
+    parse_model_json,
+    safe_model_metadata,
+    validate_compact_analysis,
+)
 from app.jobs.acquisition import SafeJobUrlFetcher, UnsafeJobUrl
 from app.materials.grounding import EvidenceSource, validate_claims, validation_summary
 from config import APP_VERSION, load_config
@@ -428,35 +439,9 @@ def fetch_job_text_from_url(job_url: str) -> str:
 
 
 def parse_ai_json_response(raw_response: str) -> dict[str, Any]:
-    try:
-        parsed = json.loads(raw_response)
-    except json.JSONDecodeError:
-        start = raw_response.find("{")
-        end = raw_response.rfind("}")
-        if start == -1 or end == -1 or end <= start:
-            logger.warning("AI JSON parsing failed error_type=NoJsonObject")
-            raise HTTPException(
-                status_code=502,
-                detail="AI response was not valid JSON. Please try again.",
-            )
-
-        try:
-            parsed = json.loads(raw_response[start : end + 1])
-        except json.JSONDecodeError as exc:
-            logger.warning("AI JSON parsing failed error_type=%s", type(exc).__name__)
-            raise HTTPException(
-                status_code=502,
-                detail="AI response was not valid JSON. Please try again.",
-            ) from exc
-
-    if not isinstance(parsed, dict):
-        logger.warning("AI JSON parsing failed error_type=NonObjectJson")
-        raise HTTPException(
-            status_code=502,
-            detail="AI response was not valid JSON. Please try again.",
-        )
-
-    return parsed
+    # Strict by design: never extract a JSON-looking substring from markdown,
+    # prose, or a truncated response and never repair missing delimiters.
+    return parse_model_json(raw_response)
 
 
 def normalize_score(value: Any) -> int:
@@ -826,6 +811,153 @@ def normalize_result(
     }
 
 
+def compact_analysis_to_result(
+    analysis: CompactAnalysisOutput,
+) -> dict[str, Any]:
+    """Convert the strict model contract into the stable frontend contract."""
+    compact = analysis.model_dump()
+    dimensions = compact["concise_dimension_assessments"]
+    scoring_breakdown = {
+        key: {
+            "score": value["score"],
+            "reason": value["assessment"],
+            "evidence": list(value["evidence_ids"]),
+        }
+        for key, value in dimensions.items()
+    }
+    matched_skills = list(compact["matched_skills"])
+    missing_skills = list(compact["missing_skills"])
+    unknown_skills = list(compact["unknown_skills"])
+    result = normalize_result(
+        {
+            "matched_skills": matched_skills,
+            "missing_skills": missing_skills,
+            "resume_suggestions": compact["concise_recommendations"],
+            "scoring_breakdown": scoring_breakdown,
+            "ats_analysis": {
+                "important_keywords": [*matched_skills, *missing_skills, *unknown_skills],
+                "matched_keywords": matched_skills,
+                "missing_keywords": [*missing_skills, *unknown_skills],
+                "keyword_suggestions": compact["concise_recommendations"],
+            },
+            "cover_letter": "",
+            "upgraded_resume_bullets": [],
+        },
+        retrieved_rag_chunks=[],
+        apply_rag_corrections=False,
+    )
+    result["unknown_skills"] = unknown_skills
+    result["_model_evidence_references"] = compact["evidence_references"]
+    result["_unsupported_claim_candidates"] = compact["unsupported_claim_candidates"]
+    return result
+
+
+def coordinate_skill_states(result: dict[str, Any]) -> None:
+    """Ensure a skill appears in exactly one final state, preferring matched."""
+    matched = normalize_list(result.get("matched_skills"))
+    matched_keys = {normalize_skill_text(item) for item in matched}
+    missing = [
+        item for item in normalize_list(result.get("missing_skills"))
+        if normalize_skill_text(item) not in matched_keys
+    ]
+    missing_keys = {normalize_skill_text(item) for item in missing}
+    unknown = [
+        item for item in normalize_list(result.get("unknown_skills"))
+        if normalize_skill_text(item) not in matched_keys
+        and normalize_skill_text(item) not in missing_keys
+    ]
+    result["matched_skills"] = matched
+    result["missing_skills"] = missing
+    result["unknown_skills"] = unknown
+
+
+def validate_model_evidence_references(
+    result: dict[str, Any],
+    *,
+    resume_text: str,
+    retrieved_chunks: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Accept only current-request IDs whose text actually supports the skill."""
+    chunks_by_id = {
+        normalize_int(chunk.get("chunk_id")): chunk
+        for chunk in retrieved_chunks
+        if normalize_int(chunk.get("chunk_id")) > 0
+    }
+    references = result.pop("_model_evidence_references", [])
+    reference_by_skill = {
+        normalize_skill_text(item.get("skill")): item
+        for item in references
+        if isinstance(item, dict)
+    }
+    valid_matched: list[str] = []
+    mapping: list[dict[str, Any]] = []
+    rejected_ids: list[str] = []
+    rejected_skills: list[str] = []
+
+    for skill in normalize_list(result.get("matched_skills")):
+        reference = reference_by_skill.get(normalize_skill_text(skill), {})
+        valid_ids: list[str] = []
+        for evidence_id in normalize_list(reference.get("evidence_ids")):
+            if evidence_id == "resume":
+                if rag_evidence_contains_skill(skill, resume_text):
+                    valid_ids.append(evidence_id)
+                else:
+                    rejected_ids.append(evidence_id)
+                continue
+            if not evidence_id.startswith("pk:"):
+                rejected_ids.append(evidence_id)
+                continue
+            chunk_id = normalize_int(evidence_id.removeprefix("pk:"))
+            chunk = chunks_by_id.get(chunk_id)
+            if chunk and rag_evidence_contains_skill(skill, normalize_string(chunk.get("content"))):
+                valid_ids.append(evidence_id)
+            else:
+                rejected_ids.append(evidence_id)
+
+        if not valid_ids:
+            append_unique_skill(result.setdefault("unknown_skills", []), skill)
+            rejected_skills.append(skill)
+            continue
+
+        valid_matched.append(skill)
+        project_ids = [item.removeprefix("pk:") for item in valid_ids if item.startswith("pk:")]
+        mapping.append({
+            "skill": skill,
+            "source": "resume" if "resume" in valid_ids else "project_knowledge",
+            "evidence": [f"project-knowledge-chunk:{item}" for item in project_ids],
+        })
+
+    result["matched_skills"] = valid_matched
+    result["evidence_mapping"] = mapping
+    allowed_dimension_ids = {"resume", *(f"pk:{item}" for item in chunks_by_id)}
+    for section in (result.get("scoring_breakdown") or {}).values():
+        if not isinstance(section, dict):
+            continue
+        safe_evidence: list[str] = []
+        for evidence_id in normalize_list(section.get("evidence")):
+            if evidence_id not in allowed_dimension_ids:
+                rejected_ids.append(evidence_id)
+                continue
+            safe_evidence.append(
+                evidence_id if evidence_id == "resume"
+                else f"project-knowledge-chunk:{evidence_id.removeprefix('pk:')}"
+            )
+        section["evidence"] = safe_evidence
+        if not safe_evidence:
+            section["score"] = 0
+            section["reason"] = "No validated evidence supports this dimension."
+
+    coordinate_skill_states(result)
+    validation = {
+        "status": "passed" if not rejected_ids else "completed_with_rejections",
+        "rejected_reference_count": len(rejected_ids),
+        "rejected_evidence_ids": sorted(set(rejected_ids))[:10],
+        "rejected_skills": rejected_skills[:10],
+    }
+    result["evidence_reference_validation"] = validation
+    return validation
+
+
 def reconcile_result_with_rag_evidence(
     result: dict[str, Any],
     retrieved_rag_chunks: list[dict[str, Any]],
@@ -861,6 +993,7 @@ def reconcile_result_with_rag_evidence(
             f"{', '.join(corrected_terms[:8])}."
         ).strip()
         result["match_score"] = calculate_weighted_match_score(scoring_breakdown)
+    coordinate_skill_states(result)
     return corrected_terms
 
 
@@ -922,6 +1055,7 @@ def enforce_analysis_grounding(
         )
         for chunk in retrieved_chunks
     )
+    unsupported_candidates = normalize_list(result.pop("_unsupported_claim_candidates", []))
     generated_claim_text = "\n".join([
         normalize_string(result.get("cover_letter")),
         *[
@@ -929,6 +1063,7 @@ def enforce_analysis_grounding(
             for item in result.get("upgraded_resume_bullets") or []
             if isinstance(item, dict)
         ],
+        *unsupported_candidates,
     ])
     claim_links = validate_claims(generated_claim_text, evidence_sources)
     validation_status, unsupported_count, coverage = validation_summary(claim_links)
@@ -960,40 +1095,35 @@ def call_deepseek_raw(
     job_description: str,
     rag_chunks: list[dict[str, Any]] | None = None,
     analysis_prompt: str | None = None,
-    usage_out: dict[str, int] | None = None,
-) -> str:
+    usage_out: dict[str, Any] | None = None,
+) -> ProviderAnalysisResponse:
     runtime_settings = load_config(validate_production=False)
     if runtime_settings.mock_provider_enabled:
         if runtime_settings.app_env == "production":
             raise HTTPException(status_code=500, detail="Mock provider is unavailable in production.")
-        if usage_out is not None:
-            usage_out.update({"input_tokens": 0, "output_tokens": 0, "total_tokens": 0})
-        return json.dumps({
-            "company_name": "Synthetic Company",
-            "job_title": "Synthetic Platform Engineer",
-            "job_summary": "A fictional role requiring FastAPI, PostgreSQL, and RAG.",
-            "match_score": 60,
-            "match_reason": "The supplied evidence supports relevant platform engineering skills.",
+        content = json.dumps({
             "matched_skills": ["FastAPI"],
             "missing_skills": ["PostgreSQL", "RAG"],
-            "resume_suggestions": ["Add only evidence-backed project skills."],
-            "cover_letter": "I built FastAPI, PostgreSQL, and RAG systems.",
-            "scoring_breakdown": {
-                "skills_match": {"score": 60, "reason": "Grounded skills.", "evidence": ["FastAPI"]},
-                "project_experience": {"score": 60, "reason": "Grounded project evidence.", "evidence": ["Project Knowledge"]},
-                "education": {"score": 0, "reason": "No evidence.", "evidence": []},
-                "work_experience": {"score": 0, "reason": "No evidence.", "evidence": []},
-                "keyword_match": {"score": 60, "reason": "Grounded keywords.", "evidence": ["FastAPI"]},
+            "unknown_skills": [],
+            "concise_dimension_assessments": {
+                "skills_match": {"score": 60, "assessment": "FastAPI is supported.", "evidence_ids": ["resume"]},
+                "project_experience": {"score": 0, "assessment": "No project evidence was used.", "evidence_ids": []},
+                "education": {"score": 0, "assessment": "No education evidence.", "evidence_ids": []},
+                "work_experience": {"score": 20, "assessment": "Resume evidence is limited.", "evidence_ids": ["resume"]},
+                "keyword_match": {"score": 60, "assessment": "FastAPI matches the job input.", "evidence_ids": ["resume"]},
             },
-            "ats_analysis": {
-                "important_keywords": ["FastAPI", "PostgreSQL", "RAG"],
-                "matched_keywords": ["FastAPI"],
-                "missing_keywords": ["PostgreSQL", "RAG"],
-                "keyword_suggestions": [],
-            },
-            "upgraded_resume_bullets": [],
-            "rag_sources": [],
+            "evidence_references": [{"skill": "FastAPI", "evidence_ids": ["resume"]}],
+            "unsupported_claim_candidates": [],
+            "concise_recommendations": ["Add only verified project evidence."],
         })
+        metadata = safe_model_metadata({
+            "finish_reason": "stop",
+            "response_length": len(content),
+            "latency_ms": 0,
+        })
+        if usage_out is not None:
+            usage_out.update(metadata)
+        return ProviderAnalysisResponse(content=content, metadata=metadata)
     api_key = runtime_settings.deepseek_api_key
     if not api_key:
         logger.error("DeepSeek configuration failed error_type=MissingApiKey")
@@ -1008,6 +1138,7 @@ def call_deepseek_raw(
         timeout=runtime_settings.request_timeout_seconds,
     )
 
+    started = time.perf_counter()
     try:
         logger.info("DeepSeek call started")
         completion = client.chat.completions.create(
@@ -1034,45 +1165,55 @@ def call_deepseek_raw(
             temperature=0.2,
             max_tokens=runtime_settings.model_max_output_tokens,
         )
-    except TimeoutError as exc:
-        logger.warning("DeepSeek call failed error_type=Timeout")
-        raise HTTPException(
-            status_code=502,
-            detail="DeepSeek API request timed out. Please try again.",
-        ) from exc
     except Exception as exc:
-        error_type = type(exc).__name__
-        logger.warning("DeepSeek call failed error_type=%s", error_type)
-        if "timeout" in error_type.lower():
-            detail = "DeepSeek API request timed out. Please try again."
-        else:
-            detail = "DeepSeek API request failed. Please try again."
-        raise HTTPException(status_code=502, detail=detail) from exc
+        latency_ms = round((time.perf_counter() - started) * 1000, 3)
+        metadata = safe_model_metadata({"latency_ms": latency_ms})
+        if usage_out is not None:
+            usage_out.update(metadata)
+        logger.warning(
+            "DeepSeek call failed error_code=%s error_type=%s latency_ms=%s",
+            MODEL_PROVIDER_ERROR,
+            type(exc).__name__,
+            latency_ms,
+        )
+        raise ModelOutputError(MODEL_PROVIDER_ERROR, metadata=metadata) from exc
 
+    latency_ms = round((time.perf_counter() - started) * 1000, 3)
     try:
-        content = completion.choices[0].message.content or ""
-    except (AttributeError, IndexError) as exc:
-        logger.warning("DeepSeek call failed error_type=EmptyResponse")
-        raise HTTPException(
-            status_code=502,
-            detail="DeepSeek API response was empty. Please try again.",
-        ) from exc
+        response = adapt_provider_completion(
+            completion,
+            max_output_tokens=runtime_settings.model_max_output_tokens,
+            latency_ms=latency_ms,
+        )
+    except ModelOutputError as exc:
+        if usage_out is not None:
+            usage_out.update(exc.metadata)
+        logger.warning(
+            "DeepSeek output rejected error_code=%s finish_reason=%s output_tokens=%s "
+            "response_length=%s reached_token_limit=%s latency_ms=%s",
+            exc.error_code,
+            exc.metadata.get("finish_reason"),
+            exc.metadata.get("output_tokens"),
+            exc.metadata.get("response_length"),
+            exc.metadata.get("reached_token_limit"),
+            exc.metadata.get("latency_ms"),
+        )
+        raise
 
-    usage = getattr(completion, "usage", None)
-    model_usage = {
-        "input_tokens": max(int(getattr(usage, "prompt_tokens", 0) or 0), 0),
-        "output_tokens": max(int(getattr(usage, "completion_tokens", 0) or 0), 0),
-        "total_tokens": max(int(getattr(usage, "total_tokens", 0) or 0), 0),
-    }
     if usage_out is not None:
-        usage_out.update(model_usage)
+        usage_out.update(response.metadata)
     logger.info(
-        "DeepSeek call succeeded input_tokens=%s output_tokens=%s total_tokens=%s",
-        model_usage["input_tokens"],
-        model_usage["output_tokens"],
-        model_usage["total_tokens"],
+        "DeepSeek call succeeded finish_reason=%s input_tokens=%s output_tokens=%s "
+        "total_tokens=%s response_length=%s reached_token_limit=%s latency_ms=%s",
+        response.metadata.get("finish_reason"),
+        response.metadata.get("input_tokens"),
+        response.metadata.get("output_tokens"),
+        response.metadata.get("total_tokens"),
+        response.metadata.get("response_length"),
+        response.metadata.get("reached_token_limit"),
+        response.metadata.get("latency_ms"),
     )
-    return content
+    return response
 
 
 def analyze_with_deepseek(
@@ -1085,14 +1226,27 @@ def analyze_with_deepseek(
         job_description=job_description,
         rag_chunks=rag_chunks or [],
     )
-    content = call_deepseek_raw(
+    provider_response = call_deepseek_raw(
         resume_text,
         job_description,
         rag_chunks or [],
         analysis_prompt=safe_prompt,
     )
-    parsed = parse_ai_json_response(content)
-    result = normalize_result(parsed, retrieved_rag_chunks=rag_chunks or [])
+    parsed = parse_ai_json_response(provider_response.content)
+    compact = validate_compact_analysis(parsed)
+    result = compact_analysis_to_result(compact)
+    validate_model_evidence_references(
+        result,
+        resume_text=resume_text,
+        retrieved_chunks=rag_chunks or [],
+    )
+    reconcile_result_with_rag_evidence(result, rag_chunks or [])
+    enforce_analysis_grounding(result, resume_text, rag_chunks or [])
+    result["used_knowledge_base"] = bool(rag_chunks)
+    result["retrieval_count"] = len(rag_chunks or [])
+    result["rag_sources"] = build_default_rag_sources(
+        rag_chunks or [], result.get("matched_skills") or []
+    )
     return result
 
 
@@ -1444,7 +1598,9 @@ REMAINING_WORKFLOW_STEPS = (
     ("build_safe_prompt", "Build Safe Prompt"),
     ("run_llm_analysis", "Run LLM Analysis"),
     ("scan_llm_output", "Scan LLM Output"),
+    ("parse_model_json", "Parse Model JSON"),
     ("validate_structured_output", "Validate Structured Output"),
+    ("validate_evidence_references", "Validate Evidence References"),
     ("reconcile_evidence", "Reconcile Evidence"),
     ("recommend_next_action", "Recommend Next Action"),
     ("save_application", "Save Application"),
@@ -1559,14 +1715,48 @@ def fail_analysis_and_raise(
     error_code: str,
     exc: Exception,
 ) -> None:
-    workflow.fail_step(step_key, message)
+    effective_error_code = (
+        exc.error_code if isinstance(exc, ModelOutputError) else error_code
+    )
+    effective_message = (
+        exc.safe_message if isinstance(exc, ModelOutputError) else message
+    )
+    workflow.fail_step(step_key, effective_message)
     record_analysis_observation(
         workflow,
         context,
         outcome="failed",
-        error_code=error_code,
+        error_code=effective_error_code,
         error_stage=step_key,
     )
+    if isinstance(exc, ModelOutputError):
+        metadata = safe_model_metadata(exc.metadata or context.model_metadata)
+        context.model_metadata = metadata
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "message": exc.safe_message,
+                "workflow_id": context.workflow_id,
+                "error_code": effective_error_code,
+                "error_stage": step_key,
+                "model_metadata": {
+                    key: metadata.get(key)
+                    for key in (
+                        "finish_reason",
+                        "input_tokens",
+                        "output_tokens",
+                        "total_tokens",
+                        "response_length",
+                        "reached_token_limit",
+                        "latency_ms",
+                    )
+                },
+                "rag_diagnostics": {
+                    "retrieval_succeeded": bool(context.rag_mode == "project"),
+                    "retrieval_count": len(context.retrieved_chunks),
+                },
+            },
+        ) from exc
     if isinstance(exc, HTTPException):
         message = exc.detail if isinstance(exc.detail, str) else "Request failed."
         raise HTTPException(
@@ -1574,7 +1764,7 @@ def fail_analysis_and_raise(
             detail={
                 "message": message,
                 "workflow_id": context.workflow_id,
-                "error_code": error_code,
+                "error_code": effective_error_code,
                 "error_stage": step_key,
             },
         ) from exc
@@ -2424,14 +2614,19 @@ async def analyze(
 
     workflow.start_step("run_llm_analysis", "Run LLM Analysis")
     try:
-        context.llm_raw_response = call_deepseek_raw(
+        provider_response = call_deepseek_raw(
             context.sanitized_resume_text,
             context.sanitized_job_text,
             context.retrieved_chunks,
             analysis_prompt=context.safe_prompt,
-            usage_out=context.model_usage,
+            usage_out=context.model_metadata,
         )
-        workflow.complete_step("run_llm_analysis", "DeepSeek returned a JSON response.")
+        context.llm_raw_response = provider_response.content
+        context.model_metadata = dict(provider_response.metadata)
+        workflow.complete_step(
+            "run_llm_analysis",
+            "Provider returned a complete response with safe completion metadata.",
+        )
     except Exception as exc:
         fail_analysis_and_raise(
             workflow,
@@ -2483,27 +2678,63 @@ async def analyze(
             exc=exc,
         )
 
-    workflow.start_step("validate_structured_output", "Validate Structured Output")
+    workflow.start_step("parse_model_json", "Parse Model JSON")
     try:
         parsed = parse_ai_json_response(context.llm_raw_response)
-        result = normalize_result(
-            parsed,
-            retrieved_rag_chunks=context.retrieved_chunks,
-            apply_rag_corrections=False,
-        )
         context.json_parse_success = True
-        workflow.complete_step(
-            "validate_structured_output",
-            "LLM JSON parsed and normalized successfully.",
-        )
+        workflow.complete_step("parse_model_json", "Model output is one valid JSON object.")
     except Exception as exc:
         context.json_parse_success = False
         fail_analysis_and_raise(
             workflow,
             context,
+            step_key="parse_model_json",
+            message="Model JSON parsing failed safely.",
+            error_code="MODEL_OUTPUT_INVALID_JSON",
+            exc=exc,
+        )
+
+    workflow.start_step("validate_structured_output", "Validate Structured Output")
+    try:
+        compact_analysis = validate_compact_analysis(parsed)
+        result = compact_analysis_to_result(compact_analysis)
+        workflow.complete_step(
+            "validate_structured_output",
+            "Model JSON passed the strict compact analysis Schema.",
+        )
+    except Exception as exc:
+        fail_analysis_and_raise(
+            workflow,
+            context,
             step_key="validate_structured_output",
             message="Structured output validation failed.",
-            error_code="STRUCTURED_OUTPUT_VALIDATION_FAILED",
+            error_code="MODEL_OUTPUT_SCHEMA_INVALID",
+            exc=exc,
+        )
+
+    workflow.start_step("validate_evidence_references", "Validate Evidence References")
+    try:
+        evidence_validation = validate_model_evidence_references(
+            result,
+            resume_text=context.sanitized_resume_text,
+            retrieved_chunks=context.retrieved_chunks,
+        )
+        if evidence_validation["rejected_reference_count"]:
+            workflow.add_warning()
+        workflow.complete_step(
+            "validate_evidence_references",
+            (
+                "Validated model evidence IDs against the current request; rejected "
+                f"{evidence_validation['rejected_reference_count']} reference(s)."
+            ),
+        )
+    except Exception as exc:
+        fail_analysis_and_raise(
+            workflow,
+            context,
+            step_key="validate_evidence_references",
+            message="Evidence reference validation failed safely.",
+            error_code="EVIDENCE_REFERENCE_VALIDATION_FAILED",
             exc=exc,
         )
 
@@ -2521,6 +2752,7 @@ async def analyze(
             context.sanitized_resume_text,
             context.retrieved_chunks,
         )
+        result["match_score"] = calculate_weighted_match_score(result["scoring_breakdown"])
         result["rag_sources"] = build_default_rag_sources(
             context.retrieved_chunks,
             result.get("matched_skills") or [],
@@ -2616,7 +2848,14 @@ async def analyze(
         )
         result["security_status"] = result.get("security_status") or context.security_status
         result["security_policy_version"] = SECURITY_POLICY_VERSION
-        result["model_usage"] = dict(context.model_usage)
+        result["model_usage"] = {
+            key: normalize_int(context.model_metadata.get(key))
+            for key in ("input_tokens", "output_tokens", "total_tokens")
+        }
+        result["model_completion"] = {
+            key: context.model_metadata.get(key)
+            for key in ("finish_reason", "response_length", "reached_token_limit", "latency_ms")
+        }
         workflow.complete_step(
             "finalize_result",
             "Final API response prepared with workflow audit trail.",

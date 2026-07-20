@@ -1,4 +1,4 @@
-import React, { Component, useEffect, useState } from "react";
+import React, { Component, useEffect, useRef, useState } from "react";
 import { apiFetch } from "./api/client";
 
 const API_BASE_URL = import.meta.env.DEV ? (import.meta.env.VITE_API_BASE_URL || "") : "";
@@ -15,6 +15,13 @@ const SCORING_DIMENSIONS = [
   { key: "work_experience", label: "Work Experience" },
   { key: "keyword_match", label: "Keyword Match" },
 ];
+const ANALYSIS_MODEL_ERROR_MESSAGES = {
+  MODEL_OUTPUT_TRUNCATED: "The model response was cut off before completion. No analysis was saved. Please retry with a more focused input.",
+  MODEL_OUTPUT_INVALID_JSON: "The model returned an invalid structured response. No analysis was saved; you can safely retry.",
+  MODEL_OUTPUT_SCHEMA_INVALID: "The model response did not match the required analysis format. No partial result was accepted.",
+  MODEL_OUTPUT_EMPTY: "The model returned an empty response. No analysis was saved; you can safely retry.",
+  MODEL_PROVIDER_ERROR: "The model provider request failed safely. No analysis was saved; please retry later.",
+};
 
 function asArray(value) {
   return Array.isArray(value) ? value : [];
@@ -138,6 +145,13 @@ function getRequestErrorMessage(error, fallback) {
 
 function getRequestErrorPayload(error) {
   return error?.payload && typeof error.payload === "object" ? error.payload : null;
+}
+
+function getAnalysisErrorMessage(error) {
+  const payload = getRequestErrorPayload(error);
+  const errorCode = typeof payload?.error_code === "string" ? payload.error_code : "";
+  return ANALYSIS_MODEL_ERROR_MESSAGES[errorCode]
+    || getRequestErrorMessage(error, "Analyze request failed.");
 }
 
 async function requestJson(url, options, fallback) {
@@ -820,6 +834,7 @@ function AnalyzePage() {
   const [error, setError] = useState("");
   const [securityError, setSecurityError] = useState(null);
   const [result, setResult] = useState(null);
+  const submittingRef = useRef(false);
 
   useEffect(() => {
     requestJson(`${API_BASE_URL}/api/resumes`, undefined, "Stored resumes are unavailable.")
@@ -838,7 +853,7 @@ function AnalyzePage() {
 
   async function handleAnalyze(event) {
     event.preventDefault();
-    if (loading) {
+    if (loading || submittingRef.current) {
       return;
     }
 
@@ -874,6 +889,7 @@ function AnalyzePage() {
     formData.append("rag_top_k", String(Math.max(1, Math.min(10, Number(ragTopK) || 5))));
     formData.append("project_knowledge_top_k", String(Math.max(1, Math.min(10, Number(ragTopK) || 5))));
 
+    submittingRef.current = true;
     setLoading(true);
     try {
       const data = await requestJson(
@@ -890,8 +906,9 @@ function AnalyzePage() {
       if (err.payload?.security_status === "blocked") {
         setSecurityError(err.payload);
       }
-      setError(getRequestErrorMessage(err, "Analyze request failed."));
+      setError(getAnalysisErrorMessage(err));
     } finally {
+      submittingRef.current = false;
       setLoading(false);
     }
   }

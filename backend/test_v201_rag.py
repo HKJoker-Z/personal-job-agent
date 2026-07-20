@@ -1,21 +1,44 @@
+import io
+import json
 import os
 import tempfile
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
+
+from docx import Document
+from fastapi.testclient import TestClient
 
 
 _IMPORT_DATABASE = tempfile.TemporaryDirectory(prefix="pja-v201-rag-import-")
 os.environ.setdefault("APP_DATABASE_PATH", os.path.join(_IMPORT_DATABASE.name, "app.db"))
 
+from analysis_contract import (
+    MODEL_OUTPUT_EMPTY,
+    MODEL_OUTPUT_INVALID_JSON,
+    MODEL_PROVIDER_ERROR,
+    MODEL_OUTPUT_SCHEMA_INVALID,
+    MODEL_OUTPUT_TRUNCATED,
+    ModelOutputError,
+    ProviderAnalysisResponse,
+    adapt_provider_completion,
+    parse_model_json,
+    validate_compact_analysis,
+)
+from legacy_application import app
 from legacy_application import (
     apply_rag_supported_skill_corrections,
     build_default_rag_sources,
     build_evidence_mapping,
     call_deepseek_raw,
     clamp_rag_top_k,
+    compact_analysis_to_result,
     enforce_analysis_grounding,
+    reconcile_result_with_rag_evidence,
+    validate_model_evidence_references,
 )
+from database import list_application_records
 from safe_prompt import build_safe_analysis_prompt
 from security_utils import scan_project_chunks
 
@@ -27,15 +50,81 @@ def breakdown():
     }
 
 
+FIXTURE_ROOT = Path(__file__).resolve().parent / "fixtures" / "v201"
+
+
+def objectify(value):
+    if isinstance(value, dict):
+        return SimpleNamespace(**{key: objectify(item) for key, item in value.items()})
+    if isinstance(value, list):
+        return [objectify(item) for item in value]
+    return value
+
+
+def provider_fixture(name):
+    return objectify(json.loads((FIXTURE_ROOT / name).read_text(encoding="utf-8")))
+
+
+def parsed_fixture(name):
+    response = adapt_provider_completion(
+        provider_fixture(name), max_output_tokens=800, latency_ms=12.5
+    )
+    return validate_compact_analysis(parse_model_json(response.content))
+
+
+def project_chunks():
+    return [
+        {
+            "chunk_id": 11,
+            "score": 0.91,
+            "content": "# Database architecture\nImplemented PostgreSQL 16 with SQLAlchemy 2 and RAG retrieval.",
+        },
+        {
+            "chunk_id": 17,
+            "score": 0.84,
+            "content": "# Queue architecture\nRedis 7 is the private broker for Dramatiq workers.",
+        },
+    ]
+
+
+def compact_result(name, *, resume_text="Test summary", chunks=None):
+    chunks = list(chunks or [])
+    result = compact_analysis_to_result(parsed_fixture(name))
+    validate_model_evidence_references(
+        result, resume_text=resume_text, retrieved_chunks=chunks
+    )
+    reconcile_result_with_rag_evidence(result, chunks)
+    enforce_analysis_grounding(result, resume_text, chunks)
+    result["match_score"] = sum(
+        int(result["scoring_breakdown"][key]["score"]) * weight
+        for key, weight in {
+            "skills_match": 0.35,
+            "project_experience": 0.25,
+            "education": 0.15,
+            "work_experience": 0.15,
+            "keyword_match": 0.10,
+        }.items()
+    )
+    result["used_knowledge_base"] = bool(chunks)
+    result["retrieval_count"] = len(chunks)
+    result["rag_sources"] = build_default_rag_sources(chunks, result["matched_skills"])
+    return result
+
+
+def docx_bytes(text="Test summary"):
+    document = Document()
+    document.add_paragraph(text)
+    output = io.BytesIO()
+    document.save(output)
+    return output.getvalue()
+
+
 class ProjectKnowledgeRagTest(unittest.TestCase):
     def test_deepseek_call_enforces_output_limit_and_reports_safe_usage(self):
-        completion = SimpleNamespace(
-            choices=[SimpleNamespace(message=SimpleNamespace(content='{"matched_skills": []}'))],
-            usage=SimpleNamespace(prompt_tokens=123, completion_tokens=456, total_tokens=579),
-        )
+        completion = provider_fixture("valid_compact_rag_800_tokens.json")
         client = MagicMock()
         client.chat.completions.create.return_value = completion
-        usage = {}
+        metadata = {}
         with patch.dict(
             os.environ,
             {
@@ -46,14 +135,352 @@ class ProjectKnowledgeRagTest(unittest.TestCase):
             },
             clear=False,
         ), patch("legacy_application.OpenAI", return_value=client):
-            result = call_deepseek_raw("Synthetic resume", "Synthetic job", usage_out=usage)
+            result = call_deepseek_raw(
+                "Synthetic resume", "Synthetic job", usage_out=metadata
+            )
 
-        self.assertEqual(result, '{"matched_skills": []}')
+        self.assertIn('"matched_skills"', result.content)
         self.assertEqual(client.chat.completions.create.call_args.kwargs["max_tokens"], 800)
-        self.assertEqual(
-            usage,
-            {"input_tokens": 123, "output_tokens": 456, "total_tokens": 579},
+        self.assertEqual(metadata["finish_reason"], "stop")
+        self.assertEqual(metadata["output_tokens"], 310)
+        self.assertFalse(metadata["reached_token_limit"])
+        self.assertGreater(metadata["response_length"], 0)
+        self.assertRegex(metadata["provider_request_id_hash"], r"^[a-f0-9]{16}$")
+        self.assertNotEqual(metadata["provider_request_id_hash"], "mock-valid-compact-800")
+
+    def test_finish_reason_length_maps_to_truncated_before_json_parsing(self):
+        with self.assertRaises(ModelOutputError) as raised:
+            adapt_provider_completion(
+                provider_fixture("truncated_json_finish_reason_length.json"),
+                max_output_tokens=800,
+                latency_ms=15,
+            )
+        self.assertEqual(raised.exception.error_code, MODEL_OUTPUT_TRUNCATED)
+        self.assertEqual(raised.exception.metadata["finish_reason"], "length")
+        self.assertEqual(raised.exception.metadata["output_tokens"], 800)
+        self.assertTrue(raised.exception.metadata["reached_token_limit"])
+        self.assertNotIn("matched_skills", str(raised.exception))
+
+    def test_incomplete_json_without_length_signal_is_invalid_json(self):
+        response = adapt_provider_completion(
+            provider_fixture("truncated_json_without_finish_reason.json"),
+            max_output_tokens=800,
+            latency_ms=2,
         )
+        with self.assertRaises(ModelOutputError) as raised:
+            parse_model_json(response.content)
+        self.assertEqual(raised.exception.error_code, MODEL_OUTPUT_INVALID_JSON)
+
+    def test_parser_rejects_markdown_or_explanatory_wrappers(self):
+        with self.assertRaises(ModelOutputError) as raised:
+            parse_model_json('```json\n{"matched_skills": []}\n```')
+        self.assertEqual(raised.exception.error_code, MODEL_OUTPUT_INVALID_JSON)
+
+    def test_empty_provider_response_has_a_distinct_error(self):
+        completion = SimpleNamespace(
+            id="mock-empty",
+            choices=[SimpleNamespace(finish_reason="stop", message=SimpleNamespace(content=""))],
+            usage=SimpleNamespace(prompt_tokens=10, completion_tokens=0, total_tokens=10),
+        )
+        with self.assertRaises(ModelOutputError) as raised:
+            adapt_provider_completion(completion, max_output_tokens=800, latency_ms=1)
+        self.assertEqual(raised.exception.error_code, MODEL_OUTPUT_EMPTY)
+
+    def test_provider_exception_maps_to_safe_provider_error(self):
+        client = MagicMock()
+        client.chat.completions.create.side_effect = RuntimeError(
+            "PRIVATE_PROVIDER_BODY_MUST_NOT_LEAK"
+        )
+        with patch.dict(
+            os.environ,
+            {
+                "APP_ENV": "test",
+                "DEEPSEEK_API_KEY": "TEST_ONLY_DEEPSEEK_KEY",
+                "AGENT_MODEL_MAX_OUTPUT_TOKENS": "800",
+                "MOCK_PROVIDER_ENABLED": "false",
+            },
+            clear=False,
+        ), patch("legacy_application.OpenAI", return_value=client), self.assertRaises(
+            ModelOutputError
+        ) as raised:
+            call_deepseek_raw("Synthetic resume", "Synthetic job")
+        self.assertEqual(raised.exception.error_code, MODEL_PROVIDER_ERROR)
+        self.assertNotIn("PRIVATE_PROVIDER_BODY_MUST_NOT_LEAK", str(raised.exception))
+        self.assertGreaterEqual(raised.exception.metadata["latency_ms"], 0)
+
+    def test_valid_json_with_extra_fields_is_schema_invalid(self):
+        response = adapt_provider_completion(
+            provider_fixture("schema_invalid_extra_field.json"),
+            max_output_tokens=800,
+            latency_ms=1,
+        )
+        with self.assertRaises(ModelOutputError) as raised:
+            validate_compact_analysis(parse_model_json(response.content))
+        self.assertEqual(raised.exception.error_code, MODEL_OUTPUT_SCHEMA_INVALID)
+
+    def test_complete_compact_fixture_fits_the_800_token_budget(self):
+        fixture = provider_fixture("valid_compact_rag_800_tokens.json")
+        response = adapt_provider_completion(fixture, max_output_tokens=800, latency_ms=1)
+        validate_compact_analysis(parse_model_json(response.content))
+        self.assertLessEqual(response.metadata["output_tokens"], 800)
+        self.assertLess(len(response.content.encode("utf-8")), 4000)
+
+    def test_supported_project_skills_are_matched_with_traceable_evidence(self):
+        result = compact_result(
+            "valid_rag_with_supported_skill.json", chunks=project_chunks()
+        )
+        self.assertIn("PostgreSQL", result["matched_skills"])
+        self.assertIn("Redis", result["matched_skills"])
+        self.assertNotIn("PostgreSQL", result["missing_skills"])
+        mapping = {item["skill"]: item for item in result["evidence_mapping"]}
+        self.assertEqual(mapping["PostgreSQL"]["source"], "project_knowledge")
+        self.assertEqual(mapping["PostgreSQL"]["evidence"], ["project-knowledge-chunk:11"])
+        self.assertTrue(result["used_knowledge_base"])
+        self.assertEqual(result["retrieval_count"], 2)
+
+    def test_unknown_evidence_id_is_rejected_and_cannot_manufacture_a_match(self):
+        result = compact_result(
+            "invalid_unknown_evidence_id.json", chunks=project_chunks()
+        )
+        self.assertNotIn("Kubernetes", result["matched_skills"])
+        self.assertIn("Kubernetes", result["unknown_skills"])
+        validation = result["evidence_reference_validation"]
+        self.assertEqual(validation["status"], "completed_with_rejections")
+        self.assertIn("pk:999", validation["rejected_evidence_ids"])
+        self.assertEqual(result["scoring_breakdown"]["skills_match"]["score"], 0)
+        self.assertEqual(result["scoring_breakdown"]["project_experience"]["score"], 0)
+
+    def test_unsupported_claim_is_blocked_without_discarding_valid_rag_evidence(self):
+        result = compact_result(
+            "valid_rag_with_unsupported_claim.json", chunks=project_chunks()
+        )
+        self.assertGreater(result["claim_validation"]["unsupported_claim_count"], 0)
+        self.assertTrue(result["claim_validation"]["output_blocked"])
+        self.assertIn("PostgreSQL", result["matched_skills"])
+        self.assertTrue(any(
+            item["skill"] == "PostgreSQL" and item["source"] == "project_knowledge"
+            for item in result["evidence_mapping"]
+        ))
+        self.assertEqual(result["cover_letter"], "")
+        self.assertEqual(result["upgraded_resume_bullets"], [])
+
+    def test_rag_disabled_has_no_deterministic_sources(self):
+        result = compact_result(
+            "rag_disabled.json", resume_text="Built a FastAPI service.", chunks=[]
+        )
+        self.assertFalse(result["used_knowledge_base"])
+        self.assertEqual(result["retrieval_count"], 0)
+        self.assertEqual(result["rag_sources"], [])
+
+    def test_rag_sources_are_backend_metadata_not_model_fields(self):
+        result = compact_result(
+            "valid_rag_with_supported_skill.json", chunks=project_chunks()
+        )
+        self.assertEqual([item["chunk_id"] for item in result["rag_sources"]], [11, 17])
+        self.assertTrue(all("content" not in item for item in result["rag_sources"]))
+        self.assertTrue(all(set(item) == {
+            "document", "section", "chunk_id", "relevance_score", "supported_skills"
+        } for item in result["rag_sources"]))
+
+    def test_failed_model_output_cannot_reach_history_persistence(self):
+        client = TestClient(app)
+        error = ModelOutputError(
+            MODEL_OUTPUT_TRUNCATED,
+            metadata={
+                "finish_reason": "length",
+                "output_tokens": 800,
+                "total_tokens": 1200,
+                "response_length": 2200,
+                "reached_token_limit": True,
+                "latency_ms": 15,
+            },
+        )
+        with patch("legacy_application.call_deepseek_raw", side_effect=error), patch(
+            "legacy_application.insert_application_record"
+        ) as insert_record, patch(
+            "app.agent_runs.service.AgentRunService.create"
+        ) as create_agent_run, patch(
+            "app.agent_runs.service.AgentRunService._create_approval"
+        ) as create_approval, patch(
+            "app.agent_runs.service.AgentRunService._enqueue"
+        ) as create_outbox:
+            response = client.post(
+                "/api/analyze",
+                files={
+                    "resume": (
+                        "synthetic.docx",
+                        docx_bytes(),
+                        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    )
+                },
+                data={
+                    "job_text": "Synthetic FastAPI role.",
+                    "save_to_history": "true",
+                    "use_project_knowledge": "false",
+                },
+            )
+        client.close()
+        self.assertEqual(response.status_code, 502)
+        detail = response.json()["detail"]
+        self.assertEqual(detail["error_code"], MODEL_OUTPUT_TRUNCATED)
+        self.assertEqual(detail["model_metadata"]["output_tokens"], 800)
+        self.assertNotIn("synthetic.docx", response.text)
+        self.assertNotIn("matched_skills", response.text)
+        insert_record.assert_not_called()
+        create_agent_run.assert_not_called()
+        create_approval.assert_not_called()
+        create_outbox.assert_not_called()
+        self.assertEqual(list_application_records(
+            status=None, search=None, limit=10, offset=0
+        )[1], 0)
+
+    def test_api_maps_nontruncated_invalid_json_without_leaking_the_body(self):
+        client = TestClient(app)
+        raw_body = '{"matched_skills":["PRIVATE_MODEL_FRAGMENT"]'
+        provider_response = ProviderAnalysisResponse(
+            content=raw_body,
+            metadata={
+                "finish_reason": "stop",
+                "input_tokens": 100,
+                "output_tokens": 20,
+                "total_tokens": 120,
+                "response_length": len(raw_body),
+                "reached_token_limit": False,
+                "latency_ms": 3,
+            },
+        )
+        with patch("legacy_application.call_deepseek_raw", return_value=provider_response), patch(
+            "legacy_application.insert_application_record"
+        ) as insert_record:
+            response = client.post(
+                "/api/analyze",
+                files={
+                    "resume": (
+                        "synthetic.docx",
+                        docx_bytes(),
+                        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    )
+                },
+                data={
+                    "job_text": "Synthetic FastAPI role.",
+                    "save_to_history": "true",
+                    "use_project_knowledge": "false",
+                },
+            )
+        client.close()
+        self.assertEqual(response.status_code, 502)
+        self.assertEqual(response.json()["detail"]["error_code"], MODEL_OUTPUT_INVALID_JSON)
+        self.assertEqual(response.json()["detail"]["model_metadata"]["output_tokens"], 20)
+        self.assertNotIn("PRIVATE_MODEL_FRAGMENT", response.text)
+        insert_record.assert_not_called()
+
+    def test_api_maps_valid_json_with_invalid_schema_without_partial_result(self):
+        client = TestClient(app)
+        fixture_response = adapt_provider_completion(
+            provider_fixture("schema_invalid_extra_field.json"),
+            max_output_tokens=800,
+            latency_ms=4,
+        )
+        with patch("legacy_application.call_deepseek_raw", return_value=fixture_response), patch(
+            "legacy_application.insert_application_record"
+        ) as insert_record:
+            response = client.post(
+                "/api/analyze",
+                files={
+                    "resume": (
+                        "synthetic.docx",
+                        docx_bytes(),
+                        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    )
+                },
+                data={
+                    "job_text": "Synthetic FastAPI role.",
+                    "save_to_history": "true",
+                    "use_project_knowledge": "false",
+                },
+            )
+        client.close()
+        self.assertEqual(response.status_code, 502)
+        detail = response.json()["detail"]
+        self.assertEqual(detail["error_code"], MODEL_OUTPUT_SCHEMA_INVALID)
+        self.assertNotIn("must be rejected", response.text)
+        self.assertNotIn("rag_sources", response.text)
+        insert_record.assert_not_called()
+
+    def test_api_rag_disabled_skips_retrieval_and_attaches_empty_metadata(self):
+        client = TestClient(app)
+        fixture_response = adapt_provider_completion(
+            provider_fixture("rag_disabled.json"), max_output_tokens=800, latency_ms=2
+        )
+        with patch("legacy_application.call_deepseek_raw", return_value=fixture_response), patch(
+            "legacy_application.search_project_knowledge"
+        ) as search, patch("legacy_application.insert_application_record") as insert_record:
+            response = client.post(
+                "/api/analyze",
+                files={
+                    "resume": (
+                        "synthetic.docx",
+                        docx_bytes("Built a FastAPI service."),
+                        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    )
+                },
+                data={
+                    "job_text": "Synthetic FastAPI and PostgreSQL role.",
+                    "save_to_history": "false",
+                    "use_project_knowledge": "false",
+                },
+            )
+        client.close()
+        self.assertEqual(response.status_code, 200, response.text)
+        value = response.json()
+        self.assertFalse(value["used_knowledge_base"])
+        self.assertEqual(value["retrieval_count"], 0)
+        self.assertEqual(value["rag_sources"], [])
+        search.assert_not_called()
+        insert_record.assert_not_called()
+
+    def test_api_attaches_current_request_rag_metadata_after_all_gates(self):
+        client = TestClient(app)
+        fixture_response = adapt_provider_completion(
+            provider_fixture("valid_rag_with_supported_skill.json"),
+            max_output_tokens=800,
+            latency_ms=2,
+        )
+        with patch("legacy_application.call_deepseek_raw", return_value=fixture_response), patch(
+            "legacy_application.search_project_knowledge",
+            return_value=(project_chunks(), "postgresql_fts"),
+        ) as search, patch("legacy_application.insert_application_record") as insert_record:
+            response = client.post(
+                "/api/analyze",
+                files={
+                    "resume": (
+                        "synthetic.docx",
+                        docx_bytes(),
+                        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    )
+                },
+                data={
+                    "job_text": "Synthetic PostgreSQL Redis Kubernetes role.",
+                    "save_to_history": "false",
+                    "use_project_knowledge": "true",
+                    "project_knowledge_top_k": "5",
+                },
+            )
+        client.close()
+        self.assertEqual(response.status_code, 200, response.text)
+        value = response.json()
+        self.assertTrue(value["used_knowledge_base"])
+        self.assertEqual(value["retrieval_count"], 2)
+        self.assertEqual([item["chunk_id"] for item in value["rag_sources"]], [11, 17])
+        self.assertTrue(all("content" not in item for item in value["rag_sources"]))
+        self.assertIn("PostgreSQL", value["matched_skills"])
+        self.assertNotIn("PostgreSQL", value["missing_skills"])
+        self.assertTrue(any(
+            item["skill"] == "PostgreSQL" and item["source"] == "project_knowledge"
+            for item in value["evidence_mapping"]
+        ))
+        search.assert_called_once()
+        insert_record.assert_not_called()
 
     def test_top_k_is_clamped_to_the_safe_range(self):
         self.assertEqual(clamp_rag_top_k(-10), 1)

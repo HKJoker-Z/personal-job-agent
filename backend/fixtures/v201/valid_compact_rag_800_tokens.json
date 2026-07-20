@@ -1,0 +1,12 @@
+{
+  "id": "mock-valid-compact-800",
+  "choices": [
+    {
+      "finish_reason": "stop",
+      "message": {
+        "content": "{\"matched_skills\":[\"FastAPI\",\"PostgreSQL\",\"Redis\",\"RAG\"],\"missing_skills\":[\"Kubernetes\"],\"unknown_skills\":[],\"concise_dimension_assessments\":{\"skills_match\":{\"score\":82,\"assessment\":\"Core platform skills have direct evidence.\",\"evidence_ids\":[\"resume\",\"pk:11\"]},\"project_experience\":{\"score\":78,\"assessment\":\"Retrieved project evidence supports implementation experience.\",\"evidence_ids\":[\"pk:11\",\"pk:17\"]},\"education\":{\"score\":0,\"assessment\":\"No education evidence was supplied.\",\"evidence_ids\":[]},\"work_experience\":{\"score\":20,\"assessment\":\"The resume summary has limited work detail.\",\"evidence_ids\":[\"resume\"]},\"keyword_match\":{\"score\":85,\"assessment\":\"Most requested platform keywords are evidenced.\",\"evidence_ids\":[\"resume\",\"pk:11\",\"pk:17\"]}},\"evidence_references\":[{\"skill\":\"FastAPI\",\"evidence_ids\":[\"resume\"]},{\"skill\":\"PostgreSQL\",\"evidence_ids\":[\"pk:11\"]},{\"skill\":\"Redis\",\"evidence_ids\":[\"pk:17\"]},{\"skill\":\"RAG\",\"evidence_ids\":[\"pk:11\"]}],\"unsupported_claim_candidates\":[],\"concise_recommendations\":[\"Add concise verified project bullets for the matched platform skills.\"]}"
+      }
+    }
+  ],
+  "usage": {"prompt_tokens": 1200, "completion_tokens": 310, "total_tokens": 1510}
+}

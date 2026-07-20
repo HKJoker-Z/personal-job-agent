@@ -1,0 +1,12 @@
+{
+  "id": "mock-invalid-unknown-evidence",
+  "choices": [
+    {
+      "finish_reason": "stop",
+      "message": {
+        "content": "{\"matched_skills\":[\"Kubernetes\"],\"missing_skills\":[],\"unknown_skills\":[],\"concise_dimension_assessments\":{\"skills_match\":{\"score\":80,\"assessment\":\"Claimed skill reference.\",\"evidence_ids\":[\"pk:999\"]},\"project_experience\":{\"score\":70,\"assessment\":\"Claimed project reference.\",\"evidence_ids\":[\"pk:999\"]},\"education\":{\"score\":0,\"assessment\":\"No education evidence.\",\"evidence_ids\":[]},\"work_experience\":{\"score\":0,\"assessment\":\"No work evidence.\",\"evidence_ids\":[]},\"keyword_match\":{\"score\":80,\"assessment\":\"Claimed keyword reference.\",\"evidence_ids\":[\"pk:999\"]}},\"evidence_references\":[{\"skill\":\"Kubernetes\",\"evidence_ids\":[\"pk:999\"]}],\"unsupported_claim_candidates\":[],\"concise_recommendations\":[\"Verify the Kubernetes claim.\"]}"
+      }
+    }
+  ],
+  "usage": {"prompt_tokens": 700, "completion_tokens": 210, "total_tokens": 910}
+}
