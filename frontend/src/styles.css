@@ -39,7 +39,7 @@ textarea:focus-visible {
 
 .nav-shell {
   display: flex;
-  width: min(1240px, calc(100% - 32px));
+  width: min(1320px, calc(100% - 32px));
   min-height: 72px;
   align-items: center;
   gap: 24px;
@@ -100,7 +100,8 @@ textarea:focus-visible {
 .account-actions a.active { border-color: #b9dfd6; color: var(--accent-dark); background: var(--surface-soft); }
 
 .account-actions { border-left: 1px solid var(--border); padding-left: 10px; }
-.account-actions button { padding: 9px 12px; font-size: 13px; }
+.account-actions a { max-width: 180px; overflow: hidden; text-overflow: ellipsis; }
+.account-actions button { flex: 0 0 auto; padding: 9px 12px; font-size: 13px; white-space: nowrap; }
 .menu-toggle { display: none; margin-left: auto; padding: 9px 12px; }
 
 button,
@@ -129,6 +130,10 @@ textarea {
 
 .dashboard-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 22px; }
 .dashboard-actions a { border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; color: var(--accent); background: #fff; font-weight: 750; text-decoration: none; }
+.summary-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; margin-top: 24px; }
+.summary-grid article { display: grid; gap: 5px; border: 1px solid var(--border); border-radius: 12px; padding: 18px; background: var(--surface); box-shadow: 0 8px 22px rgba(31, 41, 55, 0.05); }
+.summary-grid strong { color: var(--accent); font-size: 28px; }
+.summary-grid span { color: var(--text-muted); font-size: 13px; font-weight: 750; }
 .feature-state { max-width: 720px; margin: 40px auto; }
 
 .page-header {
@@ -1454,6 +1459,7 @@ th {
   }
 
   .metric-grid,
+  .summary-grid,
   .dashboard-columns,
   .form-grid,
   .dimension-grid,
@@ -1487,7 +1493,7 @@ th {
   }
 }
 
-@media (max-width: 1080px) {
+@media (max-width: 1360px) {
   .nav-shell { min-height: 64px; }
   .menu-toggle { display: inline-flex; align-items: center; gap: 7px; }
   .primary-navigation {

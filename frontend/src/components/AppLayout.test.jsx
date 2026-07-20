@@ -47,4 +47,11 @@ describe("unified navigation", () => {
     expect(styles).toMatch(/\.nav-links a[\s\S]*?text-decoration:\s*none/);
     expect(styles).toMatch(/\.nav-links a\.active[\s\S]*?background:/);
   });
+
+  it("bounds account actions and collapses before the navigation can overflow", () => {
+    expect(styles).toMatch(/\.nav-shell[\s\S]*?width:\s*min\(1320px,/);
+    expect(styles).toMatch(/\.account-actions a[\s\S]*?max-width:\s*180px/);
+    expect(styles).toMatch(/@media \(max-width:\s*1360px\)[\s\S]*?\.primary-navigation/);
+    expect(styles).toMatch(/\.summary-grid[\s\S]*?repeat\(4, minmax\(0, 1fr\)\)/);
+  });
 });

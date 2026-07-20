@@ -2,11 +2,20 @@
 set -Eeuo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+if [[ -z "${PYTHON_BIN:-}" && -x "${ROOT_DIR}/.venv/bin/python" ]]; then
+  PYTHON_BIN="${ROOT_DIR}/.venv/bin/python"
+fi
+PYTHON_BIN="${PYTHON_BIN:-python3}"
 STAMP="$(date +%s)-$$"
 SMOKE_MILESTONE="${PJA_SMOKE_MILESTONE:-2.0.1}"
 REAL_LLM_VALIDATION="${PJA_REAL_LLM_VALIDATION:-0}"
+HOLD_SECONDS="${PJA_SMOKE_HOLD_SECONDS:-0}"
 if [[ "${REAL_LLM_VALIDATION}" != "0" && "${REAL_LLM_VALIDATION}" != "1" ]]; then
   printf '%s\n' 'PJA_REAL_LLM_VALIDATION must be 0 or 1.' >&2
+  exit 1
+fi
+if [[ ! "${HOLD_SECONDS}" =~ ^[0-9]+$ ]] || (( HOLD_SECONDS > 300 )); then
+  printf '%s\n' 'PJA_SMOKE_HOLD_SECONDS must be an integer from 0 to 300.' >&2
   exit 1
 fi
 if [[ "${REAL_LLM_VALIDATION}" == "1" && -z "${PJA_REAL_DEEPSEEK_API_KEY:-}" ]]; then
@@ -323,7 +332,7 @@ curl --noproxy '*' --fail --silent --show-error \
   -F 'job_text=Synthetic role requiring FastAPI PostgreSQL RAG and Redis.' \
   -F 'save_to_history=true' -F 'use_project_knowledge=true' -F 'project_knowledge_top_k=5' \
   "${ORIGIN}/api/analyze" >"${RESPONSE_FILE}"
-python3 -c 'import json,sys; value=json.load(open(sys.argv[1])); assert value["used_knowledge_base"] is True; assert 1 <= value["retrieval_count"] <= 5; assert value["rag_sources"]; assert all(set(item) == {"document","section","chunk_id","relevance_score","supported_skills"} for item in value["rag_sources"]); assert any(item["source"] == "project_knowledge" for item in value["evidence_mapping"]); assert not (set(value["matched_skills"]) & set(value["missing_skills"])); assert value["claim_validation"]["unsupported_claim_count"] == 0' "${RESPONSE_FILE}"
+python3 -c 'import json,sys; value=json.load(open(sys.argv[1])); assert value["used_knowledge_base"] is True; assert 1 <= value["retrieval_count"] <= 5; assert value["rag_sources"]; assert all(set(item) == {"document","section","chunk_id","relevance_score","supported_skills"} for item in value["rag_sources"]); assert any(item["source"] == "project_knowledge" for item in value["evidence_mapping"]); assert not (set(value["matched_skills"]) & set(value["missing_skills"])); claims=value["claim_validation"]; assert claims["unsupported_claim_count"] == 0 or (claims.get("output_blocked") is True and value["cover_letter"] == "" and value["upgraded_resume_bullets"] == [])' "${RESPONSE_FILE}"
 HISTORY_ID="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["application_id"])' "${RESPONSE_FILE}")"
 curl --noproxy '*' --fail --silent --show-error --cookie "${COOKIE_JAR}" \
   "${ORIGIN}/api/history/${HISTORY_ID}" >"${RESPONSE_FILE}"
@@ -816,4 +825,8 @@ sudo -n cmp --silent "${TEST_ROOT}/knowledge/PROJECT_KNOWLEDGE.md" \
 smoke_step 'isolated restore row counts and file checksums'
 
 "${COMPOSE[@]}" ps
+if (( HOLD_SECONDS > 0 )); then
+  printf 'Holding the verified isolated candidate for %s second(s).\n' "${HOLD_SECONDS}"
+  sleep "${HOLD_SECONDS}"
+fi
 printf 'Version %s isolated Smoke Test passed. Project: %s\n' "${SMOKE_MILESTONE}" "${PROJECT_NAME}"
