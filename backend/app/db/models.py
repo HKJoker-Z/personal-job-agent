@@ -264,11 +264,22 @@ class Resume(TimestampMixin, Base):
     language: Mapped[str] = mapped_column(String(20), default="en", nullable=False)
     target_role: Mapped[str] = mapped_column(String(240), default="", nullable=False)
     status: Mapped[str] = mapped_column(String(20), default="active", nullable=False)
+    is_primary: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     active_version_id: Mapped[UUID | None] = mapped_column(
         Uuid,
         ForeignKey("resume_versions.id", use_alter=True, name="fk_resumes_active_version_id_resume_versions"),
     )
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+RESUME_PRIMARY_UNIQUE = Index(
+    "uq_resumes_user_primary_active",
+    Resume.__table__.c.user_id,
+    unique=True,
+    postgresql_where=(Resume.__table__.c.is_primary.is_(True) & Resume.__table__.c.archived_at.is_(None)),
+    sqlite_where=(Resume.__table__.c.is_primary.is_(True) & Resume.__table__.c.archived_at.is_(None)),
+)
+Resume.__table__.append_constraint(RESUME_PRIMARY_UNIQUE)
 
 
 class ResumeVersion(Base):

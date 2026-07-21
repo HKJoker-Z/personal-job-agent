@@ -18,6 +18,7 @@ from app.db.session import session_factory
 from app.db.models import Application, ApplicationStageHistory, Job
 from app.jobs.service import JobService
 from app.applications.service import ApplicationConflict, ApplicationService
+from app.resumes.service import ResumeService
 from app.migration.postgres_writer import PostgreSQLV1Writer
 from app.migration.sqlite_reader import SQLiteV1Reader
 from data_management_service import delete_monitoring_data, preview_monitoring_deletion
@@ -249,6 +250,46 @@ class V2PostgreSQLIntegrationTest(unittest.TestCase):
                 ).fetchone()[0],
                 1,
             )
+
+    def test_v203_primary_resume_migration_backfills_and_enforces_one_active_primary(self):
+        owner = self.create_owner()
+        db = session_factory(self.database_url)()
+        try:
+            service = ResumeService(db, owner.id, load_v2_settings())
+            first = service.create({"title": "Older Resume", "language": "en", "target_role": ""})
+            second = service.create({"title": "Newest Resume", "language": "en", "target_role": ""})
+            db.commit()
+        finally:
+            db.close()
+
+        config = Config(str(Path(__file__).parent / "alembic.ini"))
+        command.downgrade(config, "20260717_04")
+        raw_url = self.database_url.replace("postgresql+psycopg://", "postgresql://", 1)
+        with psycopg.connect(raw_url) as connection:
+            self.assertIsNone(
+                connection.execute(
+                    "SELECT 1 FROM information_schema.columns WHERE table_name='resumes' AND column_name='is_primary'"
+                ).fetchone()
+            )
+
+        command.upgrade(config, "head")
+        with psycopg.connect(raw_url) as connection:
+            primary_ids = connection.execute(
+                "SELECT id::text FROM resumes WHERE user_id=%s AND is_primary IS TRUE AND archived_at IS NULL",
+                (owner.id,),
+            ).fetchall()
+            self.assertEqual(primary_ids, [(second["id"],)])
+            self.assertEqual(
+                connection.execute(
+                    "SELECT COUNT(*) FROM pg_indexes WHERE indexname='uq_resumes_user_primary_active'"
+                ).fetchone()[0],
+                1,
+            )
+            with self.assertRaises(psycopg.errors.UniqueViolation):
+                connection.execute(
+                    "UPDATE resumes SET is_primary=TRUE WHERE id::text IN (%s,%s)",
+                    (first["id"], second["id"]),
+                )
 
 
 if __name__ == "__main__":
