@@ -260,6 +260,8 @@ services:
     environment:
       <<: *app-env
       DATABASE_URL: postgresql+psycopg://${POSTGRES_MIGRATION_USER}:${POSTGRES_MIGRATION_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      POSTGRES_SERVER_IMAGE: postgres:16.9-alpine@sha256:7c688148e5e156d0e86df7ba8ae5a05a2386aaec1e2ad8e6d11bdf10504b1fb7
+      POSTGRES_TOOL_IMAGE: *backend-image
     command: ["python", "/app/scripts/v2_backup_restore.py", "backup", "--database-url-env", "DATABASE_URL", "--backup-dir", "/backup", "--files-root", "/app/runtime/files", "--project-knowledge", "/app/project-knowledge/PROJECT_KNOWLEDGE.md"]
     volumes:
       - ${BACKUP_DIR:?backup directory is required}:/backup

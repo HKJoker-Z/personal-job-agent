@@ -23,7 +23,7 @@ export function AppLayout() {
       <div className="nav-shell">
         <NavLink className="brand" to="/dashboard" aria-label="Personal Job Agent dashboard">
           <span className="brand-mark" aria-hidden="true">PJA</span>
-          <span className="brand-copy"><strong>Personal Job Agent</strong><small>Version 2.0.1</small></span>
+          <span className="brand-copy"><strong>Personal Job Agent</strong><small>Version 2.0.2</small></span>
         </NavLink>
         <button className="menu-toggle" type="button" aria-expanded={open} aria-controls="primary-navigation" onClick={() => setOpen((value) => !value)}>
           <span aria-hidden="true">☰</span><span>Menu</span>

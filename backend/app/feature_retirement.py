@@ -1,4 +1,4 @@
-"""Version 2.0.1 public API retirement boundary.
+"""Version 2.0.2 public API retirement boundary.
 
 The ORM models and tables intentionally remain available for backup, restore,
 rollback, and internal compatibility tests. Public requests cannot use the
@@ -45,7 +45,7 @@ class FeatureRetirementMiddleware(BaseHTTPMiddleware):
                 content={
                     "error": {
                         "code": "FEATURE_REMOVED",
-                        "message": "This feature is not available in Version 2.0.1.",
+                        "message": "This feature is not available in Version 2.0.2.",
                     }
                 },
             )

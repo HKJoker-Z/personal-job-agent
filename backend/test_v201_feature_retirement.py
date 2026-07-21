@@ -37,7 +37,7 @@ class FeatureRetirementTest(unittest.TestCase):
                 self.assertEqual(response.json(), {
                     "error": {
                         "code": "FEATURE_REMOVED",
-                        "message": "This feature is not available in Version 2.0.1.",
+                        "message": "This feature is not available in Version 2.0.2.",
                     }
                 })
 

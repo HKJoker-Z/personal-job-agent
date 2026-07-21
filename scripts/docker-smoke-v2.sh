@@ -8,6 +8,7 @@ fi
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 STAMP="$(date +%s)-$$"
 SMOKE_MILESTONE="${PJA_SMOKE_MILESTONE:-2.0.1}"
+APP_RELEASE_VERSION="${PJA_APP_VERSION:-2.0.2}"
 REAL_LLM_VALIDATION="${PJA_REAL_LLM_VALIDATION:-0}"
 HOLD_SECONDS="${PJA_SMOKE_HOLD_SECONDS:-0}"
 if [[ "${REAL_LLM_VALIDATION}" != "0" && "${REAL_LLM_VALIDATION}" != "1" ]]; then
@@ -59,6 +60,8 @@ ENV_FILE="${TEST_ROOT}/test.env"
 COOKIE_JAR="${TEST_ROOT}/cookies.txt"
 RESPONSE_FILE="${TEST_ROOT}/response.json"
 HEADER_FILE="${TEST_ROOT}/headers.txt"
+SMOKE_INVENTORY_DIFF="${TEST_ROOT}/backup/restore-inventory-diff.json"
+SMOKE_DIAGNOSTIC_DEST="${ROOT_DIR}/runtime/reports/${PROJECT_NAME}-inventory-diff.json"
 ORIGIN="http://127.0.0.1:${HTTP_PORT}"
 ADMIN_EMAIL="phase1-admin@example.com"
 ADMIN_PASSWORD="Phase-1-Smoke-Passphrase-Only-2026"
@@ -89,6 +92,33 @@ fi
 cleanup() {
   local exit_code=$?
   trap - EXIT
+  if [[ "${exit_code}" != 0 ]] \
+    && sudo -n test -f "${SMOKE_INVENTORY_DIFF}"; then
+    install -d -m 0700 "${ROOT_DIR}/runtime/reports"
+    sudo -n python3 - "${SMOKE_INVENTORY_DIFF}" "${SMOKE_DIAGNOSTIC_DEST}" \
+      "${PROJECT_NAME}" "${STAMP}" "${RESTORE_DATABASE:-not_created}" <<'PY'
+import json
+import os
+import sys
+from pathlib import Path
+
+source, destination, project, run_id, target_database = sys.argv[1:]
+report = json.loads(Path(source).read_text(encoding="utf-8"))
+report["smoke_context"] = {
+    "compose_project": project,
+    "run_id": run_id,
+    "source_database": "personal_job_agent_smoke_test",
+    "target_database": target_database,
+}
+report["secrets_included"] = False
+target = Path(destination)
+temporary = target.with_name(f".{target.name}.tmp")
+temporary.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+os.chmod(temporary, 0o600)
+os.replace(temporary, target)
+PY
+    sudo -n chown "$(id -u):$(id -g)" "${SMOKE_DIAGNOSTIC_DEST}"
+  fi
   if valid_project_name "${PROJECT_NAME}"; then
     if [[ "${exit_code}" != 0 ]]; then
       "${COMPOSE[@]}" ps >&2 || true
@@ -159,13 +189,16 @@ chmod 0644 "${TEST_ROOT}/mock-job/job.html"
   printf 'PROJECT_KNOWLEDGE_DIR=%s\n' "${TEST_ROOT}/knowledge"
   printf 'FILE_STORAGE_DIR=%s\n' "${TEST_ROOT}/files"
   printf 'BACKUP_DIR=%s\n' "${TEST_ROOT}/backup"
+  printf 'POSTGRES_TOOL_IMAGE=personal-job-agent-backend:smoke-bootstrap@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n'
   printf 'MOCK_JOB_DIR=%s\n' "${TEST_ROOT}/mock-job"
   printf 'SESSION_COOKIE_SECURE=false\n'
   printf 'REMEMBER_ME_SESSION_TTL_DAYS=30\n'
-  printf 'APP_VERSION=2.0.1\n'
+  printf 'APP_VERSION=%s\n' "${APP_RELEASE_VERSION}"
   printf 'AUTH_TRUSTED_ORIGINS=%s\n' "${ORIGIN}"
   printf 'AUTH_FINGERPRINT_KEY=phase1-smoke-fingerprint-key-2026-only\n'
   printf 'AUTH_ENABLED=true\n'
+  printf 'PJA_SMOKE_ADMIN_EMAIL=%s\n' "${ADMIN_EMAIL}"
+  printf 'PJA_SMOKE_ADMIN_PASSWORD=%s\n' "${ADMIN_PASSWORD}"
   printf 'TRUSTED_HOSTS=127.0.0.1,localhost\n'
   printf 'ALLOWED_ORIGINS=%s\n' "${ORIGIN}"
   printf 'ENABLE_API_DOCS=false\n'
@@ -223,7 +256,7 @@ for attempt in $(seq 1 60); do
   sleep 2
 done
 
-"${ROOT_DIR}/scripts/assert-release-health.sh" "${ORIGIN}/api/health" 2.0.1 >/dev/null
+"${ROOT_DIR}/scripts/assert-release-health.sh" "${ORIGIN}/api/health" "${APP_RELEASE_VERSION}" >/dev/null
 smoke_step 'health version equals the target release'
 
 curl --noproxy '*' --fail --silent --show-error \
@@ -761,35 +794,153 @@ if [[ "${V204_SCOPE}" == "1" ]]; then
 fi
 smoke_step 'PostgreSQL and private file persistence across container restart'
 
-SOURCE_URL="postgresql+psycopg://pja_bootstrap:smoke_bootstrap_password_2026@127.0.0.1:${POSTGRES_PORT}/personal_job_agent_smoke_test"
-"${COMPOSE[@]}" exec -T database createdb -U pja_bootstrap personal_job_agent_restore_test
-RESTORE_URL="postgresql+psycopg://pja_bootstrap:smoke_bootstrap_password_2026@127.0.0.1:${POSTGRES_PORT}/personal_job_agent_restore_test"
+"${COMPOSE[@]}" stop worker >/dev/null
+for attempt in $(seq 1 30); do
+  ACTIVE_DATABASE_TRANSACTIONS="$("${COMPOSE[@]}" exec -T database psql -U pja_bootstrap \
+    -d personal_job_agent_smoke_test -Atqc \
+    "SELECT COUNT(*) FROM pg_stat_activity WHERE datname=current_database() AND pid<>pg_backend_pid() AND state<>'idle'")"
+  if [[ "${ACTIVE_DATABASE_TRANSACTIONS}" == "0" ]]; then
+    break
+  fi
+  if [[ "${attempt}" == "30" ]]; then
+    printf '%s\n' 'Backup consistency freeze did not reach an idle transaction boundary.' >&2
+    exit 1
+  fi
+  sleep 1
+done
+smoke_step 'Backup consistency freeze and idle transaction boundary'
+
+COMPOSE_BACKEND_IMAGE_ID="$("${COMPOSE[@]}" images -q backend | head -n 1)"
+test -n "${COMPOSE_BACKEND_IMAGE_ID}"
+TOOL_IMAGE_ID="$("${DOCKER[@]}" image inspect --format '{{.Id}}' \
+  "${COMPOSE_BACKEND_IMAGE_ID}")"
+[[ "${TOOL_IMAGE_ID}" =~ ^sha256:[a-f0-9]{64}$ ]]
+SOURCE_URL="postgresql+psycopg://pja_bootstrap:smoke_bootstrap_password_2026@database:5432/personal_job_agent_smoke_test"
+{
+  printf 'POSTGRES_TOOL_IMAGE=personal-job-agent-backend:smoke@%s\n' "${TOOL_IMAGE_ID}"
+  printf 'PJA_SMOKE_SOURCE_DATABASE_URL=%s\n' "${SOURCE_URL}"
+} >>"${ENV_FILE}"
+"${COMPOSE[@]}" run --rm --no-deps backup-before-migrate \
+  python /app/scripts/v2_backup_restore.py backup \
+  --database-url-env PJA_SMOKE_SOURCE_DATABASE_URL --backup-dir /backup \
+  --files-root /app/runtime/files \
+  --project-knowledge /app/project-knowledge/PROJECT_KNOWLEDGE.md
 sudo -n true
-PYTHON_BIN="${PYTHON_BIN:-python3}" \
-  DATABASE_URL="${SOURCE_URL}" FILE_STORAGE_ROOT="${TEST_ROOT}/files" \
-  PROJECT_KNOWLEDGE_PATH="${TEST_ROOT}/knowledge/PROJECT_KNOWLEDGE.md" \
-  sudo -n --preserve-env=PYTHON_BIN,DATABASE_URL,FILE_STORAGE_ROOT,PROJECT_KNOWLEDGE_PATH \
-  "${ROOT_DIR}/scripts/backup-v2.sh" --backup-dir "${TEST_ROOT}/verified-backup" \
-  --files-root "${TEST_ROOT}/files" \
-  --project-knowledge "${TEST_ROOT}/knowledge/PROJECT_KNOWLEDGE.md"
-mapfile -t BACKUP_PATHS < <(find "${TEST_ROOT}/verified-backup" -mindepth 1 -maxdepth 1 -type d -name 'v2-*' -print)
+mapfile -t BACKUP_PATHS < <(sudo -n find "${TEST_ROOT}/backup" -mindepth 1 -maxdepth 1 -type d -name 'v2-*' -print)
 test "${#BACKUP_PATHS[@]}" = 1
-BACKUP_PATH="$(realpath "${BACKUP_PATHS[0]}")"
-BACKUP_ROOT="$(realpath "${TEST_ROOT}/verified-backup")"
+BACKUP_PATH="$(sudo -n realpath "${BACKUP_PATHS[0]}")"
+BACKUP_ROOT="$(sudo -n realpath "${TEST_ROOT}/backup")"
 [[ "${BACKUP_PATH}" == "${BACKUP_ROOT}"/v2-* ]]
 [[ "$(basename "${BACKUP_PATH}")" =~ ^v2-[0-9]{8}-[0-9]{6}-[a-f0-9]{8}$ ]]
-PYTHON_BIN="${PYTHON_BIN:-python3}" \
-  sudo -n --preserve-env=PYTHON_BIN "${ROOT_DIR}/scripts/verify-v2-backup.sh" \
-  --backup "${BACKUP_PATH}"
+"${COMPOSE[@]}" run --rm --no-deps backup-before-migrate \
+  python /app/scripts/v2_backup_restore.py verify --backup "/backup/$(basename "${BACKUP_PATH}")"
 smoke_step 'PostgreSQL/file backup manifest and checksum verification'
-PYTHON_BIN="${PYTHON_BIN:-python3}" \
-  DATABASE_URL="${RESTORE_URL}" FILE_STORAGE_ROOT="${TEST_ROOT}/restored-files" \
-  PROJECT_KNOWLEDGE_PATH="${TEST_ROOT}/restored-knowledge/PROJECT_KNOWLEDGE.md" \
-  sudo -n --preserve-env=PYTHON_BIN,DATABASE_URL,FILE_STORAGE_ROOT,PROJECT_KNOWLEDGE_PATH \
-  "${ROOT_DIR}/scripts/restore-v2.sh" --backup "${BACKUP_PATH}" \
-  --files-root "${TEST_ROOT}/restored-files" \
-  --project-knowledge "${TEST_ROOT}/restored-knowledge/PROJECT_KNOWLEDGE.md" \
+
+RESTORE_DATABASE="pja_restore_target_test_${STAMP//-/_}"
+[[ "${RESTORE_DATABASE}" =~ ^pja_restore_target_test_[0-9]{10}_[0-9]{1,10}$ ]]
+DATABASE_CONTAINER_ID="$("${COMPOSE[@]}" ps --quiet database)"
+[[ "${DATABASE_CONTAINER_ID}" =~ ^[a-f0-9]{64}$ ]]
+DATABASE_CONTAINER_LABELS="$("${DOCKER[@]}" inspect --format \
+  '{{index .Config.Labels "com.docker.compose.project"}}|{{index .Config.Labels "com.docker.compose.service"}}' \
+  "${DATABASE_CONTAINER_ID}")"
+[[ "${DATABASE_CONTAINER_LABELS}" == "${PROJECT_NAME}|database" ]]
+DATABASE_MOUNT_SOURCE="$("${DOCKER[@]}" inspect --format \
+  '{{range .Mounts}}{{if eq .Destination "/var/lib/postgresql/data"}}{{.Name}}{{end}}{{end}}' \
+  "${DATABASE_CONTAINER_ID}")"
+[[ "${DATABASE_MOUNT_SOURCE}" == "${PROJECT_NAME}_postgres-data" ]]
+DATABASE_VOLUME_LABELS="$("${DOCKER[@]}" volume inspect --format \
+  '{{index .Labels "com.docker.compose.project"}}|{{index .Labels "com.docker.compose.volume"}}' \
+  "${DATABASE_MOUNT_SOURCE}")"
+[[ "${DATABASE_VOLUME_LABELS}" == "${PROJECT_NAME}|postgres-data" ]]
+[[ "$("${DOCKER[@]}" port "${DATABASE_CONTAINER_ID}" 5432/tcp)" == \
+  "127.0.0.1:${POSTGRES_PORT}" ]]
+"${COMPOSE[@]}" exec -T database createdb -U pja_bootstrap --template=template0 \
+  "${RESTORE_DATABASE}"
+TARGET_SERVER_MAJOR="$("${COMPOSE[@]}" exec -T database psql -U pja_bootstrap \
+  -d "${RESTORE_DATABASE}" -Atqc "SELECT current_setting('server_version_num')::int / 10000")"
+[[ "${TARGET_SERVER_MAJOR}" == "16" ]]
+TARGET_SCHEMAS="$("${COMPOSE[@]}" exec -T database psql -U pja_bootstrap \
+  -d "${RESTORE_DATABASE}" -Atqc \
+  "SELECT string_agg(nspname, ',' ORDER BY nspname) FROM pg_namespace WHERE nspname NOT IN ('pg_catalog','information_schema') AND nspname !~ '^pg_(toast|temp|toast_temp)'")"
+[[ "${TARGET_SCHEMAS}" == "public" ]]
+TARGET_PUBLIC_OBJECTS="$("${COMPOSE[@]}" exec -T database psql -U pja_bootstrap \
+  -d "${RESTORE_DATABASE}" -Atqc \
+  "SELECT (SELECT COUNT(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relkind IN ('r','p','v','m','S','f','i','I')) + (SELECT COUNT(*) FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='public') + (SELECT COUNT(*) FROM pg_type t JOIN pg_namespace n ON n.oid=t.typnamespace WHERE n.nspname='public')")"
+[[ "${TARGET_PUBLIC_OBJECTS}" == "0" ]]
+"${COMPOSE[@]}" exec -T database psql -U pja_bootstrap \
+  -d "${RESTORE_DATABASE}" -v ON_ERROR_STOP=1 -c 'DROP SCHEMA public RESTRICT' >/dev/null
+[[ "$("${COMPOSE[@]}" exec -T database psql -U pja_bootstrap \
+  -d "${RESTORE_DATABASE}" -Atqc "SELECT COUNT(*) FROM pg_namespace WHERE nspname='public'")" == "0" ]]
+RESTORE_URL="postgresql+psycopg://pja_bootstrap:smoke_bootstrap_password_2026@database:5432/${RESTORE_DATABASE}"
+printf 'PJA_SMOKE_RESTORE_DATABASE_URL=%s\n' "${RESTORE_URL}" >>"${ENV_FILE}"
+install -d -m 0755 "${TEST_ROOT}/restored-files" "${TEST_ROOT}/restored-knowledge"
+"${DOCKER[@]}" run --rm -v "${TEST_ROOT}:/test-root" alpine:3.21 \
+  chown -R 10001:10001 /test-root/restored-files /test-root/restored-knowledge
+"${COMPOSE[@]}" run --rm --no-deps \
+  -v "${TEST_ROOT}/restored-files:/restore/files" \
+  -v "${TEST_ROOT}/restored-knowledge:/restore/knowledge" \
+  backup-before-migrate python /app/scripts/v2_backup_restore.py restore \
+  --database-url-env PJA_SMOKE_RESTORE_DATABASE_URL \
+  --backup "/backup/$(basename "${BACKUP_PATH}")" \
+  --files-root /restore/files \
+  --project-knowledge /restore/knowledge/PROJECT_KNOWLEDGE.md \
+  --inventory-diff-report /backup/restore-inventory-diff.json \
+  --allow-isolated-database-name-difference \
+  --allowed-owner-mapping pja_migrate=pja_bootstrap \
+  --allowed-owner-mapping pg_database_owner=pja_bootstrap \
   --confirmation 'RESTORE V2 BACKUP'
+
+"${COMPOSE[@]}" run --rm --no-deps -T \
+  -v "${TEST_ROOT}/restored-files:/restore/files" \
+  -v "${TEST_ROOT}/restored-knowledge:/restore/knowledge:ro" \
+  backup-before-migrate python - <<'PY'
+import json
+import os
+
+from sqlalchemy import select
+
+from app.auth.service import AuthService
+from app.core.config import load_v2_settings
+from app.core.security import normalize_email, verify_password
+from app.db.models import User
+from app.db.session import session_factory
+from app.readiness import readiness_status
+
+target_url = os.environ["PJA_SMOKE_RESTORE_DATABASE_URL"]
+os.environ.update(
+    {
+        "APP_ENV": "test",
+        "DATABASE_URL": target_url,
+        "TEST_DATABASE_URL": target_url,
+        "FILE_STORAGE_ROOT": "/restore/files",
+        "PROJECT_KNOWLEDGE_PATH": "/restore/knowledge/PROJECT_KNOWLEDGE.md",
+        "READINESS_REQUIRE_REDIS": "false",
+        "READINESS_REQUIRE_WORKER": "false",
+    }
+)
+email = os.environ["PJA_SMOKE_ADMIN_EMAIL"]
+password = os.environ["PJA_SMOKE_ADMIN_PASSWORD"]
+database = session_factory(target_url)()
+try:
+    user = database.scalar(select(User).where(User.normalized_email == normalize_email(email)))
+    assert user is not None and user.role == "admin" and user.is_active
+    assert user.password_hash != password and verify_password(password, user.password_hash)
+    credentials = AuthService(database, load_v2_settings()).login(
+        email, password, "restore-smoke", "restore-smoke"
+    )
+    restored_session, restored_user = AuthService(
+        database, load_v2_settings()
+    ).authenticate(credentials.token, touch=False)
+    assert restored_user.id == user.id and restored_session.user_id == user.id
+    database.rollback()
+finally:
+    database.close()
+readiness, status = readiness_status()
+assert status == 200 and readiness["ready"] is True, readiness
+assert readiness["version"] == "2.0.2", readiness
+print(json.dumps({"restored_admin_authentication": "passed", "application_readiness": "passed"}))
+PY
+smoke_step 'Restored administrator authentication and application readiness'
 
 COUNT_SQL="SELECT (SELECT COUNT(*) FROM users) || ':' || (SELECT COUNT(*) FROM resumes) || ':' || (SELECT COUNT(*) FROM resume_versions) || ':' || (SELECT COUNT(*) FROM file_assets)"
 if [[ "${V202_SCOPE}" == "1" ]]; then
@@ -804,7 +955,7 @@ fi
 SOURCE_COUNTS="$("${COMPOSE[@]}" exec -T database psql -U pja_bootstrap \
   -d personal_job_agent_smoke_test -Atqc "${COUNT_SQL}")"
 RESTORED_COUNTS="$("${COMPOSE[@]}" exec -T database psql -U pja_bootstrap \
-  -d personal_job_agent_restore_test -Atqc "${COUNT_SQL}")"
+  -d "${RESTORE_DATABASE}" -Atqc "${COUNT_SQL}")"
 test "${RESTORED_COUNTS}" = "${SOURCE_COUNTS}"
 sudo -n python3 - "${TEST_ROOT}/files" "${TEST_ROOT}/restored-files" <<'PY'
 import hashlib
@@ -829,4 +980,5 @@ if (( HOLD_SECONDS > 0 )); then
   printf 'Holding the verified isolated candidate for %s second(s).\n' "${HOLD_SECONDS}"
   sleep "${HOLD_SECONDS}"
 fi
-printf 'Version %s isolated Smoke Test passed. Project: %s\n' "${SMOKE_MILESTONE}" "${PROJECT_NAME}"
+printf 'Version %s isolated Smoke Test passed (product scope %s). Project: %s\n' \
+  "${APP_RELEASE_VERSION}" "${SMOKE_MILESTONE}" "${PROJECT_NAME}"

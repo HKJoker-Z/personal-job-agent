@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
 
 export function FeatureRemovedPage() {
   return <section className="panel state-panel feature-state" aria-labelledby="feature-removed-title">
-    <span className="eyebrow">Version 2.0.1</span>
+    <span className="eyebrow">Version 2.0.2</span>
     <h1 id="feature-removed-title">Feature removed</h1>
     <p>This workspace no longer provides Jobs, Job Rankings, Applications, Approvals, or Tasks. Historical database records were preserved for rollback and recovery.</p>
     <Link className="button-link" to="/analyze">Run a resume and job description analysis</Link>

@@ -1,4 +1,12 @@
 services:
+  backup-before-migrate:
+    command: ["python", "/app/scripts/v2_backup_restore.py", "preflight", "--database-url-env", "DATABASE_URL"]
+    environment:
+      PJA_SMOKE_SOURCE_DATABASE_URL: ${PJA_SMOKE_SOURCE_DATABASE_URL:-}
+      PJA_SMOKE_RESTORE_DATABASE_URL: ${PJA_SMOKE_RESTORE_DATABASE_URL:-}
+      PJA_SMOKE_ADMIN_EMAIL: ${PJA_SMOKE_ADMIN_EMAIL:-}
+      PJA_SMOKE_ADMIN_PASSWORD: ${PJA_SMOKE_ADMIN_PASSWORD:-}
+
   database:
     ports:
       - "127.0.0.1:${POSTGRES_TEST_PORT:-15432}:5432"
