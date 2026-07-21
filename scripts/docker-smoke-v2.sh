@@ -8,7 +8,7 @@ fi
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 STAMP="$(date +%s)-$$"
 SMOKE_MILESTONE="${PJA_SMOKE_MILESTONE:-2.0.1}"
-APP_RELEASE_VERSION="${PJA_APP_VERSION:-2.0.2}"
+APP_RELEASE_VERSION="${PJA_APP_VERSION:-2.0.3}"
 REAL_LLM_VALIDATION="${PJA_REAL_LLM_VALIDATION:-0}"
 HOLD_SECONDS="${PJA_SMOKE_HOLD_SECONDS:-0}"
 if [[ "${REAL_LLM_VALIDATION}" != "0" && "${REAL_LLM_VALIDATION}" != "1" ]]; then
@@ -356,7 +356,7 @@ curl --noproxy '*' --fail --silent --show-error \
   -F 'job_text=Synthetic role requiring FastAPI PostgreSQL RAG and Redis.' \
   -F 'save_to_history=false' -F 'use_project_knowledge=false' -F 'project_knowledge_top_k=5' \
   "${ORIGIN}/api/analyze" >"${RESPONSE_FILE}"
-python3 -c 'import json,sys; value=json.load(open(sys.argv[1])); assert value["used_knowledge_base"] is False; assert value["retrieval_count"] == 0; assert value["rag_sources"] == []' "${RESPONSE_FILE}"
+python3 -c 'import json,sys; value=json.load(open(sys.argv[1])); assert value["analysis_status"] in {"complete","repaired","partial","fallback"}; assert value["used_knowledge_base"] is False; assert value["retrieval_count"] == 0; assert value["rag_sources"] == []; assert isinstance(value["analysis_warnings"], list); assert isinstance(value["scoring_breakdown"], dict)' "${RESPONSE_FILE}"
 smoke_step 'direct Resume-to-JD Analyze with Project Knowledge disabled'
 
 curl --noproxy '*' --fail --silent --show-error \
@@ -365,7 +365,7 @@ curl --noproxy '*' --fail --silent --show-error \
   -F 'job_text=Synthetic role requiring FastAPI PostgreSQL RAG and Redis.' \
   -F 'save_to_history=true' -F 'use_project_knowledge=true' -F 'project_knowledge_top_k=5' \
   "${ORIGIN}/api/analyze" >"${RESPONSE_FILE}"
-python3 -c 'import json,sys; value=json.load(open(sys.argv[1])); assert value["used_knowledge_base"] is True; assert 1 <= value["retrieval_count"] <= 5; assert value["rag_sources"]; assert all(set(item) == {"document","section","chunk_id","relevance_score","supported_skills"} for item in value["rag_sources"]); assert any(item["source"] == "project_knowledge" for item in value["evidence_mapping"]); assert not (set(value["matched_skills"]) & set(value["missing_skills"])); claims=value["claim_validation"]; assert claims["unsupported_claim_count"] == 0 or (claims.get("output_blocked") is True and value["cover_letter"] == "" and value["upgraded_resume_bullets"] == [])' "${RESPONSE_FILE}"
+python3 -c 'import json,sys; value=json.load(open(sys.argv[1])); assert value["analysis_status"] in {"complete","repaired","partial","fallback"}; assert value["used_knowledge_base"] is True; assert 1 <= value["retrieval_count"] <= 5; assert value["rag_sources"]; assert all(set(item) == {"document","section","chunk_id","relevance_score","supported_skills"} for item in value["rag_sources"]); assert any(item["source"] == "project_knowledge" for item in value["evidence_mapping"]); assert not (set(value["matched_skills"]) & set(value["missing_skills"])); assert value["claim_validation"].get("output_blocked") is not True' "${RESPONSE_FILE}"
 HISTORY_ID="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["application_id"])' "${RESPONSE_FILE}")"
 curl --noproxy '*' --fail --silent --show-error --cookie "${COOKIE_JAR}" \
   "${ORIGIN}/api/history/${HISTORY_ID}" >"${RESPONSE_FILE}"
@@ -388,15 +388,18 @@ PY
 curl --noproxy '*' --fail --silent --show-error \
   --cookie "${COOKIE_JAR}" -H "Origin: ${ORIGIN}" -H "X-CSRF-Token: ${CSRF_TOKEN}" \
   -F "file=@${DOCX_FIXTURE};type=application/vnd.openxmlformats-officedocument.wordprocessingml.document" \
-  "${ORIGIN}/api/resumes/import" >"${RESPONSE_FILE}"
+  "${ORIGIN}/api/resumes/upload" >"${RESPONSE_FILE}"
 IMPORTED_RESUME_ID="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["resume"]["id"])' "${RESPONSE_FILE}")"
 IMPORTED_VERSION_ID="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["version"]["id"])' "${RESPONSE_FILE}")"
 IMPORTED_FILE_ID="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["file"]["id"])' "${RESPONSE_FILE}")"
-python3 -c 'import json,sys; value=json.load(open(sys.argv[1])); assert value["needs_review"] is True; assert value["version"]["status"] == "draft"; assert any(item.get("verification_status") == "needs_review" for section in value["version"]["content"]["sections"] for item in section["items"])' "${RESPONSE_FILE}"
+python3 -c 'import json,sys; value=json.load(open(sys.argv[1])); assert value["resume"]["is_primary"] is True; assert value["needs_review"] is True; assert value["version"]["status"] == "draft"; assert value["file"]["mime_type"].endswith("document"); assert value["file"]["file_size"] > 0; assert len(value["file"]["content_hash"]) == 64; assert value["version"]["extracted_text"]; assert any(item.get("verification_status") == "needs_review" for section in value["version"]["content"]["sections"] for item in section["items"])' "${RESPONSE_FILE}"
+curl --noproxy '*' --fail --silent --show-error --cookie "${COOKIE_JAR}" \
+  "${ORIGIN}/api/resumes/primary" >"${RESPONSE_FILE}"
+python3 -c 'import json,sys; value=json.load(open(sys.argv[1])); assert value["id"] == sys.argv[2]; assert value["is_primary"] is True; assert value["active_version"]["extracted_text"]' "${RESPONSE_FILE}" "${IMPORTED_RESUME_ID}"
 api_write POST /api/resumes/import/confirm \
   "{\"resume_id\":\"${IMPORTED_RESUME_ID}\",\"version_id\":\"${IMPORTED_VERSION_ID}\",\"action\":\"finalize\"}"
 python3 -c 'import json,sys; assert json.load(open(sys.argv[1]))["version"]["status"] == "final"' "${RESPONSE_FILE}"
-smoke_step 'DOCX import review state and JSON request body finalize flow'
+smoke_step 'DOCX upload, automatic Primary Resume, extracted text, and finalize flow'
 
 if [[ "${V202_SCOPE}" == "1" ]]; then
   api_write POST /api/jobs/import/manual \
@@ -937,7 +940,7 @@ finally:
     database.close()
 readiness, status = readiness_status()
 assert status == 200 and readiness["ready"] is True, readiness
-assert readiness["version"] == "2.0.2", readiness
+assert readiness["version"] == os.environ["APP_VERSION"], readiness
 print(json.dumps({"restored_admin_authentication": "passed", "application_readiness": "passed"}))
 PY
 smoke_step 'Restored administrator authentication and application readiness'

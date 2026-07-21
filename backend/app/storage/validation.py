@@ -11,7 +11,15 @@ from pathlib import Path
 
 PDF_MEDIA_TYPE = "application/pdf"
 DOCX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-ALLOWED = {".pdf": PDF_MEDIA_TYPE, ".docx": DOCX_MEDIA_TYPE}
+TEXT_MEDIA_TYPE = "text/plain"
+MARKDOWN_MEDIA_TYPE = "text/markdown"
+ALLOWED = {
+    ".pdf": {PDF_MEDIA_TYPE},
+    ".docx": {DOCX_MEDIA_TYPE},
+    ".txt": {TEXT_MEDIA_TYPE},
+    ".md": {MARKDOWN_MEDIA_TYPE, TEXT_MEDIA_TYPE, "text/x-markdown"},
+    ".markdown": {MARKDOWN_MEDIA_TYPE, TEXT_MEDIA_TYPE, "text/x-markdown"},
+}
 MAX_DOCX_FILES = 300
 MAX_DOCX_EXPANDED_BYTES = 50 * 1024 * 1024
 MAX_COMPRESSION_RATIO = 100
@@ -39,13 +47,13 @@ def validate_resume_upload(
         raise UnsafeUpload("Uploaded resume exceeds the configured size limit.")
     display_name = safe_display_filename(filename)
     extension = Path(display_name).suffix.lower()
-    expected_media_type = ALLOWED.get(extension)
-    if expected_media_type is None or media_type != expected_media_type:
-        raise UnsafeUpload("Only PDF and DOCX resumes with matching media types are accepted.")
+    expected_media_types = ALLOWED.get(extension)
+    if expected_media_types is None or media_type not in expected_media_types:
+        raise UnsafeUpload("Only PDF, DOCX, TXT, and Markdown resumes with matching media types are accepted.")
     if extension == ".pdf":
         if not data.startswith(b"%PDF-"):
             raise UnsafeUpload("PDF file signature is invalid.")
-    else:
+    elif extension == ".docx":
         _validate_docx(data)
     return display_name, extension, hashlib.sha256(data).hexdigest()
 

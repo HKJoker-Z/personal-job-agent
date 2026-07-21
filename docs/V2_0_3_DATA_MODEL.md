@@ -1,22 +1,19 @@
 # Version 2.0.3 Data Model
 
-Alembic revision `20260713_03` follows `20260713_02`; the earlier migrations are unchanged. It adds ten tables:
+Alembic revision `20260721_05` follows `20260717_04`. It makes one minimal product-schema change:
 
-| Table | Purpose |
+| Table | Change |
 | --- | --- |
-| `job_match_analyses` | Immutable scoring input/output snapshot with Profile/Job/Resume revisions and weight config |
-| `job_match_dimensions` | Eight deterministic dimension results |
-| `job_match_evidence` | Source IDs/revisions, match kind, confidence, and contribution |
-| `job_rank_runs` | Reproducible ranking configuration |
-| `job_rank_items` | Ordered Job/Analysis rows and factor contributions |
-| `application_packages` | Application-scoped source snapshot and review status |
-| `application_materials` | Logical Resume, letter, answer, and future message resources |
-| `application_material_versions` | Immutable content lineage, provider metadata, validation state, and finalization time |
-| `material_evidence_links` | Hashed claim-to-source support result |
-| `material_reviews` | Private append-only review decisions |
+| `resumes` | Add non-null Boolean `is_primary`, default false |
 
-Ownership columns and common foreign keys/filter columns are indexed. Check constraints limit scores, confidence, coverage, status enums, and version numbers. PostgreSQL has a partial unique index permitting only one approved Package per Application. SQLite tests enforce the equivalent service rule.
+Migration upgrade behavior:
 
-An Analysis is never overwritten when its Profile or Job changes. A Rank Item references the exact Analysis used. A Package captures Profile revision, Job revision, finalized source Resume Version, and Match Analysis. A Material Version never contains a copied full Profile or Job Description; evidence remains linked by source ID/revision and a safe summary.
+- backfills the newest active Resume as primary for each user who has one;
+- adds partial unique index `uq_resumes_user_primary_active` on `owner_user_id` where the Resume is primary and not archived;
+- preserves every Resume, Resume Version, and File Asset row.
 
-Downgrade removes only these Alpha 3 tables and indexes, returning to `20260713_02`. Fresh upgrade, Alpha 2 upgrade, downgrade, and re-upgrade are all integration-tested on PostgreSQL.
+Application transactions clear the old primary before assigning the new one. Upload extraction and validation happen before this transaction, so a failed upload cannot alter the current primary. Archiving the primary assigns the newest remaining active Resume or leaves the user with no primary.
+
+No new table is introduced. Analysis status and warnings use the existing History `notes` storage as a private prefixed metadata object, so complete, repaired, partial, and fallback results can be saved without another schema change. Ordinary History notes remain compatible.
+
+Downgrade removes only the primary index and column; it does not remove Resume records or files.

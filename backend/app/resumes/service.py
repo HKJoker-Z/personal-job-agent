@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID
 
+import chardet
 from docx import Document
 from pypdf import PdfReader
 from sqlalchemy.orm import Session
@@ -18,7 +19,13 @@ from app.db.repositories.auth import AuthRepository
 from app.resumes.repository import ResumeRepository
 from app.resumes.schemas import ResumeContent
 from app.storage.local import LocalStorageProvider
-from app.storage.validation import DOCX_MEDIA_TYPE, PDF_MEDIA_TYPE, validate_resume_upload
+from app.storage.validation import (
+    DOCX_MEDIA_TYPE,
+    MARKDOWN_MEDIA_TYPE,
+    PDF_MEDIA_TYPE,
+    TEXT_MEDIA_TYPE,
+    validate_resume_upload,
+)
 
 
 class ResumeNotFound(RuntimeError):
@@ -37,6 +44,7 @@ def _serialize(value: object, *, include_content: bool = False) -> dict[str, obj
             "language": value.language,
             "target_role": value.target_role,
             "status": value.status,
+            "is_primary": value.is_primary,
             "active_version_id": str(value.active_version_id) if value.active_version_id else None,
             "created_at": value.created_at,
             "updated_at": value.updated_at,
@@ -59,6 +67,7 @@ def _serialize(value: object, *, include_content: bool = False) -> dict[str, obj
         if include_content:
             result["content"] = value.content_json
             result["parsed_text"] = value.parsed_text
+            result["extracted_text"] = value.parsed_text
         return result
     if isinstance(value, FileAsset):
         return {
@@ -66,8 +75,11 @@ def _serialize(value: object, *, include_content: bool = False) -> dict[str, obj
             "kind": value.kind,
             "original_filename": value.original_filename,
             "media_type": value.media_type,
+            "mime_type": value.media_type,
             "size_bytes": value.size_bytes,
+            "file_size": value.size_bytes,
             "sha256": value.sha256,
+            "content_hash": value.sha256,
             "created_at": value.created_at,
             "deleted_at": value.deleted_at,
         }
@@ -85,10 +97,27 @@ class ResumeService:
     def list(self) -> list[dict[str, object]]:
         return [_serialize(value) for value in self.repository.resumes(self.user_id)]
 
+    def primary(self) -> dict[str, object] | None:
+        value = self.repository.primary(self.user_id)
+        if value is None:
+            return None
+        result = _serialize(value)
+        active_version = (
+            self.repository.version(value.id, value.active_version_id)
+            if value.active_version_id is not None
+            else None
+        )
+        result["active_version"] = (
+            _serialize(active_version, include_content=True) if active_version is not None else None
+        )
+        return result
+
     def create(self, values: dict[str, object]) -> dict[str, object]:
         resume = Resume(user_id=self.user_id, **values)
         self.db.add(resume)
         self.db.flush()
+        if self.repository.primary(self.user_id) is None:
+            self._make_primary(resume)
         self._audit("resume.created", resume.id)
         return _serialize(resume)
 
@@ -105,8 +134,14 @@ class ResumeService:
 
     def archive(self, resume_id: UUID) -> None:
         resume = self._resume_for_update(resume_id)
+        was_primary = resume.is_primary
+        resume.is_primary = False
         resume.status = "archived"
         resume.archived_at = utc_now()
+        if was_primary:
+            remaining = [item for item in self.repository.active_for_update(self.user_id) if item.id != resume.id]
+            if remaining:
+                self._make_primary(remaining[0], locked=remaining)
         self._audit("resume.archived", resume.id)
 
     def versions(self, resume_id: UUID) -> list[dict[str, object]]:
@@ -248,8 +283,11 @@ class ResumeService:
         self._audit("file.soft_deleted", asset.id)
 
     def import_resume(self, filename: str, media_type: str, data: bytes) -> dict[str, object]:
-        asset, duplicate = self.upload_file(filename, media_type, data)
+        # Parse before making any database or primary-resume changes. A failed
+        # upload therefore cannot disturb the current primary resume.
+        validate_resume_upload(filename, media_type, data, self.settings.max_stored_file_size_bytes)
         parsed_text = extract_resume_text_safely(data, media_type)
+        asset, duplicate = self.upload_file(filename, media_type, data)
         title = Path(asset.original_filename).stem[:240] or "Imported Resume"
         resume = Resume(user_id=self.user_id, title=title, language="en", target_role="")
         self.db.add(resume)
@@ -264,8 +302,26 @@ class ResumeService:
             source_type="import",
             source_file_id=asset.id,
         )
+        self._make_primary(resume)
         self._audit("resume.imported", resume.id, {"duplicate_file": duplicate})
-        return {"resume": _serialize(resume), "version": version, "file": _serialize(asset), "needs_review": True}
+        return {
+            "resume": _serialize(resume),
+            "version": version,
+            "file": _serialize(asset),
+            "needs_review": True,
+            "is_primary": True,
+        }
+
+    def _make_primary(self, resume: Resume, *, locked: list[Resume] | None = None) -> None:
+        values = locked if locked is not None else self.repository.active_for_update(self.user_id)
+        for value in values:
+            value.is_primary = False
+        # Flush the previous primary off before enabling the new one so the
+        # partial unique index is respected on SQLite and PostgreSQL alike.
+        self.db.flush()
+        resume.is_primary = True
+        self.db.flush()
+        self._audit("resume.primary_set", resume.id)
 
     def _resume(self, resume_id: UUID) -> Resume:
         value = self.repository.resume(self.user_id, resume_id)
@@ -305,15 +361,28 @@ def extract_resume_text_safely(data: bytes, media_type: str) -> str:
             text = "\n".join((page.extract_text() or "") for page in reader.pages)
         elif media_type == DOCX_MEDIA_TYPE:
             document = Document(io.BytesIO(data))
-            text = "\n".join(paragraph.text for paragraph in document.paragraphs)
+            values = [paragraph.text for paragraph in document.paragraphs]
+            values.extend(cell.text for table in document.tables for row in table.rows for cell in row.cells)
+            text = "\n".join(values)
+        elif media_type in {TEXT_MEDIA_TYPE, MARKDOWN_MEDIA_TYPE, "text/x-markdown"}:
+            try:
+                text = data.decode("utf-8", errors="strict")
+            except UnicodeDecodeError:
+                detected = chardet.detect(data).get("encoding") or "utf-8"
+                try:
+                    text = data.decode(detected, errors="replace")
+                except LookupError:
+                    text = data.decode("utf-8", errors="replace")
         else:
             raise ValueError("Unsupported resume media type.")
     except ValueError:
         raise
     except Exception as exc:
         raise ValueError("Resume document could not be parsed.") from exc
-    text = text.strip()
+    text = text.replace("\x00", "").replace("\r\n", "\n").replace("\r", "\n").strip()
     if not text:
+        if media_type == PDF_MEDIA_TYPE:
+            raise ValueError("No selectable text was found in this PDF.")
         raise ValueError("Resume does not contain extractable text.")
     if len(text) > 200_000:
         raise ValueError("Extracted resume text is too large.")

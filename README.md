@@ -1,12 +1,16 @@
 # Personal Job Agent
 
-Personal Job Agent 2.0.2 is a private resume-to-job analysis workspace. It contains the complete Version 2.0.1 product surface and adds a production-safety fix for PostgreSQL 16 backup and restore.
+Personal Job Agent 2.0.3 is a private resume-to-job analysis workspace. It adds resilient DeepSeek parsing with deterministic fallback results plus Resume upload and automatic Primary Resume selection to the production Version 2.0.2 foundation.
 
-## Version 2.0.2 scope
+## Version 2.0.3 scope
 
 The authenticated application provides Dashboard, Analyze, Profile, Resume Versions, History, Project Knowledge, historical Agent Runs, Monitoring/Evaluation for administrators, and Account controls. Analyze accepts one stored/uploaded Resume and one pasted job description or safely fetched job URL. It does not require a Job or Application database entity.
 
-Jobs, Job Rankings, Applications, Approvals, and Tasks are retired. Their old web routes show Feature Removed, and authenticated retired API calls return HTTP 410. Existing production tables and records are retained for rollback, backup, and recovery; Version 2.0.2 has no schema migration or product change beyond Version 2.0.1.
+Jobs, Job Rankings, Applications, Approvals, and Tasks remain retired. Their old web routes show Feature Removed, and authenticated retired API calls return HTTP 410. Existing production tables and records are retained for rollback, backup, and recovery.
+
+DeepSeek output is normalized through standard parsing, safe JSON extraction, tolerant field reconciliation, and at most one short format-repair call. When the provider is unavailable or no usable structure can be recovered, Analyze returns a deterministic local result instead of a blank format-failure page. Final scores, RAG sources, and evidence reconciliation remain backend-owned.
+
+Resume Library accepts PDF, DOCX, TXT, and Markdown uploads. The latest successful upload becomes the user's Primary Resume atomically and is loaded automatically in Analyze. Version 2.0.3 adds only the minimal `resumes.is_primary` migration; no existing Resume or version is deleted.
 
 Version 2.0.1 was formally released but was never deployed to production. Its deployment was stopped when a PostgreSQL 17.10 `pg_dump` archive emitted `transaction_timeout`, which PostgreSQL 16 cannot restore. Version 2.0.2 replaces it as the production upgrade target. Backup and restore now require `server major = pg_dump major = pg_restore major = 16`, immutable image provenance, a verified manifest, and a strict isolated restore rehearsal. Dump or archive content must never be edited to bypass compatibility.
 
@@ -58,10 +62,10 @@ npm test
 npm run build
 ```
 
-Run the Version 2.0.2 application over the retained Version 2.0.1 product-regression scope using only the Mock LLM:
+Run the Version 2.0.3 application over the retained Version 2.0.1 product-regression scope using only the Mock LLM:
 
 ```bash
-PJA_SMOKE_MILESTONE=2.0.1 PJA_APP_VERSION=2.0.2 scripts/docker-smoke-v2.sh
+PJA_SMOKE_MILESTONE=2.0.1 PJA_APP_VERSION=2.0.3 scripts/docker-smoke-v2.sh
 ```
 
 Run the strict PostgreSQL 16 backup/restore regression after building the controlled Backend tool images:
@@ -82,6 +86,11 @@ Production deployment requires immutable `@sha256` image references, verified ba
 - [Development](docs/V2_DEVELOPMENT.md)
 - [Production readiness](docs/V2_PRODUCTION_READINESS.md)
 - [Deployment](docs/DEPLOYMENT.md)
+- [Version 2.0.3 architecture](docs/V2_0_3_ARCHITECTURE.md)
+- [Version 2.0.3 API](docs/V2_0_3_API.md)
+- [Version 2.0.3 data model](docs/V2_0_3_DATA_MODEL.md)
+- [Version 2.0.3 test plan](docs/V2_0_3_TEST_PLAN.md)
+- [Version 2.0.3 release notes](docs/V2_0_3_RELEASE_NOTES.md)
 - [Version 2.0.2 release notes](docs/V2_0_2_RELEASE_NOTES.md)
 - [Version 2.0.1 release notes](docs/V2_0_1_RELEASE_NOTES.md)
 

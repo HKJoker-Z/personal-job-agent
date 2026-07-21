@@ -39,6 +39,11 @@ def list_resumes(db: DbSession, user: CurrentUser) -> list[dict[str, object]]:
     return _service(db, user).list()
 
 
+@router.get("/api/resumes/primary")
+def primary_resume(db: DbSession, user: CurrentUser) -> dict[str, object] | None:
+    return _service(db, user).primary()
+
+
 @router.post("/api/resumes", status_code=status.HTTP_201_CREATED)
 def create_resume(payload: ResumeCreate, db: DbSession, user: CurrentUser) -> dict[str, object]:
     return _service(db, user).create(payload.model_dump())
@@ -197,6 +202,19 @@ def delete_file(file_id: UUID, db: DbSession, user: CurrentUser) -> dict[str, bo
 
 @router.post("/api/resumes/import", status_code=status.HTTP_201_CREATED)
 async def import_resume(
+    db: DbSession, user: CurrentUser, file: UploadFile = File(...)
+) -> dict[str, object]:
+    try:
+        data = await file.read(load_v2_settings().max_stored_file_size_bytes + 1)
+        return _service(db, user).import_resume(
+            file.filename or "resume", file.content_type or "", data
+        )
+    except (UnsafeUpload, ResumeConflict, ValueError) as exc:
+        _raise(exc)
+
+
+@router.post("/api/resumes/upload", status_code=status.HTTP_201_CREATED)
+async def upload_and_create_primary_resume(
     db: DbSession, user: CurrentUser, file: UploadFile = File(...)
 ) -> dict[str, object]:
     try:

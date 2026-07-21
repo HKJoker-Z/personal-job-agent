@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
-APP_VERSION = os.getenv("APP_VERSION", "2.0.2").strip() or "2.0.2"
+APP_VERSION = os.getenv("APP_VERSION", "2.0.3").strip() or "2.0.3"
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 BACKEND_DIR = Path(__file__).resolve().parent
 DEFAULT_DEVELOPMENT_DATABASE_PATH = (BACKEND_DIR / "data" / "app.db").resolve(strict=False)
@@ -80,6 +80,8 @@ class AppConfig:
     max_upload_size_mb: int
     request_timeout_seconds: int
     model_max_output_tokens: int
+    analysis_resume_max_chars: int
+    analysis_job_description_max_chars: int
     enable_api_docs: bool
     log_level: str
     monitoring_admin_token_configured: bool
@@ -122,7 +124,7 @@ def load_config(*, validate_production: bool = True) -> AppConfig:
         deepseek_api_key=deepseek_api_key,
         allowed_origins=allowed_origins,
         trusted_hosts=trusted_hosts,
-        max_upload_size_mb=parse_int("MAX_UPLOAD_SIZE_MB", os.getenv("MAX_UPLOAD_SIZE_MB"), 8, 1, 8),
+        max_upload_size_mb=parse_int("MAX_UPLOAD_SIZE_MB", os.getenv("MAX_UPLOAD_SIZE_MB"), 10, 1, 32),
         request_timeout_seconds=parse_int(
             "REQUEST_TIMEOUT_SECONDS", os.getenv("REQUEST_TIMEOUT_SECONDS"), 60, 5, 300
         ),
@@ -132,6 +134,20 @@ def load_config(*, validate_production: bool = True) -> AppConfig:
             1200,
             100,
             5000,
+        ),
+        analysis_resume_max_chars=parse_int(
+            "ANALYSIS_RESUME_MAX_CHARS",
+            os.getenv("ANALYSIS_RESUME_MAX_CHARS"),
+            100_000,
+            1_000,
+            200_000,
+        ),
+        analysis_job_description_max_chars=parse_int(
+            "ANALYSIS_JOB_DESCRIPTION_MAX_CHARS",
+            os.getenv("ANALYSIS_JOB_DESCRIPTION_MAX_CHARS"),
+            60_000,
+            1_000,
+            120_000,
         ),
         enable_api_docs=parse_bool("ENABLE_API_DOCS", os.getenv("ENABLE_API_DOCS"), not production),
         log_level=log_level,
@@ -166,6 +182,8 @@ def safe_config_status(config: AppConfig) -> dict[str, object]:
         "max_upload_size_mb": config.max_upload_size_mb,
         "request_timeout_seconds": config.request_timeout_seconds,
         "model_max_output_tokens": config.model_max_output_tokens,
+        "analysis_resume_max_chars": config.analysis_resume_max_chars,
+        "analysis_job_description_max_chars": config.analysis_job_description_max_chars,
         "monitoring_admin_configured": config.monitoring_admin_token_configured,
         "monitoring_remote_admin_allowed": config.monitoring_allow_remote_admin,
     }

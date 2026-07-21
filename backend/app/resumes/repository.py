@@ -19,7 +19,26 @@ class ResumeRepository:
             self.db.scalars(
                 select(Resume)
                 .where(Resume.user_id == user_id, Resume.archived_at.is_(None))
-                .order_by(Resume.updated_at.desc())
+                .order_by(Resume.is_primary.desc(), Resume.updated_at.desc(), Resume.created_at.desc())
+            )
+        )
+
+    def primary(self, user_id: UUID) -> Resume | None:
+        return self.db.scalar(
+            select(Resume).where(
+                Resume.user_id == user_id,
+                Resume.is_primary.is_(True),
+                Resume.archived_at.is_(None),
+            )
+        )
+
+    def active_for_update(self, user_id: UUID) -> list[Resume]:
+        return list(
+            self.db.scalars(
+                select(Resume)
+                .where(Resume.user_id == user_id, Resume.archived_at.is_(None))
+                .order_by(Resume.updated_at.desc(), Resume.created_at.desc())
+                .with_for_update()
             )
         )
 

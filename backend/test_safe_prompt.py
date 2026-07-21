@@ -80,14 +80,14 @@ class SafePromptTest(unittest.TestCase):
             job_description="PostgreSQL role",
             rag_chunks=[{"chunk_id": 11, "content": "Implemented PostgreSQL 16."}],
         )
-        contract = prompt.split("Return exactly this compact shape:", 1)[1].split(
+        contract = prompt.split("Use these keys:", 1)[1].split(
             "<USER_PROVIDED_RESUME>", 1
         )[0]
-        self.assertIn('"evidence_references"', contract)
-        self.assertNotIn('"rag_sources"', contract)
-        self.assertNotIn('"retrieval_count"', contract)
-        self.assertNotIn('"used_knowledge_base"', contract)
-        self.assertNotIn('"cover_letter"', contract)
+        self.assertIn("evidence_references", contract)
+        self.assertNotIn("rag_sources", contract)
+        self.assertNotIn("retrieval_count", contract)
+        self.assertNotIn("used_knowledge_base", contract)
+        self.assertNotIn("cover_letter", contract)
 
     def test_prompt_uses_short_evidence_ids_and_stays_compact(self):
         chunks = [

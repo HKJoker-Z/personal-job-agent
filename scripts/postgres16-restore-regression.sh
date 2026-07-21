@@ -492,7 +492,7 @@ from app.readiness import readiness_status
 payload, status = readiness_status()
 assert status == 200, payload
 assert payload["ready"] is True, payload
-assert payload["version"] == "2.0.2", payload
+assert payload["version"] == "2.0.3", payload
 assert payload["database_schema"] == "ready", payload
 assert payload["knowledge_search"] == "ready", payload
 print(json.dumps({"status": payload["status"], "version": payload["version"]}, sort_keys=True))

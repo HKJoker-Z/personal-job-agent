@@ -11,6 +11,7 @@ from uuid import UUID
 from docx import Document
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from reportlab.pdfgen import canvas
 from sqlalchemy import select
 
 from app.api.routers import auth, profile, resumes
@@ -45,6 +46,16 @@ def malformed_docx_bytes():
             "word/document.xml",
             '<?xml version="1.0"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>Incomplete package</w:t></w:r></w:p></w:body></w:document>',
         )
+    return output.getvalue()
+
+
+def pdf_bytes(text="Platform Engineer"):
+    output = io.BytesIO()
+    document = canvas.Canvas(output)
+    if text:
+        document.drawString(72, 720, text)
+    document.showPage()
+    document.save()
     return output.getvalue()
 
 
@@ -359,6 +370,7 @@ class V2FoundationTest(unittest.TestCase):
             self.login()
             self.assertEqual(self.client.get(f"/api/resumes/{resume['id']}").status_code, 404)
             self.assertEqual(self.client.get(f"/api/files/{upload['file']['id']}/metadata").status_code, 404)
+            self.assertIsNone(self.client.get("/api/resumes/primary").json())
         finally:
             other_client.close()
 
@@ -396,6 +408,117 @@ class V2FoundationTest(unittest.TestCase):
             headers=self.unsafe_headers(csrf),
         )
         self.assertEqual(response.status_code, 400, response.text)
+
+    def test_pdf_upload_creates_primary_resume(self):
+        csrf = self.login()
+        response = self.client.post(
+            "/api/resumes/upload",
+            files={"file": ("platform.pdf", pdf_bytes("Python Platform Engineer"), "application/pdf")},
+            headers=self.unsafe_headers(csrf),
+        )
+        self.assertEqual(response.status_code, 201, response.text)
+        value = response.json()
+        self.assertTrue(value["resume"]["is_primary"])
+        self.assertIn("Python Platform Engineer", value["version"]["extracted_text"])
+        self.assertEqual(value["file"]["original_filename"], "platform.pdf")
+        self.assertTrue(value["file"]["content_hash"])
+
+    def test_txt_upload_creates_resume_and_preserves_text(self):
+        csrf = self.login()
+        response = self.client.post(
+            "/api/resumes/upload",
+            files={"file": ("resume.txt", "Skills\r\n• Python\r\nFastAPI".encode(), "text/plain")},
+            headers=self.unsafe_headers(csrf),
+        )
+        self.assertEqual(response.status_code, 201, response.text)
+        self.assertIn("• Python\nFastAPI", response.json()["version"]["extracted_text"])
+
+    def test_markdown_upload_is_supported(self):
+        csrf = self.login()
+        response = self.client.post(
+            "/api/resumes/upload",
+            files={"file": ("resume.md", b"# Skills\n- Python", "text/markdown")},
+            headers=self.unsafe_headers(csrf),
+        )
+        self.assertEqual(response.status_code, 201, response.text)
+
+    def test_unsupported_upload_type_is_rejected(self):
+        csrf = self.login()
+        response = self.client.post(
+            "/api/resumes/upload",
+            files={"file": ("resume.doc", b"legacy", "application/msword")},
+            headers=self.unsafe_headers(csrf),
+        )
+        self.assertEqual(response.status_code, 400)
+
+    def test_oversized_upload_is_rejected(self):
+        csrf = self.login()
+        with patch.dict(os.environ, {"MAX_STORED_FILE_SIZE_MB": "1"}, clear=False):
+            response = self.client.post(
+                "/api/resumes/upload",
+                files={"file": ("resume.txt", b"x" * (1024 * 1024 + 1), "text/plain")},
+                headers=self.unsafe_headers(csrf),
+            )
+        self.assertEqual(response.status_code, 400)
+
+    def test_pdf_without_selectable_text_has_clear_error(self):
+        csrf = self.login()
+        response = self.client.post(
+            "/api/resumes/upload",
+            files={"file": ("scan.pdf", pdf_bytes(""), "application/pdf")},
+            headers=self.unsafe_headers(csrf),
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["detail"], "No selectable text was found in this PDF.")
+
+    def test_latest_upload_is_only_primary_and_primary_api_returns_it(self):
+        csrf = self.login()
+        first = self.client.post(
+            "/api/resumes/upload", files={"file": ("first.txt", b"Python", "text/plain")}, headers=self.unsafe_headers(csrf)
+        ).json()
+        second = self.client.post(
+            "/api/resumes/upload", files={"file": ("second.txt", b"FastAPI", "text/plain")}, headers=self.unsafe_headers(csrf)
+        ).json()
+        resumes_value = self.client.get("/api/resumes").json()
+        self.assertEqual([item["id"] for item in resumes_value if item["is_primary"]], [second["resume"]["id"]])
+        self.assertEqual(self.client.get("/api/resumes/primary").json()["id"], second["resume"]["id"])
+        self.assertFalse(next(item for item in resumes_value if item["id"] == first["resume"]["id"])["is_primary"])
+
+    def test_failed_upload_does_not_change_primary(self):
+        csrf = self.login()
+        primary = self.client.post(
+            "/api/resumes/upload", files={"file": ("valid.txt", b"Python", "text/plain")}, headers=self.unsafe_headers(csrf)
+        ).json()["resume"]
+        failed = self.client.post(
+            "/api/resumes/upload", files={"file": ("scan.pdf", pdf_bytes(""), "application/pdf")}, headers=self.unsafe_headers(csrf)
+        )
+        self.assertEqual(failed.status_code, 400)
+        self.assertEqual(self.client.get("/api/resumes/primary").json()["id"], primary["id"])
+
+    def test_deleting_primary_selects_latest_remaining_resume(self):
+        csrf = self.login()
+        first = self.client.post(
+            "/api/resumes/upload", files={"file": ("first.txt", b"Python", "text/plain")}, headers=self.unsafe_headers(csrf)
+        ).json()["resume"]
+        second = self.client.post(
+            "/api/resumes/upload", files={"file": ("second.txt", b"FastAPI", "text/plain")}, headers=self.unsafe_headers(csrf)
+        ).json()["resume"]
+        deleted = self.client.delete(f"/api/resumes/{second['id']}", headers=self.unsafe_headers(csrf))
+        self.assertEqual(deleted.status_code, 200)
+        self.assertEqual(self.client.get("/api/resumes/primary").json()["id"], first["id"])
+
+    def test_duplicate_upload_keeps_one_primary_and_valid_versions(self):
+        csrf = self.login()
+        content = b"Python FastAPI"
+        first = self.client.post(
+            "/api/resumes/upload", files={"file": ("same.txt", content, "text/plain")}, headers=self.unsafe_headers(csrf)
+        ).json()
+        second = self.client.post(
+            "/api/resumes/upload", files={"file": ("same.txt", content, "text/plain")}, headers=self.unsafe_headers(csrf)
+        ).json()
+        self.assertEqual(first["file"]["id"], second["file"]["id"])
+        self.assertNotEqual(first["resume"]["id"], second["resume"]["id"])
+        self.assertEqual(len([item for item in self.client.get("/api/resumes").json() if item["is_primary"]]), 1)
 
 
 if __name__ == "__main__":

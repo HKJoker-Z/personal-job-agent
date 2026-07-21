@@ -1,36 +1,36 @@
-# Version 2.0.2 deployment and rollback
+# Version 2.0.3 deployment and rollback
 
-Version 2.0.1 was released but never deployed. Version 2.0.2 contains all of its user features and replaces it as the only Version 2 production upgrade target. Production moves directly from Version 2.0.0 to Version 2.0.2; Version 2.0.1 is neither an intermediate deployment nor a rollback target.
+Version 2.0.3 upgrades the current production Version 2.0.2 release. It changes only resilient analysis behavior and Primary Resume upload/selection. Existing navigation, authentication, retired-feature boundaries, Redis/Worker/Outbox topology, TLS, Mihomo, `pja-br0`, and policy preference 8999 remain unchanged.
 
 ## Production artifacts
 
-Use `deploy/production/compose.yaml` and stage its referenced Nginx, Redis initialization, and PostgreSQL role scripts under the restricted release directory. Keep `production.env`, TLS private keys, and host Redis configuration outside Git. Do not read or print production secrets. Set `BACKEND_IMAGE` and `FRONTEND_IMAGE` to the released Version 2.0.2 GHCR `@sha256` references and set `RELEASE_VERSION=2.0.2`.
+Use `deploy/production/compose.yaml`. Keep `production.env`, TLS private keys, host Redis configuration, Resume files, and runtime Project Knowledge outside Git. Do not print secrets. Set Backend and Frontend to the released Version 2.0.3 GHCR `@sha256` references and `RELEASE_VERSION=2.0.3`.
 
-The production database stays on the existing PostgreSQL 16.9 digest and retained Volume. The backup service uses the immutable Backend digest as its controlled PostgreSQL 16 tool image. Backend, PostgreSQL, and Redis ports remain unpublished.
+Backend 8000, PostgreSQL 5432, and Redis 6379 must remain unpublished. The production PostgreSQL 16 and Redis volumes are retained.
 
-## Hard pre-deployment gates
+## Pre-deployment gates
 
-Stop before cutover unless every item passes:
+Stop before cutover unless all of these pass:
 
-1. The Version 2.0.2 PR is merged with a merge commit, all required PR/main checks pass, the annotated tag and non-prerelease Release exist, and release images have verified immutable digests.
-2. The Version 2.0.1 tag, Release, and image digests remain unchanged.
-3. A new production backup reports server/`pg_dump`/`pg_restore` major 16, valid manifest/checksum, Alembic `20260717_04`, complete row counts, validated foreign keys, matching sequences/ownership/aggregate checksums, private-file hash, and Project Knowledge hash.
-4. That exact new backup restores with `--exit-on-error --single-transaction` into a fresh isolated PostgreSQL 16 Compose project with private network and temporary Volume. No ignored errors are allowed.
-5. The prior incompatible backup remains preserved and is marked `RESTORE_INCOMPATIBLE_WITH_POSTGRESQL_16` without modification.
-6. Current Version 2.0.0 backend/frontend digests, Compose/runtime configuration, Project Knowledge, new PostgreSQL 16 backup, and exact rollback commands are preserved and verified. Version 1.9 rollback assets remain intact.
-7. Runtime Project Knowledge is backed up and hashed, replaced atomically with the reviewed Version 2.0.2 Git baseline, rebuilt through the supported mechanism, and verified by status, PostgreSQL FTS search, and fictional Mock RAG-off/RAG-on reconciliation.
-8. The isolated candidate on `127.0.0.1:18089` passes exact 2.0.2 health/readiness, PostgreSQL/Redis/Worker/Outbox, Login/Remember Me/email-only persistence/password non-persistence/Secure Cookie/CSRF/Logout, unified responsive navigation, retired route and mutation 410s, Profile/Resumes/Analyze/History, Mock RAG checks, Backup/Restore, restart persistence, HTTPS, and rollback rehearsal.
+1. The Version 2.0.3 PR is merge-committed; required PR and main checks pass; annotated tag `v2.0.3`, formal Release, and immutable image digests exist.
+2. Existing tags/releases, especially `v2.0.2`, are unchanged.
+3. PostgreSQL backup, current Compose/configuration, exact Version 2.0.2 image digests, private Resume files, and runtime Project Knowledge are saved with hashes where supported.
+4. The new PostgreSQL backup reports matching PostgreSQL 16 server/client tools, a verified manifest and checksum, and Alembic `20260717_04` before migration. Rehearse that exact backup once in an isolated PostgreSQL 16 target.
+5. Validate Alembic upgrade to `20260721_05` in an isolated database, including Resume preservation, newest-active backfill, and the one-active-primary constraint.
+6. Apply the production migration without dropping Resume data and confirm readiness.
+7. Start immutable Version 2.0.3 images as an internal candidate only on `127.0.0.1:18090`.
+8. Candidate acceptance covers exact health 2.0.3, readiness, healthy containers, PDF/DOCX/TXT upload, latest-upload primary selection, Analyze auto-selection, standard/tolerant/fallback analysis, RAG, History, PostgreSQL, Redis, Worker, Outbox, and stable restart counts. Mock responses may validate tolerant/fallback behavior; no production DeepSeek call is required.
 
-Never bind the candidate to `0.0.0.0`, use port 8080 before cutover, call real DeepSeek, delete a PostgreSQL/Redis Volume, run `docker compose down -v` or Docker prune, or modify Mihomo, `pja-br0`, or policy preference 8999.
+Never bind the candidate publicly, use 8080 before cutover, delete volumes, run `docker compose down -v`/prune, or modify production networking/TLS.
 
 ## Cutover
 
-After every gate passes, use the existing safe switch to move directly from Version 2.0.0 to immutable Version 2.0.2 images on public 8080. Do not deploy Version 2.0.1. Record the switch timestamp and downtime.
+After every gate passes, use the existing safe switch to place immutable Version 2.0.3 images on public 8080. Record the Asia/Shanghai switch timestamp.
 
-After switching, require at least 150 consecutive `/api/health` responses reporting exactly `2.0.2`; any 2.0.1, 2.0.0, 1.9, error, or version instability stops acceptance. Verify HTTPS/certificate and several external network paths, authentication and CSRF, unified navigation, retired mutation boundaries, Project Knowledge retrieval, PostgreSQL, Redis, Worker, Outbox, restart counts, and unchanged host routing. Remove the localhost 18089 candidate only after public acceptance.
+After switching, require 100 consecutive `/api/health` responses reporting exactly `2.0.3`. Verify HTTPS and Login; PDF/DOCX/TXT upload; Primary Resume selection; Analyze default Resume; complete, normalized, and fallback behavior; RAG and History; healthy PostgreSQL/Redis/Worker/Outbox; stable restart counts; and no public Backend/PostgreSQL/Redis ports. Remove the 18090 candidate only after public acceptance.
 
 ## Rollback
 
-On any deployment failure, restore the saved Version 2.0.0 immutable image digests and Compose/runtime configuration. Version 2.0.1 is not a rollback target because it was never deployed and retained the old backup-tool defect. Restore data only for a separately verified data incident and only from the new PostgreSQL 16-compatible backup after its strict rehearsal.
+On deployment failure, restore the saved Version 2.0.2 immutable image digests and Compose/runtime configuration. Preserve PostgreSQL/Redis volumes, Resume files, backups, and Project Knowledge. The additive `is_primary` column is compatible with the prior application, so ordinary image rollback does not require downgrading or deleting data.
 
-Do not delete or overwrite database/Redis Volumes, tables, backups, Version 2.0.1 artifacts, or Version 1.9 assets. Do not alter Mihomo, `pja-br0`, preference 8999, or shared Git history.
+Restore the database only for a separately confirmed data incident and only from the verified PostgreSQL 16 backup. Do not modify any existing tag/Release or shared Git history.

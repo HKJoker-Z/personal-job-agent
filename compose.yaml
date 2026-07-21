@@ -152,7 +152,7 @@ services:
       - ${APP_ENV_FILE:-.env.production}
     environment:
       APP_ENV: ${APP_ENV:-production}
-      APP_VERSION: ${APP_VERSION:-2.0.2}
+      APP_VERSION: ${APP_VERSION:-2.0.3}
       DATABASE_URL: postgresql+psycopg://${POSTGRES_APP_USER}:${POSTGRES_APP_PASSWORD}@database:5432/${POSTGRES_DB}
       PROJECT_KNOWLEDGE_PATH: /app/project-knowledge/PROJECT_KNOWLEDGE.md
       PROJECT_KNOWLEDGE_SEED_PATH: /app/seed/PROJECT_KNOWLEDGE.md
@@ -217,7 +217,7 @@ services:
       - ${APP_ENV_FILE:-.env.production}
     environment:
       APP_ENV: ${APP_ENV:-production}
-      APP_VERSION: ${APP_VERSION:-2.0.2}
+      APP_VERSION: ${APP_VERSION:-2.0.3}
       DATABASE_URL: postgresql+psycopg://${POSTGRES_APP_USER}:${POSTGRES_APP_PASSWORD}@database:5432/${POSTGRES_DB}
       FILE_STORAGE_ROOT: /app/runtime/files
       SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-true}

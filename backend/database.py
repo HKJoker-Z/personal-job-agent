@@ -737,6 +737,37 @@ def deserialize_security_scan(value: Any) -> dict[str, Any]:
     return normalized_security_scan(parsed)
 
 
+ANALYSIS_METADATA_PREFIX = "analysis-meta:"
+
+
+def serialize_analysis_metadata(value: dict[str, Any]) -> str:
+    status = clean_text(value.get("analysis_status"), "complete")
+    if status not in {"complete", "repaired", "partial", "fallback"}:
+        status = "complete"
+    warnings = normalize_string_list(value.get("analysis_warnings"))[:10]
+    return ANALYSIS_METADATA_PREFIX + json.dumps(
+        {"analysis_status": status, "analysis_warnings": warnings}, ensure_ascii=False
+    )
+
+
+def deserialize_analysis_metadata(value: Any) -> dict[str, Any]:
+    text = clean_text(value)
+    if not text.startswith(ANALYSIS_METADATA_PREFIX):
+        return {"analysis_status": "complete", "analysis_warnings": [], "notes": value}
+    try:
+        parsed = json.loads(text.removeprefix(ANALYSIS_METADATA_PREFIX))
+    except json.JSONDecodeError:
+        parsed = {}
+    status = clean_text(parsed.get("analysis_status"), "complete")
+    if status not in {"complete", "repaired", "partial", "fallback"}:
+        status = "complete"
+    return {
+        "analysis_status": status,
+        "analysis_warnings": normalize_string_list(parsed.get("analysis_warnings"))[:10],
+        "notes": None,
+    }
+
+
 def clean_text(value: Any, fallback: str = "") -> str:
     if value is None:
         return fallback
@@ -762,6 +793,7 @@ def safe_float(value: Any, fallback: Any = 0.0) -> Any:
 def row_to_list_item(row: sqlite3.Row) -> dict[str, Any]:
     next_action = deserialize_next_action(row["next_action"])
     security_scan = deserialize_security_scan(row["security_scan"])
+    analysis_metadata = deserialize_analysis_metadata(row["notes"])
     return {
         "id": row["id"],
         "created_at": row["created_at"],
@@ -777,10 +809,12 @@ def row_to_list_item(row: sqlite3.Row) -> dict[str, Any]:
         "next_action_decision": clean_text(row["next_action_decision"], "pending"),
         "security_status": clean_text(row["security_status"], "not_available"),
         "security_risk_level": clean_text(security_scan.get("risk_level"), "not_available"),
+        "analysis_status": analysis_metadata["analysis_status"],
     }
 
 
 def row_to_detail(row: sqlite3.Row) -> dict[str, Any]:
+    analysis_metadata = deserialize_analysis_metadata(row["notes"])
     return {
         "id": row["id"],
         "created_at": row["created_at"],
@@ -815,7 +849,9 @@ def row_to_detail(row: sqlite3.Row) -> dict[str, Any]:
         "security_scan": deserialize_security_scan(row["security_scan"]),
         "security_status": clean_text(row["security_status"], "not_available"),
         "security_policy_version": clean_text(row["security_policy_version"]) or None,
-        "notes": row["notes"],
+        "analysis_status": analysis_metadata["analysis_status"],
+        "analysis_warnings": analysis_metadata["analysis_warnings"],
+        "notes": analysis_metadata["notes"],
     }
 
 
@@ -907,7 +943,7 @@ def insert_application_record(
                 serialize_json(analysis_result.get("security_scan"), {}),
                 clean_text(analysis_result.get("security_status"), "not_available"),
                 clean_text(analysis_result.get("security_policy_version")) or None,
-                None,
+                serialize_analysis_metadata(analysis_result),
             ),
         )
         if is_postgresql_backend():
@@ -966,7 +1002,8 @@ def list_application_records(
                 next_action,
                 next_action_decision,
                 security_scan,
-                security_status
+                security_status,
+                notes
             FROM application_records
             {where_sql}
             ORDER BY created_at DESC, id DESC

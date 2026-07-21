@@ -171,10 +171,11 @@ class ProjectKnowledgeRagTest(unittest.TestCase):
             parse_model_json(response.content)
         self.assertEqual(raised.exception.error_code, MODEL_OUTPUT_INVALID_JSON)
 
-    def test_parser_rejects_markdown_or_explanatory_wrappers(self):
-        with self.assertRaises(ModelOutputError) as raised:
-            parse_model_json('```json\n{"matched_skills": []}\n```')
-        self.assertEqual(raised.exception.error_code, MODEL_OUTPUT_INVALID_JSON)
+    def test_parser_accepts_markdown_or_explanatory_wrappers(self):
+        self.assertEqual(
+            parse_model_json('Result:\n```json\n{"matched_skills": ["Python"]}\n```')["matched_skills"],
+            ["Python"],
+        )
 
     def test_empty_provider_response_has_a_distinct_error(self):
         completion = SimpleNamespace(
@@ -208,15 +209,15 @@ class ProjectKnowledgeRagTest(unittest.TestCase):
         self.assertNotIn("PRIVATE_PROVIDER_BODY_MUST_NOT_LEAK", str(raised.exception))
         self.assertGreaterEqual(raised.exception.metadata["latency_ms"], 0)
 
-    def test_valid_json_with_extra_fields_is_schema_invalid(self):
+    def test_valid_json_with_extra_fields_is_accepted_and_ignored(self):
         response = adapt_provider_completion(
             provider_fixture("schema_invalid_extra_field.json"),
             max_output_tokens=800,
             latency_ms=1,
         )
-        with self.assertRaises(ModelOutputError) as raised:
-            validate_compact_analysis(parse_model_json(response.content))
-        self.assertEqual(raised.exception.error_code, MODEL_OUTPUT_SCHEMA_INVALID)
+        value = validate_compact_analysis(parse_model_json(response.content))
+        self.assertEqual(value.matched_skills, [])
+        self.assertFalse(hasattr(value, "rag_sources"))
 
     def test_complete_compact_fixture_fits_the_800_token_budget(self):
         fixture = provider_fixture("valid_compact_rag_800_tokens.json")
@@ -250,12 +251,13 @@ class ProjectKnowledgeRagTest(unittest.TestCase):
         self.assertEqual(result["scoring_breakdown"]["skills_match"]["score"], 0)
         self.assertEqual(result["scoring_breakdown"]["project_experience"]["score"], 0)
 
-    def test_unsupported_claim_is_blocked_without_discarding_valid_rag_evidence(self):
+    def test_unsupported_claim_is_warned_without_discarding_valid_rag_evidence(self):
         result = compact_result(
             "valid_rag_with_unsupported_claim.json", chunks=project_chunks()
         )
         self.assertGreater(result["claim_validation"]["unsupported_claim_count"], 0)
-        self.assertTrue(result["claim_validation"]["output_blocked"])
+        self.assertIn("warning", result["claim_validation"])
+        self.assertNotIn("output_blocked", result["claim_validation"])
         self.assertIn("PostgreSQL", result["matched_skills"])
         self.assertTrue(any(
             item["skill"] == "PostgreSQL" and item["source"] == "project_knowledge"
@@ -282,7 +284,7 @@ class ProjectKnowledgeRagTest(unittest.TestCase):
             "document", "section", "chunk_id", "relevance_score", "supported_skills"
         } for item in result["rag_sources"]))
 
-    def test_failed_model_output_cannot_reach_history_persistence(self):
+    def test_failed_model_output_returns_and_can_persist_fallback(self):
         client = TestClient(app)
         error = ModelOutputError(
             MODEL_OUTPUT_TRUNCATED,
@@ -297,7 +299,9 @@ class ProjectKnowledgeRagTest(unittest.TestCase):
         )
         with patch("legacy_application.call_deepseek_raw", side_effect=error), patch(
             "legacy_application.insert_application_record"
-        ) as insert_record, patch(
+        , return_value=41) as insert_record, patch(
+            "legacy_application.update_application_workflow_steps"
+        ) as update_workflow, patch(
             "app.agent_runs.service.AgentRunService.create"
         ) as create_agent_run, patch(
             "app.agent_runs.service.AgentRunService._create_approval"
@@ -320,19 +324,16 @@ class ProjectKnowledgeRagTest(unittest.TestCase):
                 },
             )
         client.close()
-        self.assertEqual(response.status_code, 502)
-        detail = response.json()["detail"]
-        self.assertEqual(detail["error_code"], MODEL_OUTPUT_TRUNCATED)
-        self.assertEqual(detail["model_metadata"]["output_tokens"], 800)
-        self.assertNotIn("synthetic.docx", response.text)
-        self.assertNotIn("matched_skills", response.text)
-        insert_record.assert_not_called()
+        self.assertEqual(response.status_code, 200)
+        detail = response.json()
+        self.assertEqual(detail["analysis_status"], "fallback")
+        self.assertEqual(detail["model_usage"]["output_tokens"], 800)
+        self.assertIn("matched_skills", detail)
+        insert_record.assert_called_once()
+        update_workflow.assert_called_once()
         create_agent_run.assert_not_called()
         create_approval.assert_not_called()
         create_outbox.assert_not_called()
-        self.assertEqual(list_application_records(
-            status=None, search=None, limit=10, offset=0
-        )[1], 0)
 
     def test_api_maps_nontruncated_invalid_json_without_leaking_the_body(self):
         client = TestClient(app)
@@ -350,8 +351,8 @@ class ProjectKnowledgeRagTest(unittest.TestCase):
             },
         )
         with patch("legacy_application.call_deepseek_raw", return_value=provider_response), patch(
-            "legacy_application.insert_application_record"
-        ) as insert_record:
+            "legacy_application.call_deepseek_repair", side_effect=ModelOutputError(MODEL_OUTPUT_INVALID_JSON)
+        ), patch("legacy_application.insert_application_record") as insert_record:
             response = client.post(
                 "/api/analyze",
                 files={
@@ -363,18 +364,18 @@ class ProjectKnowledgeRagTest(unittest.TestCase):
                 },
                 data={
                     "job_text": "Synthetic FastAPI role.",
-                    "save_to_history": "true",
+                    "save_to_history": "false",
                     "use_project_knowledge": "false",
                 },
             )
         client.close()
-        self.assertEqual(response.status_code, 502)
-        self.assertEqual(response.json()["detail"]["error_code"], MODEL_OUTPUT_INVALID_JSON)
-        self.assertEqual(response.json()["detail"]["model_metadata"]["output_tokens"], 20)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["analysis_status"], "fallback")
+        self.assertEqual(response.json()["model_usage"]["output_tokens"], 20)
         self.assertNotIn("PRIVATE_MODEL_FRAGMENT", response.text)
         insert_record.assert_not_called()
 
-    def test_api_maps_valid_json_with_invalid_schema_without_partial_result(self):
+    def test_api_ignores_extra_model_fields_and_returns_result(self):
         client = TestClient(app)
         fixture_response = adapt_provider_completion(
             provider_fixture("schema_invalid_extra_field.json"),
@@ -395,16 +396,16 @@ class ProjectKnowledgeRagTest(unittest.TestCase):
                 },
                 data={
                     "job_text": "Synthetic FastAPI role.",
-                    "save_to_history": "true",
+                    "save_to_history": "false",
                     "use_project_knowledge": "false",
                 },
             )
         client.close()
-        self.assertEqual(response.status_code, 502)
-        detail = response.json()["detail"]
-        self.assertEqual(detail["error_code"], MODEL_OUTPUT_SCHEMA_INVALID)
+        self.assertEqual(response.status_code, 200)
+        detail = response.json()
+        self.assertEqual(detail["analysis_status"], "complete")
         self.assertNotIn("must be rejected", response.text)
-        self.assertNotIn("rag_sources", response.text)
+        self.assertEqual(detail["rag_sources"], [])
         insert_record.assert_not_called()
 
     def test_api_rag_disabled_skips_retrieval_and_attaches_empty_metadata(self):
@@ -555,7 +556,7 @@ class ProjectKnowledgeRagTest(unittest.TestCase):
         self.assertIn("Kubernetes", result["missing_skills"])
         self.assertEqual(result["evidence_mapping"], [])
 
-    def test_unsupported_generated_bullets_are_blocked_with_the_letter(self):
+    def test_unsupported_generated_bullets_are_removed_with_a_warning(self):
         result = {
             "matched_skills": ["Python"],
             "missing_skills": [],
@@ -570,7 +571,8 @@ class ProjectKnowledgeRagTest(unittest.TestCase):
         self.assertGreater(result["claim_validation"]["unsupported_claim_count"], 0)
         self.assertEqual(result["cover_letter"], "")
         self.assertEqual(result["upgraded_resume_bullets"], [])
-        self.assertTrue(result["claim_validation"]["output_blocked"])
+        self.assertIn("warning", result["claim_validation"])
+        self.assertNotIn("output_blocked", result["claim_validation"])
 
     def test_empty_retrieval_falls_back_without_fabricated_sources(self):
         self.assertEqual(build_default_rag_sources([]), [])

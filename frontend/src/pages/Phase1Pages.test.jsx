@@ -36,6 +36,6 @@ describe("Phase 1 pages", () => {
   });
 
   it("rejects an unsupported import before API submission", async () => {
-    render(<ResumeImportPage />); const file = new File(["text"], "resume.txt", { type: "text/plain" }); fireEvent.change(screen.getByLabelText("Resume file"), { target: { files: [file] } }); fireEvent.click(screen.getByText("Import")); expect(await screen.findByText("Select a PDF or DOCX resume.")).toBeInTheDocument();
+    render(<ResumeImportPage />); const file = new File(["text"], "resume.exe", { type: "application/octet-stream" }); fireEvent.change(screen.getByLabelText("Resume file"), { target: { files: [file] } }); fireEvent.click(screen.getByRole("button", { name: "Upload Resume" })); expect(await screen.findByText("Select a PDF, DOCX, TXT, or Markdown resume.")).toBeInTheDocument();
   });
 });

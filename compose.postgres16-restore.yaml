@@ -34,7 +34,7 @@ services:
     pull_policy: never
     environment:
       APP_ENV: test
-      APP_VERSION: 2.0.2
+      APP_VERSION: 2.0.3
       TEST_DATABASE_URL: ${PJA_TEST_SOURCE_DATABASE_URL:?source test database URL is required}
       DATABASE_URL: ${PJA_TEST_SOURCE_DATABASE_URL:?source test database URL is required}
       PJA_TEST_ADMIN_PASSWORD: ${PJA_TEST_ADMIN_PASSWORD:?synthetic admin password is required}
@@ -60,7 +60,7 @@ services:
     pull_policy: never
     environment:
       APP_ENV: test
-      APP_VERSION: 2.0.2
+      APP_VERSION: 2.0.3
       TEST_DATABASE_URL: ${PJA_TEST_TARGET_DATABASE_URL:?target test database URL is required}
       DATABASE_URL: ${PJA_TEST_TARGET_DATABASE_URL:?target test database URL is required}
       PJA_TEST_ADMIN_PASSWORD: ${PJA_TEST_ADMIN_PASSWORD:?synthetic admin password is required}
