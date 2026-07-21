@@ -1,6 +1,6 @@
 FROM node:22.14-slim AS build
 
-ARG APP_VERSION=2.0.2
+ARG APP_VERSION=2.0.3
 
 WORKDIR /app
 COPY frontend/package.json frontend/package-lock.json ./
@@ -12,7 +12,7 @@ RUN npm run build
 
 FROM nginxinc/nginx-unprivileged:1.27-alpine AS runtime
 
-ARG APP_VERSION=2.0.2
+ARG APP_VERSION=2.0.3
 
 LABEL org.opencontainers.image.title="Personal Job Agent Frontend" \
       org.opencontainers.image.version="${APP_VERSION}"

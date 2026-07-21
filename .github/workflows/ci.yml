@@ -109,8 +109,8 @@ jobs:
         with:
           python-version: "3.12"
       - run: python -m pip install 'psycopg[binary]==3.3.4'
-      - name: Version 2.0.2 isolated Mock LLM Smoke on 18089
-        run: PJA_SMOKE_MILESTONE=2.0.1 PYTHON_BIN="$(command -v python)" scripts/docker-smoke-v2.sh
+      - name: Version 2.0.3 isolated Mock LLM Smoke
+        run: PJA_SMOKE_MILESTONE=2.0.1 PJA_APP_VERSION=2.0.3 PYTHON_BIN="$(command -v python)" scripts/docker-smoke-v2.sh
 
   postgres16-backup-restore:
     runs-on: ubuntu-latest

@@ -228,7 +228,7 @@ services:
     command: ["-g", "daemon off;"]
     ports:
       - target: 8080
-        published: ${EDGE_HOST_PORT:-18089}
+        published: ${EDGE_HOST_PORT:-18090}
         host_ip: ${EDGE_BIND_ADDRESS:-127.0.0.1}
         protocol: tcp
     volumes:

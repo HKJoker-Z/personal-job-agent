@@ -1,6 +1,6 @@
 # CI/CD and Container Image Publishing
 
-Version 2.0.2 CI includes full Python test discovery, a real PostgreSQL 16 service test, frontend Vitest coverage, the retained compatibility/product smoke, and a separate strict PostgreSQL 16 Backup/Restore rehearsal. Release publishing remains tag-driven and never deploys production automatically.
+Version 2.0.3 CI includes full Python test discovery, a real PostgreSQL 16 service test, frontend Vitest coverage for resilient analysis and Primary Resume upload, the retained compatibility/product smoke, and a separate strict PostgreSQL 16 Backup/Restore rehearsal. Release publishing remains tag-driven and never deploys production automatically.
 
 ## Continuous Integration
 
@@ -26,6 +26,6 @@ CI does not use a real DeepSeek key, call the external LLM, deploy a server, or 
 - `ghcr.io/hkjoker-z/personal-job-agent-backend`
 - `ghcr.io/hkjoker-z/personal-job-agent-frontend`
 
-Images receive the full semantic version, original Git tag, and commit-SHA tags. Stable tags update `latest`; prerelease tags do not. The workflow needs `contents: read` and `packages: write`. It does not pass deployment secrets as build arguments or perform automatic SSH/server deployment.
+For `v2.0.3`, images receive `2.0.3`, `2.0`, `2`, `v2.0.3`, `latest`, and `sha-<commit>` tags. The workflow needs `contents: read` and `packages: write`. It does not pass deployment secrets as build arguments or perform automatic SSH/server deployment.
 
 Server promotion remains an explicit operator action because firewall, DNS, HTTPS, runtime backups, maintenance windows, and rollback decisions are deployment-specific. Version 1.9 provides repeatable artifacts and checks, not automatic cloud deployment, high availability, or zero-downtime guarantees.

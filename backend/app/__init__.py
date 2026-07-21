@@ -3,4 +3,4 @@
 import os
 
 
-APP_VERSION = os.getenv("APP_VERSION", "2.0.2").strip() or "2.0.2"
+APP_VERSION = os.getenv("APP_VERSION", "2.0.3").strip() or "2.0.3"

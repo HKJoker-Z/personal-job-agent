@@ -1,4 +1,4 @@
-# Version 2.0.2 development
+# Version 2.0.3 development
 
 Use Python 3.12 and Node 22. Tests must use temporary SQLite or a database whose name contains `test`; never point test configuration at production data. CI and normal local smoke use Mock LLM and must not call DeepSeek.
 
@@ -12,7 +12,7 @@ cd frontend && npm ci && cd ..
 APP_ENV=test .venv/bin/python -m unittest discover -s backend -p 'test_*.py'
 cd frontend && npm test && npm run build && cd ..
 scripts/test-v201-production-runtime.sh
-PJA_SMOKE_MILESTONE=2.0.1 PJA_APP_VERSION=2.0.2 scripts/docker-smoke-v2.sh
+PJA_SMOKE_MILESTONE=2.0.1 PJA_APP_VERSION=2.0.3 scripts/docker-smoke-v2.sh
 docker build -f backend/Dockerfile -t personal-job-agent-backend:pg16-test .
 docker build -f backend/Dockerfile --build-arg POSTGRES_CLIENT_MAJOR=17 -t personal-job-agent-backend:pg17-negative .
 scripts/postgres16-restore-regression.sh personal-job-agent-backend:pg16-test personal-job-agent-backend:pg17-negative
