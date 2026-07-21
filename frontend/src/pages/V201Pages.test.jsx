@@ -62,23 +62,25 @@ describe("Version 2.0.1 simplified workspace", () => {
   });
 
   it.each([
-    ["MODEL_OUTPUT_TRUNCATED", /cut off before completion/],
-    ["MODEL_OUTPUT_INVALID_JSON", /invalid structured response/],
-    ["MODEL_OUTPUT_SCHEMA_INVALID", /did not match the required analysis format/],
-  ])("shows a safe retry state for %s without a partial result", async (errorCode, message) => {
+    ["repaired", /automatically normalized/],
+    ["partial", /optional analysis fields were unavailable/],
+    ["fallback", /local fallback analysis is shown/],
+  ])("shows usable results for %s analysis", async (analysisStatus, message) => {
     global.fetch
       .mockResolvedValueOnce(new Response(JSON.stringify([{
-        title: "Synthetic Resume", active_version_id: "resume-version-1",
+        title: "Synthetic Resume", active_version_id: "resume-version-1", is_primary: true,
       }]), { status: 200, headers: { "Content-Type": "application/json" } }))
       .mockResolvedValueOnce(new Response(JSON.stringify({
-        detail: { message: "Safe backend summary.", error_code: errorCode },
-      }), { status: 502, headers: { "Content-Type": "application/json" } }));
+        title: "Synthetic Resume", active_version_id: "resume-version-1", is_primary: true,
+      }), { status: 200, headers: { "Content-Type": "application/json" } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        analysis_status: analysisStatus, match_score: 65, matched_skills: ["FastAPI"],
+        missing_skills: ["Kubernetes"], recommendations: ["Add evidence."],
+        scoring_breakdown: {}, ats_analysis: {}, rag_sources: [], evidence_mapping: [],
+      }), { status: 200, headers: { "Content-Type": "application/json" } }));
 
     render(<AnalyzePage />);
     await screen.findByRole("option", { name: /Synthetic Resume/ });
-    fireEvent.change(screen.getByLabelText("Stored Resume Version"), {
-      target: { value: "resume-version-1" },
-    });
     fireEvent.change(screen.getByLabelText("Job Description"), {
       target: { value: "Synthetic FastAPI role" },
     });
@@ -86,9 +88,22 @@ describe("Version 2.0.1 simplified workspace", () => {
 
     expect(await screen.findByText(message)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Analyze" })).toBeEnabled();
-    expect(screen.queryByText("Match Score")).not.toBeInTheDocument();
-    expect(screen.queryByText(/Saved to history/)).not.toBeInTheDocument();
-    expect(global.fetch).toHaveBeenCalledTimes(2);
+    expect(screen.getByText("Match Score")).toBeInTheDocument();
+    expect(screen.queryByText("Analysis failed")).not.toBeInTheDocument();
+    expect(global.fetch).toHaveBeenCalledTimes(3);
+  });
+
+  it("shows a complete result without a normalization warning", async () => {
+    global.fetch
+      .mockResolvedValueOnce(new Response(JSON.stringify([{ title: "Primary", active_version_id: "v1", is_primary: true }]), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ title: "Primary", active_version_id: "v1", is_primary: true }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ analysis_status: "complete", match_score: 80, matched_skills: [], missing_skills: [], scoring_breakdown: {} }), { status: 200 }));
+    render(<AnalyzePage />);
+    await screen.findByText(/Primary Resume selected automatically/);
+    fireEvent.change(screen.getByLabelText("Job Description"), { target: { value: "Synthetic role" } });
+    fireEvent.click(screen.getByRole("button", { name: "Analyze" }));
+    expect(await screen.findByText("Match Score")).toBeInTheDocument();
+    expect(screen.queryByText(/automatically normalized/)).not.toBeInTheDocument();
   });
 
   it("prevents duplicate Analyze submissions while a request is pending", async () => {
@@ -96,27 +111,27 @@ describe("Version 2.0.1 simplified workspace", () => {
     const pending = new Promise((resolve) => { resolveAnalyze = resolve; });
     global.fetch
       .mockResolvedValueOnce(new Response(JSON.stringify([{
-        title: "Synthetic Resume", active_version_id: "resume-version-1",
+        title: "Synthetic Resume", active_version_id: "resume-version-1", is_primary: true,
       }]), { status: 200, headers: { "Content-Type": "application/json" } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        title: "Synthetic Resume", active_version_id: "resume-version-1", is_primary: true,
+      }), { status: 200, headers: { "Content-Type": "application/json" } }))
       .mockImplementationOnce(() => pending);
 
     render(<AnalyzePage />);
     await screen.findByRole("option", { name: /Synthetic Resume/ });
-    fireEvent.change(screen.getByLabelText("Stored Resume Version"), {
-      target: { value: "resume-version-1" },
-    });
     fireEvent.change(screen.getByLabelText("Job Description"), {
       target: { value: "Synthetic FastAPI role" },
     });
     const button = screen.getByRole("button", { name: "Analyze" });
     fireEvent.click(button);
     fireEvent.submit(button.closest("form"));
-    expect(global.fetch).toHaveBeenCalledTimes(2);
+    expect(global.fetch).toHaveBeenCalledTimes(3);
 
     resolveAnalyze(new Response(JSON.stringify({
-      detail: { error_code: "MODEL_PROVIDER_ERROR", message: "Safe failure." },
-    }), { status: 502, headers: { "Content-Type": "application/json" } }));
-    expect(await screen.findByText(/provider request failed safely/)).toBeInTheDocument();
+      analysis_status: "fallback", match_score: 25, matched_skills: [], missing_skills: ["FastAPI"], scoring_breakdown: {},
+    }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    expect(await screen.findByText(/local fallback analysis is shown/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Analyze" })).toBeEnabled();
   });
 });

@@ -397,6 +397,56 @@ button:disabled {
   font-weight: 700;
 }
 
+.analysis-status-banner,
+.resume-upload-area {
+  border: 1px solid #d8e0ea;
+  border-radius: 8px;
+  padding: 14px 16px;
+  background: #f7f9fc;
+}
+
+.analysis-status-banner.repaired,
+.analysis-status-banner.partial {
+  border-color: #ead39a;
+  color: #694b00;
+  background: #fff9e8;
+}
+
+.analysis-status-banner.fallback {
+  border-color: #edb37a;
+  color: #743400;
+  background: #fff4e8;
+}
+
+.resume-library,
+.resume-upload-area {
+  display: grid;
+  gap: 12px;
+}
+
+.resume-upload-area {
+  margin: 18px 0;
+  border-style: dashed;
+}
+
+.resume-upload-area h3,
+.resume-upload-area p,
+.analysis-status-banner {
+  margin: 0;
+}
+
+.resume-upload-area button {
+  width: fit-content;
+}
+
+.primary-resume-badge {
+  background: #e5f7ee;
+}
+
+.primary-resume-guide {
+  padding: 16px;
+}
+
 .muted-message {
   border-color: #d8e0ea;
   color: #66758a;

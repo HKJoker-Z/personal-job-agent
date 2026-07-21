@@ -2,7 +2,7 @@ import React, { Component, useEffect, useRef, useState } from "react";
 import { apiFetch } from "./api/client";
 
 const API_BASE_URL = import.meta.env.DEV ? (import.meta.env.VITE_API_BASE_URL || "") : "";
-const APP_VERSION = "2.0.2";
+const APP_VERSION = "2.0.3";
 const NEXT_ACTION_DECISIONS = [
   { value: "accepted", label: "Accept Recommendation" },
   { value: "dismissed", label: "Dismiss" },
@@ -733,6 +733,13 @@ function AnalysisResult({ result }) {
   const savedToHistory = Boolean(result?.saved_to_history);
   const securityStatus = result?.security_status || "not_available";
   const blockedBySecurity = securityStatus === "blocked";
+  const analysisStatus = ["complete", "repaired", "partial", "fallback"].includes(result?.analysis_status)
+    ? result.analysis_status : "complete";
+  const statusMessages = {
+    repaired: "The model response was automatically normalized.",
+    partial: "Some optional analysis fields were unavailable, but the usable result is shown.",
+    fallback: "DeepSeek did not return a usable structured response. A local fallback analysis is shown.",
+  };
 
   if (blockedBySecurity) {
     return (
@@ -753,6 +760,7 @@ function AnalysisResult({ result }) {
 
   return (
     <section className="panel results-panel">
+      {statusMessages[analysisStatus] && <p className={`analysis-status-banner ${analysisStatus}`} role="status">{statusMessages[analysisStatus]}</p>}
       <div className="score-row">
         <div>
           <span className="label">Match Score</span>
@@ -825,6 +833,8 @@ function AnalyzePage() {
   const [resumeInputKey, setResumeInputKey] = useState(0);
   const [resumeVersionId, setResumeVersionId] = useState("");
   const [storedResumes, setStoredResumes] = useState([]);
+  const [primaryResume, setPrimaryResume] = useState(null);
+  const [primaryLoaded, setPrimaryLoaded] = useState(false);
   const [jobText, setJobText] = useState("");
   const [jobUrl, setJobUrl] = useState("");
   const [saveToHistory, setSaveToHistory] = useState(true);
@@ -837,9 +847,20 @@ function AnalyzePage() {
   const submittingRef = useRef(false);
 
   useEffect(() => {
-    requestJson(`${API_BASE_URL}/api/resumes`, undefined, "Stored resumes are unavailable.")
-      .then((items) => setStoredResumes(asArray(items).filter((item) => item.active_version_id)))
-      .catch(() => setStoredResumes([]));
+    Promise.all([
+      requestJson(`${API_BASE_URL}/api/resumes`, undefined, "Stored resumes are unavailable."),
+      requestJson(`${API_BASE_URL}/api/resumes/primary`, undefined, "Primary resume is unavailable."),
+    ]).then(([items, primary]) => {
+      const available = asArray(items).filter((item) => item.active_version_id);
+      setStoredResumes(available);
+      if (primary?.active_version_id) {
+        setPrimaryResume(primary);
+        setResumeVersionId(primary.active_version_id);
+      }
+    }).catch(() => {
+      setStoredResumes([]);
+      setPrimaryResume(null);
+    }).finally(() => setPrimaryLoaded(true));
   }, []);
 
   function handleResumeChange(event) {
@@ -862,7 +883,7 @@ function AnalyzePage() {
     setResult(null);
 
     if (!resume && !resumeVersionId) {
-      setError("Please select a Resume Version or upload a PDF or DOCX resume.");
+      setError("Please select a Resume Version or upload a resume.");
       return;
     }
 
@@ -928,10 +949,12 @@ function AnalyzePage() {
         <label>
           Stored Resume Version
           <select aria-label="Stored Resume Version" value={resumeVersionId} onChange={(event) => { setResumeVersionId(event.target.value); if (event.target.value) { setResume(null); setResumeInputKey((value) => value + 1); } }}>
-            <option value="">Upload a resume instead</option>
-            {storedResumes.map((item) => <option key={item.active_version_id} value={item.active_version_id}>{item.title} · active version</option>)}
+            <option value="">Select a stored resume or upload one below</option>
+            {storedResumes.map((item) => <option key={item.active_version_id} value={item.active_version_id}>{item.title} · active version{item.is_primary ? " · Primary Resume" : ""}</option>)}
           </select>
         </label>
+        {primaryLoaded && !primaryResume && !resume && !resumeVersionId && <div className="empty-state primary-resume-guide"><p>No primary resume is available. Upload a resume from the Resume page.</p><a className="button-link" href="/resumes">Go to Resume</a></div>}
+        {primaryResume && resumeVersionId === primaryResume.active_version_id && <p className="field-help">Primary Resume selected automatically: {primaryResume.title}</p>}
         <label>
           Or upload a Resume
           <input
@@ -1028,7 +1051,7 @@ function AnalyzePage() {
       {!hasResult && !loading && !error && (
         <section className="panel state-panel">
           <strong>Ready for one focused resume-to-role analysis.</strong>
-          <p className="muted">Upload your resume and provide a job description or URL to start analysis.</p>
+          <p className="muted">Your Primary Resume is selected automatically. Provide a job description or URL to start analysis.</p>
         </section>
       )}
 

@@ -10,11 +10,12 @@ export function configureApiSecurity({ csrf, refreshSession, onUnauthorized }) {
 
 function safeMessage(status, payload) {
   if (status === 409) return "This record changed elsewhere. Reload before saving again.";
-  if (status === 422 || status === 400) return "Some submitted fields are invalid.";
+  const detail = payload?.detail;
+  if ((status === 422 || status === 400 || status === 413) && typeof detail === "string" && detail.length < 240) return detail;
+  if (status === 422 || status === 400 || status === 413) return "Some submitted fields are invalid.";
   if (status === 429) return "Too many attempts. Please wait and try again.";
   if (status === 403) return "This action is not permitted or its security token expired.";
   if (status === 401) return "Your Session has expired. Please sign in again.";
-  const detail = payload?.detail;
   return typeof detail === "string" && detail.length < 240 ? detail : "Request failed safely.";
 }
 
