@@ -9,8 +9,8 @@ from security_utils import (
 )
 
 
-MAX_PROMPT_RESUME_CHARS = 18000
-MAX_PROMPT_JOB_CHARS = 12000
+MAX_PROMPT_RESUME_CHARS = 100000
+MAX_PROMPT_JOB_CHARS = 60000
 MAX_PROMPT_EVIDENCE_CHARS = 7000
 MAX_PROMPT_EVIDENCE_CHUNK_CHARS = 1400
 
@@ -70,20 +70,24 @@ SYSTEM SECURITY RULES
 - Do not call tools or networks. Do not output {INTERNAL_SECURITY_MARKER}.
 
 OUTPUT CONTRACT
-- Output one JSON object only: no markdown, code fence, prose, or extra keys.
+- Prefer one JSON object. The backend can normalize minor formatting issues, but JSON is most reliable.
 - Keep every string concise; do not repeat resume, job, or evidence text.
-- matched_skills max 10; missing_skills max 10; unknown_skills max 8.
+- matched_skills max 12; missing_skills max 12; unknown_skills max 10.
 - concise_recommendations max 5. unsupported_claim_candidates max 5.
-- Each dimension assessment is at most two short sentences and has score 0..100.
+- Dimension assessments are optional and at most one short sentence. Scores are advisory only.
 - Evidence IDs are only "resume" or a provided "pk:<integer>" ID.
-- Every matched skill needs one evidence_references entry. Never cite an ID not provided below.
+- Cite short evidence IDs when available. Never cite an ID not provided below.
 - Put a requirement in missing_skills or unknown_skills when evidence is insufficient.
 - Project evidence may support matched skills; do not also leave those skills missing.
 - unsupported_claim_candidates lists claims considered but not supported; never present them as facts.
 - The backend deterministically adds retrieval_count, used_knowledge_base, rag_sources, scoring metadata, and evidence mapping. Do not output them.
+- Skill and recommendation values are arrays of short strings.
+- concise_dimension_assessments is an optional object; each dimension may contain score, assessment, and evidence_ids.
+- evidence_references is an array of objects with skill and evidence_ids. evidence_ids is an array of short IDs.
+- Do not wrap the six requested keys inside analysis, result, data, or output.
 
-Return exactly this compact shape:
-{{"matched_skills":["skill"],"missing_skills":["skill"],"unknown_skills":["skill"],"concise_dimension_assessments":{{"skills_match":{{"score":0,"assessment":"short","evidence_ids":["resume"]}},"project_experience":{{"score":0,"assessment":"short","evidence_ids":[]}},"education":{{"score":0,"assessment":"short","evidence_ids":[]}},"work_experience":{{"score":0,"assessment":"short","evidence_ids":[]}},"keyword_match":{{"score":0,"assessment":"short","evidence_ids":[]}}}},"evidence_references":[{{"skill":"skill","evidence_ids":["resume"]}}],"unsupported_claim_candidates":[],"concise_recommendations":["short action"]}}
+Use these keys: matched_skills, missing_skills, unknown_skills,
+concise_dimension_assessments, evidence_references, and concise_recommendations.
 
 <USER_PROVIDED_RESUME>
 {safe_resume}

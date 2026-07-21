@@ -25,9 +25,17 @@ from analysis_contract import (
     ModelOutputError,
     ProviderAnalysisResponse,
     adapt_provider_completion,
+    compact_analysis_warnings,
     parse_model_json,
+    parse_model_json_result,
     safe_model_metadata,
     validate_compact_analysis,
+)
+from analysis_fallback import (
+    deterministic_scoring,
+    local_fallback_result,
+    normalize_analysis_text,
+    structure_aware_truncate,
 )
 from app.jobs.acquisition import SafeJobUrlFetcher, UnsafeJobUrl
 from app.materials.grounding import EvidenceSource, validate_claims, validation_summary
@@ -120,8 +128,8 @@ settings = load_config()
 APP_NAME = "personal-job-agent"
 DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 DEEPSEEK_MODEL = "deepseek-chat"
-MAX_RESUME_TEXT_CHARS = 18000
-MAX_JOB_TEXT_CHARS = 12000
+MAX_RESUME_TEXT_CHARS = settings.analysis_resume_max_chars
+MAX_JOB_TEXT_CHARS = settings.analysis_job_description_max_chars
 PROJECT_KNOWLEDGE_SOURCE_PATH = PROJECT_KNOWLEDGE_LOGICAL_NAME
 LEGACY_PROJECT_KNOWLEDGE_SOURCE_PATH = "docs/PROJECT_KNOWLEDGE.md"
 PROJECT_KNOWLEDGE_TITLE = "Personal Job Agent Project Knowledge"
@@ -372,9 +380,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
 
 
 def truncate_text(text: str, max_chars: int) -> tuple[str, bool]:
-    if len(text) <= max_chars:
-        return text, False
-    return text[:max_chars], True
+    return structure_aware_truncate(text, max_chars)
 
 
 def extract_pdf_text(file_bytes: bytes) -> str:
@@ -420,6 +426,7 @@ async def extract_resume_text(resume: UploadFile) -> str:
             detail="Failed to parse resume. Please upload a valid PDF or DOCX file.",
         ) from exc
 
+    text = normalize_analysis_text(text)
     if not text:
         logger.warning("Resume parsing failed error_type=NoExtractedText")
         raise HTTPException(status_code=400, detail="Could not extract text from the resume.")
@@ -439,8 +446,6 @@ def fetch_job_text_from_url(job_url: str) -> str:
 
 
 def parse_ai_json_response(raw_response: str) -> dict[str, Any]:
-    # Strict by design: never extract a JSON-looking substring from markdown,
-    # prose, or a truncated response and never repair missing delimiters.
     return parse_model_json(raw_response)
 
 
@@ -465,7 +470,11 @@ def normalize_int(value: Any) -> int:
 
 
 def normalize_list(value: Any) -> list[str]:
-    if not isinstance(value, list):
+    if value is None:
+        return []
+    if isinstance(value, str):
+        value = [value]
+    if not isinstance(value, (list, tuple, set)):
         return []
     return [str(item).strip() for item in value if str(item or "").strip()]
 
@@ -814,7 +823,7 @@ def normalize_result(
 def compact_analysis_to_result(
     analysis: CompactAnalysisOutput,
 ) -> dict[str, Any]:
-    """Convert the strict model contract into the stable frontend contract."""
+    """Convert the tolerant model contract into the stable frontend contract."""
     compact = analysis.model_dump()
     dimensions = compact["concise_dimension_assessments"]
     scoring_breakdown = {
@@ -847,6 +856,7 @@ def compact_analysis_to_result(
         apply_rag_corrections=False,
     )
     result["unknown_skills"] = unknown_skills
+    result["recommendations"] = list(compact["concise_recommendations"])
     result["_model_evidence_references"] = compact["evidence_references"]
     result["_unsupported_claim_candidates"] = compact["unsupported_claim_candidates"]
     return result
@@ -913,6 +923,16 @@ def validate_model_evidence_references(
                 valid_ids.append(evidence_id)
             else:
                 rejected_ids.append(evidence_id)
+
+        # Evidence references are helpful but optional. The backend can retain
+        # a model match only when the request's own resume or retrieved chunks
+        # independently contain that skill.
+        if not valid_ids and rag_evidence_contains_skill(skill, resume_text):
+            valid_ids.append("resume")
+        if not valid_ids:
+            for chunk_id, chunk in chunks_by_id.items():
+                if rag_evidence_contains_skill(skill, normalize_string(chunk.get("content"))):
+                    valid_ids.append(f"pk:{chunk_id}")
 
         if not valid_ids:
             append_unique_skill(result.setdefault("unknown_skills", []), skill)
@@ -1083,11 +1103,14 @@ def enforce_analysis_grounding(
         ],
     }
     if unsupported_count:
-        # Never persist or return unsupported application material. The match
-        # analysis remains useful and explicitly reports the blocked output.
+        # Unsupported candidates are dropped without blocking the reliable
+        # match analysis. Generated application material remains empty unless
+        # it has evidence.
         result["cover_letter"] = ""
         result["upgraded_resume_bullets"] = []
-        result["claim_validation"]["output_blocked"] = True
+        result["claim_validation"]["warning"] = (
+            "Unsupported candidate claims were removed from the result."
+        )
 
 
 def call_deepseek_raw(
@@ -1216,6 +1239,87 @@ def call_deepseek_raw(
     return response
 
 
+def call_deepseek_repair(
+    raw_response: str,
+    *,
+    usage_out: dict[str, Any] | None = None,
+) -> ProviderAnalysisResponse:
+    """Make the single allowed, bounded format-only repair request."""
+    runtime_settings = load_config(validate_production=False)
+    if not runtime_settings.deepseek_api_key:
+        raise ModelOutputError(MODEL_PROVIDER_ERROR)
+    client = OpenAI(
+        api_key=runtime_settings.deepseek_api_key,
+        base_url=DEEPSEEK_BASE_URL,
+        timeout=runtime_settings.request_timeout_seconds,
+    )
+    repair_tokens = min(800, runtime_settings.model_max_output_tokens)
+    repair_prompt = (
+        "Convert the model text below into one concise JSON object. Preserve only explicit analysis; "
+        "do not add facts. Use keys matched_skills, missing_skills, unknown_skills, "
+        "concise_dimension_assessments, evidence_references, and concise_recommendations.\n\n"
+        + str(raw_response or "")[:12_000]
+    )
+    started = time.perf_counter()
+    try:
+        completion = client.chat.completions.create(
+            model=DEEPSEEK_MODEL,
+            messages=[
+                {"role": "system", "content": "Return JSON only. Repair format; never redo the analysis."},
+                {"role": "user", "content": repair_prompt},
+            ],
+            response_format={"type": "json_object"},
+            temperature=0,
+            max_tokens=repair_tokens,
+        )
+    except Exception as exc:
+        metadata = safe_model_metadata({"latency_ms": (time.perf_counter() - started) * 1000})
+        if usage_out is not None:
+            usage_out.update(metadata)
+        raise ModelOutputError(MODEL_PROVIDER_ERROR, metadata=metadata) from exc
+    response = adapt_provider_completion(
+        completion,
+        max_output_tokens=repair_tokens,
+        latency_ms=round((time.perf_counter() - started) * 1000, 3),
+    )
+    if usage_out is not None:
+        usage_out.update(response.metadata)
+    return response
+
+
+def model_response_to_result(
+    raw_response: str,
+    *,
+    repairer: Any | None = None,
+) -> tuple[dict[str, Any], str, list[str]]:
+    """Parse locally first, then perform at most one model format repair."""
+    try:
+        parsed_result = parse_model_json_result(raw_response)
+        warnings = list(parsed_result.warnings)
+        warnings.extend(compact_analysis_warnings(parsed_result.data))
+        compact = validate_compact_analysis(parsed_result.data)
+        status = "repaired" if parsed_result.normalized else ("partial" if warnings else "complete")
+        return compact_analysis_to_result(compact), status, list(dict.fromkeys(warnings))
+    except (ModelOutputError, ValidationError, ValueError):
+        pass
+
+    if repairer is None:
+        repairer = call_deepseek_repair
+    # Exactly one format-only retry is allowed per analysis.
+    repaired_response = repairer(raw_response)
+    repaired_text = (
+        repaired_response.content
+        if isinstance(repaired_response, ProviderAnalysisResponse)
+        else str(repaired_response or "")
+    )
+    parsed_result = parse_model_json_result(repaired_text)
+    compact = validate_compact_analysis(parsed_result.data)
+    warnings = ["The model response was automatically normalized by one format-only repair call."]
+    warnings.extend(parsed_result.warnings)
+    warnings.extend(compact_analysis_warnings(parsed_result.data))
+    return compact_analysis_to_result(compact), "repaired", list(dict.fromkeys(warnings))
+
+
 def analyze_with_deepseek(
     resume_text: str,
     job_description: str,
@@ -1232,9 +1336,7 @@ def analyze_with_deepseek(
         rag_chunks or [],
         analysis_prompt=safe_prompt,
     )
-    parsed = parse_ai_json_response(provider_response.content)
-    compact = validate_compact_analysis(parsed)
-    result = compact_analysis_to_result(compact)
+    result, status, warnings = model_response_to_result(provider_response.content)
     validate_model_evidence_references(
         result,
         resume_text=resume_text,
@@ -1247,6 +1349,12 @@ def analyze_with_deepseek(
     result["rag_sources"] = build_default_rag_sources(
         rag_chunks or [], result.get("matched_skills") or []
     )
+    result["scoring_breakdown"] = deterministic_scoring(
+        result, resume_text, job_description, rag_chunks or []
+    )
+    result["match_score"] = calculate_weighted_match_score(result["scoring_breakdown"])
+    result["analysis_status"] = status
+    result["analysis_warnings"] = warnings
     return result
 
 
@@ -2327,6 +2435,7 @@ async def analyze(
     logger.info("Received analysis request")
     workflow = AgentWorkflow()
     context = WorkflowContext(workflow_id=workflow.workflow_id)
+    input_warnings: list[str] = []
     request.state.workflow_id = workflow.workflow_id
 
     workflow.start_step("validate_input", "Validate Input")
@@ -2402,10 +2511,16 @@ async def analyze(
         else:
             resume_text = await extract_resume_text(resume)
         resume_text, resume_was_truncated = truncate_text(resume_text, MAX_RESUME_TEXT_CHARS)
+        if not resume_text.strip():
+            raise HTTPException(status_code=400, detail="Resume text is required for analysis.")
         context.resume_text = resume_text
         logger.info("Resume parsing succeeded characters=%s", len(resume_text))
         if resume_was_truncated:
             logger.info("Resume text truncated characters=%s", MAX_RESUME_TEXT_CHARS)
+            workflow.add_warning()
+            input_warnings.append(
+                f"Resume input exceeded {MAX_RESUME_TEXT_CHARS} characters and was shortened by section."
+            )
         workflow.complete_step(
             "parse_resume",
             f"Resume text extracted successfully from {context.resume_filename or 'uploaded file'}.",
@@ -2432,9 +2547,15 @@ async def analyze(
             logger.info("JD fetch succeeded characters=%s", len(job_description))
 
         job_description, jd_was_truncated = truncate_text(job_description, MAX_JOB_TEXT_CHARS)
+        if not job_description.strip():
+            raise HTTPException(status_code=400, detail="Job Description text is required for analysis.")
         context.job_text = job_description
         if jd_was_truncated:
             logger.info("JD text truncated characters=%s", MAX_JOB_TEXT_CHARS)
+            workflow.add_warning()
+            input_warnings.append(
+                f"Job Description exceeded {MAX_JOB_TEXT_CHARS} characters and was shortened by section."
+            )
         workflow.complete_step("acquire_job_description", source_message)
     except Exception as exc:
         fail_analysis_and_raise(
@@ -2613,6 +2734,9 @@ async def analyze(
         )
 
     workflow.start_step("run_llm_analysis", "Run LLM Analysis")
+    analysis_status = "complete"
+    analysis_warnings: list[str] = list(input_warnings)
+    provider_available = True
     try:
         provider_response = call_deepseek_raw(
             context.sanitized_resume_text,
@@ -2628,88 +2752,123 @@ async def analyze(
             "Provider returned a complete response with safe completion metadata.",
         )
     except Exception as exc:
-        fail_analysis_and_raise(
-            workflow,
-            context,
-            step_key="run_llm_analysis",
-            message="LLM analysis failed.",
-            error_code="LLM_ANALYSIS_FAILED",
-            exc=exc,
+        provider_available = False
+        workflow.add_warning()
+        if isinstance(exc, ModelOutputError):
+            context.model_metadata = safe_model_metadata(exc.metadata)
+        analysis_status = "fallback"
+        analysis_warnings.append(
+            "AI response could not be fully parsed. A local fallback analysis is shown."
+        )
+        workflow.complete_step(
+            "run_llm_analysis",
+            "Provider was unavailable; continuing with deterministic local analysis.",
+        )
+        logger.warning(
+            "DeepSeek analysis unavailable; local fallback selected error_type=%s",
+            type(exc).__name__,
         )
 
-    workflow.start_step("scan_llm_output", "Scan LLM Output")
-    try:
-        sanitized_output, output_scan, marker_leaked = scan_llm_output(context.llm_raw_response)
-        context.security_scan = merge_security_scans(context.security_scan, output_scan)
-        if output_scan.get("findings"):
-            workflow.add_warning()
-        if marker_leaked:
-            workflow.fail_step(
+    if provider_available:
+        workflow.start_step("scan_llm_output", "Scan LLM Output")
+        try:
+            sanitized_output, output_scan, marker_leaked = scan_llm_output(context.llm_raw_response)
+            context.security_scan = merge_security_scans(context.security_scan, output_scan)
+            if output_scan.get("findings"):
+                workflow.add_warning()
+            if marker_leaked:
+                workflow.fail_step(
+                    "scan_llm_output",
+                    "LLM output security scanning detected internal instruction leakage.",
+                )
+                skip_workflow_steps_after(
+                    workflow,
+                    after_key="scan_llm_output",
+                    message="Skipped because LLM output security scanning blocked the response.",
+                )
+                raise_security_blocked(
+                    workflow,
+                    context,
+                    status_code=502,
+                    message="LLM output failed security validation. Please try again.",
+                    error_code="LLM_OUTPUT_SECURITY_VALIDATION_FAILED",
+                    error_stage="scan_llm_output",
+                )
+            context.llm_raw_response = sanitized_output
+            workflow.complete_step(
                 "scan_llm_output",
-                "LLM output security scanning detected internal instruction leakage.",
+                "LLM output was scanned for credential and internal marker leakage.",
             )
-            skip_workflow_steps_after(
-                workflow,
-                after_key="scan_llm_output",
-                message="Skipped because LLM output security scanning blocked the response.",
-            )
-            raise_security_blocked(
+        except HTTPException:
+            raise
+        except Exception as exc:
+            fail_analysis_and_raise(
                 workflow,
                 context,
-                status_code=502,
-                message="LLM output failed security validation. Please try again.",
-                error_code="LLM_OUTPUT_SECURITY_VALIDATION_FAILED",
-                error_stage="scan_llm_output",
+                step_key="scan_llm_output",
+                message="LLM output security scanning failed.",
+                error_code="LLM_OUTPUT_SCAN_FAILED",
+                exc=exc,
             )
-        context.llm_raw_response = sanitized_output
-        workflow.complete_step(
-            "scan_llm_output",
-            "LLM output was scanned for credential and internal marker leakage.",
-        )
-    except HTTPException:
-        raise
-    except Exception as exc:
-        fail_analysis_and_raise(
-            workflow,
-            context,
-            step_key="scan_llm_output",
-            message="LLM output security scanning failed.",
-            error_code="LLM_OUTPUT_SCAN_FAILED",
-            exc=exc,
+    else:
+        workflow.skip_step(
+            "scan_llm_output", "Scan LLM Output", "No provider output was available to scan."
         )
 
     workflow.start_step("parse_model_json", "Parse Model JSON")
-    try:
-        parsed = parse_ai_json_response(context.llm_raw_response)
-        context.json_parse_success = True
-        workflow.complete_step("parse_model_json", "Model output is one valid JSON object.")
-    except Exception as exc:
+    if provider_available:
+        try:
+            result, analysis_status, parsed_warnings = model_response_to_result(
+                context.llm_raw_response
+            )
+            analysis_warnings.extend(parsed_warnings)
+            context.json_parse_success = True
+            if analysis_status != "complete":
+                workflow.add_warning()
+            workflow.complete_step(
+                "parse_model_json",
+                "Model output was parsed with bounded normalization.",
+            )
+            workflow.start_step("validate_structured_output", "Validate Structured Output")
+            workflow.complete_step(
+                "validate_structured_output",
+                "Usable analysis fields passed the tolerant compact Schema.",
+            )
+        except Exception as exc:
+            context.json_parse_success = False
+            workflow.add_warning()
+            analysis_status = "fallback"
+            analysis_warnings.append(
+                "AI response could not be fully parsed. A local fallback analysis is shown."
+            )
+            result = local_fallback_result(
+                context.sanitized_resume_text,
+                context.sanitized_job_text,
+                context.retrieved_chunks,
+            )
+            workflow.complete_step(
+                "parse_model_json",
+                "Model parsing and the one allowed repair were unusable; local fallback selected.",
+            )
+            workflow.start_step("validate_structured_output", "Validate Structured Output")
+            workflow.complete_step(
+                "validate_structured_output",
+                "Deterministic fallback output has the stable analysis structure.",
+            )
+            logger.warning("DeepSeek response fallback selected error_type=%s", type(exc).__name__)
+    else:
         context.json_parse_success = False
-        fail_analysis_and_raise(
-            workflow,
-            context,
-            step_key="parse_model_json",
-            message="Model JSON parsing failed safely.",
-            error_code="MODEL_OUTPUT_INVALID_JSON",
-            exc=exc,
+        result = local_fallback_result(
+            context.sanitized_resume_text,
+            context.sanitized_job_text,
+            context.retrieved_chunks,
         )
-
-    workflow.start_step("validate_structured_output", "Validate Structured Output")
-    try:
-        compact_analysis = validate_compact_analysis(parsed)
-        result = compact_analysis_to_result(compact_analysis)
         workflow.complete_step(
-            "validate_structured_output",
-            "Model JSON passed the strict compact analysis Schema.",
+            "parse_model_json", "Provider output was unavailable; local fallback required no JSON parsing."
         )
-    except Exception as exc:
-        fail_analysis_and_raise(
-            workflow,
-            context,
-            step_key="validate_structured_output",
-            message="Structured output validation failed.",
-            error_code="MODEL_OUTPUT_SCHEMA_INVALID",
-            exc=exc,
+        workflow.start_step("validate_structured_output", "Validate Structured Output")
+        workflow.complete_step(
+            "validate_structured_output", "Deterministic fallback output has the stable analysis structure."
         )
 
     workflow.start_step("validate_evidence_references", "Validate Evidence References")
@@ -2721,6 +2880,11 @@ async def analyze(
         )
         if evidence_validation["rejected_reference_count"]:
             workflow.add_warning()
+            analysis_warnings.append(
+                "Unknown or unsupported evidence references were ignored without blocking the analysis."
+            )
+            if analysis_status == "complete":
+                analysis_status = "partial"
         workflow.complete_step(
             "validate_evidence_references",
             (
@@ -2752,6 +2916,12 @@ async def analyze(
             context.sanitized_resume_text,
             context.retrieved_chunks,
         )
+        result["scoring_breakdown"] = deterministic_scoring(
+            result,
+            context.sanitized_resume_text,
+            context.sanitized_job_text,
+            context.retrieved_chunks,
+        )
         result["match_score"] = calculate_weighted_match_score(result["scoring_breakdown"])
         result["rag_sources"] = build_default_rag_sources(
             context.retrieved_chunks,
@@ -2759,6 +2929,24 @@ async def analyze(
         )
         if not result["used_knowledge_base"]:
             result["rag_sources"] = []
+        if (result.get("claim_validation") or {}).get("unsupported_claim_count"):
+            workflow.add_warning()
+            analysis_warnings.append(
+                "Unsupported candidate claims were removed without blocking the reliable result."
+            )
+            if analysis_status == "complete":
+                analysis_status = "partial"
+        result["analysis_status"] = analysis_status
+        result["analysis_warnings"] = list(dict.fromkeys(analysis_warnings))
+        result["recommendations"] = normalize_list(
+            result.get("recommendations") or result.get("resume_suggestions")
+        )
+        result["resume_suggestions"] = list(result["recommendations"])
+        result.setdefault("unknown_skills", [])
+        result.setdefault("cover_letter", "")
+        result.setdefault("upgraded_resume_bullets", [])
+        result.setdefault("ats_analysis", {})
+        result.setdefault("evidence_mapping", [])
         workflow.complete_step(
             "reconcile_evidence",
             (
