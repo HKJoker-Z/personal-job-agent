@@ -1,6 +1,10 @@
 # Version 2.0.3 production readiness
 
-Version 2.0.3 may be promoted from production Version 2.0.2 only after required PR/main checks, immutable image publication, the standard PostgreSQL 16 backup, one isolated restore rehearsal, isolated migration validation, and the `127.0.0.1:18090` candidate all pass.
+Version 2.0.3 is the current production release. Before promotion from Version
+2.0.2, it required passing PR/main checks, immutable image publication, the
+standard PostgreSQL 16 backup, one isolated restore rehearsal, isolated
+migration validation, and the `127.0.0.1:18090` candidate. The same gates remain
+the acceptance baseline for rollback rehearsals and any production recovery.
 
 ## Data gates
 

@@ -1,200 +1,615 @@
 # Personal Job Agent — Verified Project Knowledge
 
-## 1. Project overview
+## Project Overview
+
+Personal Job Agent is a private, administrator-led web application for
+evidence-grounded Resume and Job Description analysis. The current stable and
+production version is **2.0.3**. The current Alembic schema revision is
+`20260721_05` (`head`).
+
+The application uses a React/Vite frontend, a FastAPI/Python backend,
+SQLAlchemy 2, PostgreSQL 16, Redis, Dramatiq, a Transactional Outbox, Nginx,
+Docker Compose, and the DeepSeek API. It helps a user manage a Career Profile
+and saved Resumes, analyze one Resume against one JD, optionally retrieve
+verified Project Knowledge evidence, inspect the normalized result, and save it
+to History.
+
+AI output is advisory and requires human review. Personal Job Agent does not
+automatically submit applications, send email, contact employers, or guarantee
+Applicant Tracking System (ATS), interview, or hiring outcomes.
+
+## Current Version 2.0.3 Changes
+
+Version 2.0.3 adds tolerant JSON extraction/normalization, at most one
+format-only DeepSeek repair, and deterministic local fallback. Results identify
+`complete`, `repaired`, `partial`, or `fallback` state.
+
+The Resume page now accepts PDF, DOCX, TXT, MD, and Markdown (10 MB default).
+The latest successful upload becomes Primary and Analyze loads its active
+Version. Alembic `20260721_05` adds `resumes.is_primary`, backfills the newest
+active Resume per user, and preserves existing data.
+
+## Current Product Workflow
+
+1. An administrator creates an account through the trusted server CLI; there is
+   no public registration endpoint.
+2. The user signs in and may choose bounded Remember Me behavior.
+3. The user maintains a Career Profile and its owned experience, education,
+   project, skill, language, and certification data.
+4. The user uploads a Resume on the Resume page. A successful upload creates a
+   private File Asset, a Resume, and a Resume Version, then selects that Resume
+   as Primary.
+5. Analyze loads the Primary Resume automatically. The user may select another
+   active Resume Version or provide a request-only PDF/DOCX override.
+6. The user pastes a Job Description or provides one supported HTTPS job URL.
+7. The user may enable or disable Project Knowledge RAG and choose top-k 1–10.
+8. The backend normalizes and scans input, retrieves evidence when enabled,
+   builds a safe prompt, and requests compact judgments from DeepSeek.
+9. The backend parses, repairs or falls back, validates evidence, reconciles
+   skills, calculates scoring, and generates trusted RAG source metadata.
+10. The user reviews warnings and evidence and may save the result to History.
+11. Saved History can be viewed, updated, removed, or exported as cover-letter
+    DOCX and analysis-report PDF.
+
+The direct Analyze workflow is independent of a Job, Application, Approval, or
+Task database entity.
+
+## Current Feature Scope
+
+Current capabilities are Dashboard; Analyze with Primary/saved/request-only
+Resume sources, pasted/safely fetched JD, optional Project RAG and History;
+revision-aware Career Profile; Resume Library, Versions, private File Assets,
+diff/finalize/archive; History detail, notes/status, decisions and DOCX/PDF
+exports; Project Knowledge status/replace/rebuild/search; administrator
+Monitoring and offline Evaluation; historical Agent Run detail/Steps/Events/SSE
+and cancellation; and Account password/Session controls.
+
+## Removed or Disabled Features
+
+Jobs, Job Rankings, Applications, Approvals, and Tasks are removed or disabled
+from the current workspace and public operating flow. Old browser routes show a
+Feature Removed page. Authenticated retired API prefixes return HTTP
+`410 FEATURE_REMOVED`.
+
+New package-based Agent Runs and Agent retry/resume actions tied to the retired
+Application workflow are also disabled. Existing Agent Runs remain readable
+and cancellable. Existing waiting-for-approval runs cannot be resumed through
+the retired Approval workflow.
+
+Historical SQLAlchemy models, Alembic revisions, PostgreSQL tables, and existing
+rows remain for backup, rollback, and compatibility. Their presence does not
+make them current product features. No destructive retirement migration deletes
+that historical data.
+
+## Technical Architecture
+
+The production request path is:
+
+`Browser → HTTPS Nginx Edge → Nginx Frontend → FastAPI Backend`
+
+Nginx Edge terminates TLS. Frontend Nginx serves the React/Vite static bundle
+and reverse-proxies `/api` to FastAPI. Backend 8000, PostgreSQL 5432, and Redis
+6379 are not host-published.
+
+FastAPI performs authentication, CSRF and ownership checks, input scanning,
+Resume parsing, safe job URL acquisition, Project Knowledge retrieval, prompt
+construction, DeepSeek invocation, tolerant parsing, evidence reconciliation,
+History persistence, and monitoring.
+
+PostgreSQL 16 is authoritative for application and durable workflow state.
+Redis is a private transient queue broker. Dramatiq workers consume safe,
+identifier-only messages. A standalone Outbox Dispatcher publishes durable
+PostgreSQL Outbox events to Redis and recovers interrupted delivery. Worker and
+Outbox services have separate heartbeats and health checks.
 
-Personal Job Agent is a privately operated, single-user-oriented web application for evidence-grounded resume and job-description analysis. Version 2.0.3 combines a React/Vite interface, a FastAPI backend, PostgreSQL persistence, Redis-backed Dramatiq workers, a transactional Outbox, Project Knowledge retrieval, and a hardened Docker Compose/Nginx production topology.
+The current direct Resume/JD Analyze request is synchronous and does not create
+a new public Agent Run. The Worker, Transactional Outbox, leases, retries,
+dead-letter records, and SSE remain implemented and deployed as the reliable
+Agent execution foundation and for retained workflow state.
 
-The application helps a user maintain resume versions, paste a job description or provide one safely fetched HTTPS job URL, run an explainable match analysis, review Project Knowledge evidence, save an analysis to History, and inspect monitoring or historical Agent Run data. AI output is assistive and requires human review. The system does not submit job applications.
+## Backend Stack
 
-## 2. Product scope
+Python 3.12, FastAPI 0.115.6, Uvicorn, Pydantic, SQLAlchemy 2.0.51, Alembic
+1.18.5, and psycopg 3 implement the API, validation, repositories, services,
+schema, and PostgreSQL access. Redis 7.4.1 and Dramatiq 2.2 implement queue
+transport/workers. The OpenAI-compatible client calls DeepSeek `deepseek-chat`.
+`pypdf`, `python-docx`, ReportLab, Beautiful Soup, and guarded HTTP acquisition
+support extraction, exports, and job URL input.
 
-The Version 2.0.3 user workspace contains:
+A compatibility layer serves migrated Version 1 History, Project Knowledge,
+monitoring, and Evaluation; Version 2 domains use SQLAlchemy services.
 
-- Dashboard
-- Analyze
-- Profile
-- Resume Library and immutable Resume Versions
-- saved analysis History and document exports
-- Project Knowledge status, replacement, index rebuild, and search
-- historical Agent Runs, SSE progress, and safe cancellation
-- administrator Monitoring and Evaluation
-- Account and Session controls
+## Frontend Stack and Routes
 
-Analyze does not require a Job, Application, Approval, or Task entity. It accepts exactly one Resume source and exactly one job-description source, then optionally saves the normalized result to History.
+React 19.2.7, React Router 7.18.1, Vite 8.1.3, semantic HTML, and project-owned
+CSS implement the frontend. One `AppLayout` supplies responsive desktop,
+mobile, and iPad navigation. Routes cover Login, Dashboard, Analyze, History,
+Resumes, Profile, Project Knowledge, Agent Runs, Account, and administrator
+Monitoring/Evaluation. Retired workflow routes render Feature Removed and do
+not appear in navigation.
 
-## 3. Current Version 2.0.3 feature set
+## Resume Management
 
-Version 2.0.3 contains the complete Version 2.0.2 production behavior and adds two focused changes. DeepSeek analysis tolerates common structured-output defects, permits one bounded format-only repair call, and returns a deterministic local fallback when the provider or response is unusable. Resume Library accepts PDF, DOCX, TXT, and Markdown uploads; the latest successful upload becomes the sole Primary Resume and Analyze selects it automatically.
+### Supported Resume formats
 
-Normal Sessions use a 30-minute idle timeout and a 24-hour absolute timeout by default. Remember Me Sessions have a configurable absolute limit of no more than 30 days. The browser receives only a random opaque Session cookie. Passwords are never persisted by application JavaScript.
+The Resume page accepts PDF, DOCX, TXT, `.md`, and `.markdown`. PDF requires a
+valid signature and selectable text. DOCX requires valid Office structure and
+passes archive-bomb limits. Text is decoded as UTF-8 or a detected fallback.
+Extracted text is capped at 200,000 characters.
 
-The analysis result reports `used_knowledge_base`, `retrieval_count`, safe `rag_sources`, matched and missing skills, scoring details, and a skill-to-evidence mapping. Project Knowledge skills may move from missing to matched only when retrieved text directly supports them.
+The Analyze page's temporary file override accepts PDF or DOCX. TXT/Markdown
+content is available to Analyze through a successfully saved Resume Version.
 
-## 4. Removed features
+### Resume data relationships
 
-Version 2.0.3 retains the Version 2.0.1 retirement of public Jobs, Job Rankings, Applications, Approvals, and Tasks workspaces and their mutation APIs. Old browser routes show a Feature Removed page. Authenticated calls to retired API prefixes return a uniform HTTP 410 `FEATURE_REMOVED` response.
+- `file_assets.user_id` owns a private file with opaque `storage_key`, original
+  filename, media type, size, SHA-256, and timestamps.
+- `resumes.user_id` owns a logical Resume with title, status, `is_primary`,
+  `active_version_id`, and archive time.
+- `resume_versions.resume_id` links an immutable numbered Version. It stores
+  parent/source IDs, `content_json`, `parsed_text`, draft/final status, and audit
+  fields. `source_file_id` links imported content to its File Asset.
 
-The associated PostgreSQL tables, SQLAlchemy models, Alembic history, and existing rows are intentionally retained for backup, restore, rollback, and historical compatibility. No destructive migration drops these records. Existing `waiting_for_approval` Agent Runs are read-only and can be cancelled; the simplified Analyze flow creates no new Approval Request.
+Repository queries always scope Resume, Version, and File Asset access to the
+authenticated user. Referenced File Assets cannot be independently deleted.
+Resume deletion is a non-destructive archive operation.
 
-## 5. Technical architecture
+### Primary Resume behavior
 
-The request path is Browser → HTTPS Nginx Edge → Nginx Frontend → FastAPI Backend. Backend traffic to PostgreSQL and Redis stays on private Docker networks. The backend performs authentication, ownership checks, input scanning, resume parsing, safe URL acquisition, Project Knowledge retrieval, prompt construction, model invocation, output validation, History persistence, and monitoring.
+Upload validation and text extraction finish before database or Primary Resume
+state changes. A failed upload therefore cannot disturb the current primary.
 
-PostgreSQL is authoritative for application state and durable Outbox events. Redis is a private transient queue transport. Dramatiq consumes safe-ID-only messages. The standalone Outbox Dispatcher publishes database-owned work and recovers interrupted or lost transient deliveries. SSE exposes authenticated, sanitized progress events for retained Agent Runs.
+A successful upload atomically creates the Resume/Version, clears the old
+primary, and sets the new Resume. Partial unique index
+`uq_resumes_user_primary_active` enforces at most one unarchived Primary Resume
+per `user_id` in PostgreSQL and SQLite.
 
-## 6. Backend stack
+Analyze loads the Primary Resume's active Version. Another stored Version or
+temporary PDF/DOCX changes one request only. Archiving Primary selects the most
+recently updated active Resume; with none left, the endpoint returns `null` and
+Analyze shows upload guidance.
 
-- Python 3.12
-- FastAPI and Uvicorn
-- SQLAlchemy 2 typed ORM and repositories
-- Alembic schema revisions through `20260721_05`
-- psycopg 3 PostgreSQL connectivity
-- Redis 7 client and Dramatiq workers
-- OpenAI-compatible client for DeepSeek
-- pypdf and python-docx for Resume extraction
-- python-docx and ReportLab for saved-analysis exports
-- deterministic security, matching, grounding, monitoring, and evaluation services
+## Analysis Pipeline
 
-The code retains a reviewed compatibility layer for migrated Version 1 analysis and Project Knowledge operations while Version 2 domain modules use SQLAlchemy repositories and services.
+### Input normalization
 
-## 7. Frontend stack
+Analyze accepts one Resume and one JD source. Empty input is rejected. It removes
+NUL/HTML, normalizes whitespace/newlines, and preserves useful structure.
+Defaults are 100,000 Resume and 60,000 JD characters; section-aware reduction
+handles oversized text.
 
-The frontend uses React 19, React Router, Vite 8, semantic HTML, and project-owned CSS variables. It does not depend on a large UI framework. One `AppLayout` component provides the desktop top navigation and the collapsible mobile/iPad navigation, including focus states and `aria-current="page"`.
+### RAG retrieval and safe prompt
 
-The login form uses browser password-manager conventions: an email input with `autocomplete="username"` and a password input with `autocomplete="current-password"`. It includes password visibility, Caps Lock feedback, safe generic errors, loading state, and duplicate-submit prevention.
+With RAG on, a bounded query combines AI/skill terms, JD keywords, and limited
+JD/Resume prefixes. Retrieved chunks enter `TRUSTED_PROJECT_EVIDENCE`; Resume
+and JD enter `USER_PROVIDED_RESUME` and `UNTRUSTED_JOB_DESCRIPTION`.
 
-## 8. Database architecture
+### DeepSeek and structured output
 
-Production runs PostgreSQL 16. SQLAlchemy 2 models cover users, password hashes, server-side Sessions, profiles, resumes and versions, legacy analysis History, Project Knowledge documents and chunks, monitoring/evaluation, Agent Runs, Steps, Events, Outbox entries, worker heartbeats, usage records, and retained retired-feature tables.
+One main DeepSeek request asks for matched/missing/unknown skills, concise
+assessments, evidence references, unsupported-claim candidates, and
+recommendations. DeepSeek does not own final scoring, sources, History identity,
+or audit metadata.
 
-Alembic owns the production schema. The current head is `20260721_05`. Version 2.0.3 adds only `resumes.is_primary`, backfills the newest active Resume per user, and enforces one active primary with a partial unique index. Existing Resume and Resume Version rows are preserved. SQLite remains supported only for isolated development, compatibility tests, and the verified SQLite-to-PostgreSQL source migration workflow; it is not the production database.
+Parsing proceeds in this order:
 
-The SQLite migration computes a source fingerprint, preserves primary keys where safe, assigns ownership, validates row counts and aggregate checksums, records the migration run, and verifies the source did not change. The known migrated source fingerprint is operational metadata, not an application claim.
+1. Standard JSON parsing.
+2. Balanced-object extraction from fences or prose.
+3. Wrapper/trailing-comma normalization.
+4. Pydantic aliases, defaults, safe coercion, bounds, and ignored extras.
+5. At most one format-only repair if local parsing is unusable.
+6. Deterministic fallback if provider/repair remains unusable.
 
-## 9. Worker and queue architecture
+No parser evaluates model text as code.
 
-Redis 7 is a private message broker, not the source of truth. Dramatiq executes background work with configured concurrency, heartbeats, step leases, bounded retries, token/cost budgets, and safe payload validation. PostgreSQL transactional Outbox rows are created in the same transaction as durable state.
+### Evidence reconciliation and scoring
 
-The Outbox Dispatcher selects rows with database locking, publishes only validated identifiers, records publish state, retries with bounded delay, recovers stale publications, and moves exhausted deliveries to dead-letter records. Worker claims and leases make duplicate delivery safe. In production, the standalone dispatcher is enabled and duplicate dispatch inside the worker supervisor is disabled.
+Evidence IDs are valid only for `resume` or current-request `pk:<chunk_id>`.
+The Backend checks actual supporting text; unknown IDs/unsupported matches are
+rejected without deleting unrelated valid fields.
 
-## 10. Authentication and Session security
+One normalized skill has one final state. Direct chunk evidence may move a skill
+from missing to matched. Unsupported candidate claims produce warnings;
+unsupported generated letter/bullet content is cleared.
 
-Passwords are hashed with Argon2 and are never reversibly stored. Login errors do not reveal whether an email exists. Login attempts use database-backed throttling and fingerprinted identifiers.
+Final score weights are backend-owned:
 
-Sessions are stored server-side with only a hash of the opaque cookie token. Cookies are `Secure`, `HttpOnly`, `SameSite=Lax`, and path-scoped. Login rotates any prior Session. Logout revokes the current Session. Logout-all provides user/admin revoke-all behavior. Password change revokes old Sessions and issues a new rotated Session. Inactive accounts fail authentication. Every Session has an absolute expiration.
+- Skills Match: 35%.
+- Project Experience: 25%.
+- Education: 15%.
+- Work Experience: 15%.
+- Keyword Match: 10%.
 
-Unsafe authenticated requests require a Session-bound CSRF token and a trusted Origin. Ownership filters and repository predicates prevent IDOR access. The optional remembered email uses only `pja.v2.login.rememberedEmail` in LocalStorage after trim, lowercase normalization, length bounding, and email validation. No password, Session token, or CSRF token is written there.
+The Backend generates scoring, `match_score`, `rag_sources`, evidence mapping,
+workflow Steps, and safe provider metadata. Saving to History is optional.
 
-## 11. AI security
+## Analysis Result States
 
-Resume text and external job descriptions are scanned for prompt injection, credential-like data, private keys, and PII before model use. Job URLs pass a guarded acquisition layer that restricts schemes, blocks unsafe/private destinations, validates redirects, limits size and time, and mitigates SSRF.
+### `complete`
 
-Prompts isolate `USER_PROVIDED_RESUME`, `UNTRUSTED_JOB_DESCRIPTION`, and `TRUSTED_PROJECT_EVIDENCE`. Evidence content is data, never executable instruction. Safe prompt rules forbid secret disclosure, invented experience, instruction override, and unsupported leadership, scale, revenue, user-count, or business-outcome claims.
+The main model response is directly usable and has no normalization, missing
+optional-field, evidence-reference, or unsupported-claim warning that downgrades
+the result.
 
-Model output is scanned for secrets and internal-marker leakage, safely parsed without evaluation, normalized, and independently checked against Resume and retrieved Project Knowledge evidence. Parsing supports JSON fences, surrounding prose, balanced-object extraction, common trailing commas, optional defaults, safe aliases, and bounded type coercion. One short format-only repair call is permitted. Unsupported matched skills and unknown evidence references are removed with warnings instead of blocking all usable analysis. Unsupported generated letter claims remain excluded from returned content.
+### `repaired`
 
-## 12. RAG architecture
+The result remains model-derived, but local wrapper/format normalization or the
+single format-only repair call was needed. This state does not mean the complete
+analysis was called twice.
 
-Project Knowledge is the only user-facing RAG corpus. A Git baseline exists at `docs/PROJECT_KNOWLEDGE.md`; production maintains a distinct runtime copy. Updating production requires hashing and backing up the runtime copy before an explicit replace and index rebuild.
+### `partial`
 
-The backend cleans and chunks the Markdown file, stores the document and chunks in PostgreSQL, and retrieves with `to_tsvector`, `websearch_to_tsquery`, and `ts_rank`. SQLite FTS5 and bounded keyword fallback remain only for development compatibility. The request default is top-k 5 with an enforced range of 1–10.
+Usable model content is returned, but optional fields required safe defaults,
+aliases/null normalization produced warnings, or unsupported claim/evidence
+content was removed. Valid fields remain available.
 
-When RAG is off, retrieval is skipped, no Project Knowledge text enters the prompt, `used_knowledge_base` is false, `retrieval_count` is zero, and `rag_sources` is empty. When RAG is on, a bounded query is constructed from sanitized Resume and JD text, relevant chunks are retrieved and scanned, and only those chunks enter the trusted evidence zone. Empty retrieval degrades safely without fabricated evidence.
+### `fallback`
 
-Responses expose only document, section, chunk ID, relevance score, and supported skills. Full chunk text is not returned in `rag_sources`.
+The provider timed out, returned a provider error, emitted unusable/truncated
+output, or could not be recovered by the one repair. The backend performs a
+deterministic curated keyword/synonym comparison and returns the stable result
+shape with local scoring, recommendations, and available RAG evidence.
 
-## 13. Matching methodology
+Fallback is more basic than full AI analysis. The system guarantees a stable
+fallback structure for covered failures, not a successful DeepSeek call or a
+complete model analysis every time.
 
-Matching combines model-generated skill judgments with backend normalization and deterministic evidence reconciliation. The backend, not the model, generates the final weighted score using skills match 35%, project experience 25%, education 15%, work experience 15%, and keyword match 10%. Results have `complete`, `repaired`, `partial`, or `fallback` status. The fallback path deterministically compares curated Resume/JD keywords and still returns scoring, recommendations, RAG metadata, and evidence where available.
+## Project Knowledge RAG
 
-Synonym groups improve recall for PostgreSQL/Postgres, Redis/message broker, Dramatiq/background worker, FastAPI/Python API, React/frontend, Docker Compose/container orchestration, SSE/live progress, RAG/retrieval augmented generation, and CI/CD/GitHub Actions. A synonym match is not evidence by itself: the Resume or a retrieved Project Knowledge chunk must contain supporting facts.
+### Source and index
 
-## 14. Monitoring and evaluation
+Project Knowledge is the only user-facing RAG corpus. Git baseline
+`docs/PROJECT_KNOWLEDGE.md` and the separate production runtime copy are managed
+by hash/backup. Generic `/api/knowledge/*` operations return HTTP 410.
 
-The monitoring service stores sanitized metadata such as workflow outcome, step timing, LLM latency, RAG hit/reconciliation counts, security finding counts, recommendation metadata, and workflow IDs. It does not store raw resumes, job descriptions, prompts, provider responses, passwords, or secrets in metrics.
+The indexer cleans up to 30,000 characters, makes 1,000-character chunks with
+125-character overlap, and stores one document plus chunks in PostgreSQL.
 
-Administrator-only monitoring and deterministic offline evaluations support regression review without calling DeepSeek. Data-management operations require explicit confirmation and preserve History and Project Knowledge unless the scoped operation states otherwise.
+Production tokenizes technical terms, uses OR semantics (up to 20 tokens), and
+ranks `to_tsvector('simple', content)` through `websearch_to_tsquery`/`ts_rank`.
+No hit uses bounded keyword search. SQLite tests use FTS5 then keyword fallback.
 
-## 15. Deployment and infrastructure
+### Top-k, evidence IDs, and sources
 
-Production uses Docker Compose with an HTTPS Nginx Edge, Nginx/React Frontend, FastAPI Backend, PostgreSQL 16, Redis 7, Dramatiq Worker, and Outbox Dispatcher. Backend 8000, PostgreSQL 5432, and Redis 6379 are not host-published.
+Top-k defaults to 5 and is clamped to 1–10. Chunk IDs become `pk:<chunk_id>`;
+the model may cite them, but only the Backend validates them and builds sources.
 
-Runtime fixes formalized in Version 2.0.1 include idempotent Redis ownership initialization without unconditional `chown -R`, read-only Nginx roots with UID/GID 101 writable tmpfs directories, `cap_drop: ALL` on long-running Edge and Frontend containers, unique `frontend-v2` and `backend-v2` Docker DNS aliases, unambiguous Nginx upstream names, exact release-version health assertions, and rollback-safe candidate deployment.
+`rag_sources` contains logical document, heading-derived section when available,
+chunk ID, score, and supported skills. It excludes chunk/full-document content.
 
-The stable `pja-br0` bridge, narrow IPv4 policy rule preference 8999, routing service, and Mihomo configuration remain outside application change scope. The production Edge joins only the necessary application network; retained Version 1.9 containers must be detached from that network during Version 2 service, with a documented reconnect rollback command.
+### Skill coordination and synonyms
 
-## 16. Backup and recovery
+Exact synonyms cover PostgreSQL/Postgres, Redis/message broker,
+Dramatiq/background worker, FastAPI/Python API, React/frontend, Docker Compose,
+SSE/live progress, RAG/Retrieval-Augmented Generation, and CI/CD/GitHub Actions.
 
-The PostgreSQL backup tool uses PostgreSQL 16 `pg_dump` custom format with no owner or ACL and a synchronized exported snapshot. Before dump it parses the server, `pg_dump`, `pg_restore`, and `psql` numeric majors and requires all to equal 16. The manifest records safe server/client versions, immutable server/tool image digests, archive format/SHA-256, application/Alembic versions, every public table count and aggregate checksum, validated foreign keys, sequences, indexes, ownership, private files, and Project Knowledge hash without secrets.
+A synonym is recall, not proof. Chunks detected under Known Limitations, Future
+Roadmap, or Removed Features headings are rejected as positive skill evidence.
+Project skills must not become invented employment, leadership, scale, revenue,
+or user-count claims.
 
-Restore validates checksum and manifest before writes, requires archive dump major = restore major = empty target server major = 16 and the same controlled tool digest, then runs `pg_restore --exit-on-error --single-transaction`. It reports success only after the complete database inventory, file checksums, Project Knowledge, and application readiness match. Dump SQL or custom archives are never edited to bypass compatibility. A real CI rehearsal uses separate internal networks and temporary PostgreSQL 16 Volumes with no published 5432; a test-only PostgreSQL 17 client proves both dump and restore fail before writes.
+### RAG off and rebuild behavior
 
-Version 2.0.1 was formally released but never deployed because its required production Restore rehearsal exposed a PostgreSQL 17.10 client against PostgreSQL 16. Version 2.0.2 fixed that issue and is the production baseline for the Version 2.0.3 upgrade. All existing tags and releases remain immutable.
+With RAG off, retrieval and evidence prompt injection are skipped,
+`used_knowledge_base=false`, `retrieval_count=0`, and `rag_sources=[]`. With RAG
+on but no hit, analysis continues without fabricated evidence.
 
-The Version 2.0.3 upgrade preserves PostgreSQL and Redis volumes, Resume files, runtime configuration, the runtime Project Knowledge copy, and immutable Version 2.0.2 image/configuration rollback assets. Rollback changes images/configuration; it does not delete volumes or tables.
+The formal workflow is authenticated replace/upload, rebuild, status, and
+search. Rebuild replaces Project Knowledge chunks and removes duplicate logical
+records. Production requires hash, backup, database summary, baseline
+comparison, rebuild, and search validation.
 
-## 17. Testing and CI
+## Authentication and Session Security
 
-Backend unit/integration tests cover authentication, Session TTLs, CSRF, ownership, Profiles, Resumes, Project Knowledge indexing/search, RAG reconciliation, prompt security, output grounding, monitoring/evaluation, PostgreSQL migrations, Redis/Worker behavior, Outbox durability, backup/restore, and retired API boundaries.
+`users` supports `admin`/`user`; there is no public registration. The trusted
+CLI reads passwords without echo, never as command arguments.
 
-Frontend Vitest/Testing Library coverage includes secure login behavior, email-only persistence, password visibility, single navigation, active/mobile states, removed navigation/routes, Resume upload/primary status, Analyze primary selection, all analysis statuses, RAG controls, and safe source display. CI also compiles Python, builds the Vite production bundle, runs PostgreSQL integration, builds both Docker images, validates Compose, runs ShellCheck and repository secret/path safety, executes an isolated Mock LLM smoke test, and performs a strict PostgreSQL 16 Backup/Restore rehearsal with client-17 pre-write negative gates. CI never calls real DeepSeek.
+Passwords are hashed with Argon2 through `pwdlib`. Login uses a generic invalid
+credential message and database-backed throttling with keyed fingerprints.
 
-GitHub Actions publishes GHCR images from annotated semantic release tags. Version, major/minor, major, latest, tag, and commit SHA tags for each component resolve to that component’s immutable digest.
+Sessions are PostgreSQL records. The browser receives an opaque cookie; only
+its SHA-256 hash and the CSRF hash are stored. Production cookies are `Secure`,
+`HttpOnly`, `SameSite=Lax`, path `/`.
 
-## 18. Evidence-backed resume bullets
+Normal defaults are 30-minute idle/24-hour absolute expiry. Remember Me is
+bounded to 1–30 days (default 30), never infinite.
 
-- Built and deployed a private React/FastAPI resume-to-job analysis application backed by PostgreSQL 16, SQLAlchemy 2, Alembic, Redis 7, Dramatiq, and Docker Compose.
-- Implemented server-side Argon2 authentication with opaque hashed Sessions, Secure/HttpOnly/SameSite cookies, Session-bound CSRF, rotation, absolute expiration, rate limiting, and ownership checks.
-- Integrated PostgreSQL full-text Project Knowledge retrieval into a guarded RAG pipeline with top-k evidence, source metadata, skill reconciliation, prompt-injection scanning, and unsupported-claim blocking.
-- Designed a PostgreSQL transactional Outbox with Redis delivery, Dramatiq workers, leases, heartbeat monitoring, recovery, and dead-letter handling.
-- Migrated verified SQLite application, monitoring, evaluation, and Project Knowledge records into Alembic-managed PostgreSQL using source fingerprints, row-count checks, and aggregate checksum validation.
-- Hardened an HTTPS Docker Compose deployment with private data services, non-root read-only Nginx containers, writable tmpfs, unique network aliases, exact version health checks, PostgreSQL client/server major gates, strict isolated restore, and rollback assets.
-- Built GitHub Actions validation and GHCR release automation for Python, React, PostgreSQL, Docker, Compose, shell, repository-safety, and isolated Mock LLM tests.
+Login rotates; logout/logout-all/password change/deactivation revoke applicable
+Sessions. Unsafe requests require trusted Origin and Session-bound CSRF.
 
-These bullets describe implementation facts only. They do not claim automatic application submission, commercial scale, hiring outcomes, team leadership, revenue, or user counts.
+Ownership predicates protect Profile, Resume, File, History, and Agent data from
+cross-user access. The frontend stores the current CSRF token in React memory,
+not browser storage.
 
-## 19. Interview-ready project explanations
+Remember email stores only a normalized email at
+`pja.v2.login.rememberedEmail`. JavaScript never stores plaintext password,
+Session token, or CSRF token in browser storage.
 
-RAG: “I keep one curated Project Knowledge document as the only corpus. I chunk it, index it in PostgreSQL full-text search, retrieve only a bounded top-k set, scan it, and pass it in a distinct evidence zone. The backend then reconciles skills and strips unsupported claims instead of trusting the model response.”
+## AI Reliability
 
-Reliability: “PostgreSQL owns workflow and Outbox state; Redis is transient delivery. Publishing uses locked Outbox rows, and worker leases, recovery, heartbeat, and dead-letter logic allow safe retries after Redis or process restarts.”
+DeepSeek can return Markdown fences, prose around JSON, wrapper objects,
+trailing commas, unexpected aliases, nulls, optional-field omissions, scalar
+values where a list was requested, numeric strings, truncated output, or no
+usable response. Network timeouts and provider 5xx errors are also possible.
 
-Authentication: “The browser receives an opaque Secure/HttpOnly cookie. The database stores its hash plus idle and absolute expiries. Remember Me changes only the bounded server-side expiry and cookie persistence; application code never stores the password.”
+Version 2.0.3 treats these as expected reliability conditions. It uses bounded
+local parsing first, tolerates non-critical schema differences, requests one
+format-only repair only when necessary, and selects local fallback when the
+model path is unusable. Non-critical omissions no longer force the entire
+analysis to fail.
 
-Deployment: “I create a PostgreSQL 16 backup with matching major-version tools, prove it restores strictly into an isolated empty PostgreSQL 16 target, stage immutable application digests on a private localhost port, and only then switch the existing HTTPS Edge. Rollback restores the previous digests and config without removing volumes or historical tables.”
+DeepSeek provides compact judgments; the backend remains authoritative for
+evidence validation, scoring, RAG source metadata, status, warnings, workflow
+audit data, and History identity. A complete network outage can only produce
+the simpler deterministic fallback, not a full DeepSeek-quality analysis.
 
-## 20. Feature-to-skill mapping
+## AI Security and Grounding
 
-| Feature | Verifiable skills |
+Resume/JD is untrusted. Deterministic checks scan prompt injection, credentials,
+API/private keys, and PII. Critical secret-like content blocks model use;
+best-effort PII minimization and safe logging reduce exposure.
+
+Prompt boundaries separate Resume, untrusted JD, and trusted Project evidence.
+Rules forbid instruction override, secrets, invented experience, and unsupported
+leadership, scale, revenue, user-count, or outcome claims.
+
+Job URL acquisition restricts schemes/destinations/redirects, pins resolution,
+bounds time/size, and mitigates Server-Side Request Forgery (SSRF).
+
+Model output is parsed without evaluation and scanned for secret/marker leakage.
+Only current Resume/chunk IDs are valid. Unknown IDs are ignored with warnings;
+RAG sources come from retrieval state, not model output.
+
+Ordinary unsupported claims/evidence do not block a usable result. The Backend
+keeps legal fields, warns, removes unsupported skills/material, and may mark the
+result partial. Output leakage or critical secrets still fail closed.
+
+These controls reduce risk but do not guarantee immunity from every prompt
+injection, secret pattern, or incorrect model judgment.
+
+## Monitoring and Evaluation
+
+Monitoring stores sanitized outcome/status, total/Step timing, LLM latency, RAG
+counts, security summaries, recommendations, and workflow IDs. Metrics exclude
+raw Resume/JD/prompt/response/chunks, passwords, and detected secrets.
+
+Monitoring shows overview, Step timing, RAG/security/recommendation summaries,
+and metadata-only traces. Administrator cleanup requires preview and exact
+confirmation for filtered/all metrics, one trace, or Evaluation history, while
+preserving History and Project Knowledge.
+
+Offline Evaluation runs reviewed behavioral/security/retrieval/recommendation/
+timing cases without DeepSeek. Pass rate is regression evidence, not model
+accuracy or hiring probability.
+
+History separately supports cover-letter DOCX and analysis-report PDF export.
+Version 2.0.3 does not provide OpenTelemetry export, Prometheus, Grafana,
+Langfuse, or distributed tracing.
+
+Worker and Outbox health are part of readiness. Worker heartbeat, stale-worker
+checks, dispatcher heartbeat, durable Outbox state, retries, leases, recovery,
+and dead-letter records support operational diagnosis without logging unsafe
+payload bodies.
+
+## Deployment and Production Engineering
+
+Production is single-host Docker Compose: Nginx HTTPS Edge, Nginx/React
+Frontend, FastAPI Backend, PostgreSQL 16.9, Redis 7.4.1, Dramatiq Worker, and
+Outbox Dispatcher. Only Edge 8080 is public.
+
+Backend/Frontend use immutable GHCR digests. GitHub Actions validates and
+publishes; production promotion remains manual.
+
+Long-running services use non-root users, read-only roots, dropped capabilities,
+`no-new-privileges`, bounded tmpfs, and rotated logs. Nginx tmpfs ownership is
+set for UID/GID 101.
+
+Retained fixes include idempotent Redis initialization, unique `frontend-v2`/
+`backend-v2` aliases, exact version health, and rollback-safe candidates.
+
+TLS uses TLS 1.2/1.3 and a Let's Encrypt IP certificate. `pja-br0`, IPv4 policy
+preference 8999, routing service, and Mihomo are out-of-scope host infrastructure.
+
+### Backup and Restore
+
+Backup uses PostgreSQL 16 custom archive, no owner/ACL, synchronized snapshot,
+private-file archive, and runtime Project Knowledge.
+
+Server, `pg_dump`, `pg_restore`, and `psql` majors must all equal 16. Server/tool
+images use immutable digests; client 17 fails before writes.
+
+Manifest records application/Alembic versions, archive/file SHA-256, immutable
+provenance, all public table counts/checksums, foreign keys, sequences, indexes,
+ownership, and knowledge inventory. Restore validates an empty target, uses
+`pg_restore --exit-on-error` in one transaction, and compares complete
+inventory with explicit owner mapping where authorized.
+
+Version 2.0.1 was not deployed after restore rehearsal exposed a PostgreSQL
+17.10 archive incompatible with PostgreSQL 16. Version 2.0.2 added these strict
+gates; Version 2.0.3 retains them.
+
+### Candidate, health, and rollback
+
+Upgrade stages immutable images on internal `127.0.0.1:18090`, then checks exact
+2.0.3 health/readiness, head schema, healthy/private dependencies, stable
+restarts, Resume/Primary, analysis, RAG, History, and restore assets.
+
+Readiness checks database/schema, files, Project Knowledge/search, Redis, Worker,
+disk, auth initialization, and LLM configuration without calling DeepSeek.
+
+Rollback restores Version 2.0.2 digests/config without deleting volumes, Resume
+files, backups, or knowledge. Additive `is_primary` is backward compatible;
+database restore is only for a separate data incident.
+
+## Data Migration
+
+Version 1.9 production used SQLite for History, Project Knowledge, monitoring,
+and Evaluation. Version 2 production requires PostgreSQL.
+
+The verified migration reader inspects the SQLite source, computes a source
+fingerprint, and records row counts. The PostgreSQL writer preserves primary
+keys where safe, assigns the selected owner, migrates compatibility tables, and
+validates row counts and aggregate checksums. It records a migration run and
+rechecks that the source did not change during the operation.
+
+Post-migration verification covers foreign-key consistency and PostgreSQL
+sequences so future inserts do not collide. Reports contain safe summaries, not
+production user content. SQLite remains only for isolated development,
+compatibility tests, and the migration source workflow; it is not the current
+production database.
+
+Alembic history is linear through:
+
+- `20260712_01`: Version 2 identity, Profile, Resume, compatibility, and base
+  persistence.
+- `20260713_02`: Job Library/Application Pipeline history.
+- `20260713_03`: matching and Application materials history.
+- `20260717_04`: reliable Agent Runs, Worker, Outbox, approvals, budgets, usage,
+  heartbeats, and dead letters.
+- `20260721_05`: one active Primary Resume per user.
+
+Retired feature tables remain intentionally present after migration.
+
+## Testing and CI
+
+Backend tests cover config, auth/Session/CSRF/ownership, Profile, Resume/Primary,
+analysis repair/fallback, RAG/security/grounding, History, monitoring/Evaluation,
+Worker/Outbox, readiness, Backup Restore, and retirement boundaries.
+
+PostgreSQL integration covers Alembic, services, migration, knowledge FTS,
+cleanup, constraints, and ownership. SQLite tests use temporary safe databases.
+
+Frontend tests cover login/email, navigation, retired routes, Profile, Resume
+upload/Primary, Analyze override/four states/RAG, History, Agent pages, and
+Monitoring.
+
+CI compiles/tests Python, runs PostgreSQL 16 integration, tests/builds React,
+builds images, validates Compose/Shell/repository safety, runs production-runtime
+and Mock LLM smoke, and rehearses PostgreSQL 16 Backup Restore plus client-17
+negative gates.
+
+CI does not call DeepSeek. Any real-provider validation is explicit, bounded,
+fictional, and separate from ordinary CI.
+
+## Feature-to-Skill Mapping
+
+| Implemented feature | Evidence-backed skill |
 | --- | --- |
-| Analyze and structured results | FastAPI, tolerant LLM parsing, bounded repair, deterministic fallback, explainable scoring |
-| Project Knowledge RAG | PostgreSQL FTS, chunking, top-k retrieval, evidence mapping |
-| Resume Library | React, PDF/DOCX/TXT/Markdown extraction, SQLAlchemy transactions, primary selection, immutable versioning |
-| Server-side Sessions | Argon2, secure cookies, CSRF, rotation, revocation, rate limiting |
-| Safe job URL | SSRF mitigation, redirect and response bounds, untrusted input handling |
-| Worker/Outbox | Redis, Dramatiq, transactions, idempotency, recovery, observability |
-| Monitoring/Evaluation | privacy-aware telemetry, deterministic evaluation, regression testing |
-| Production Compose | Nginx, HTTPS, Docker networks, least privilege, health checks |
-| Backup/Restore | PostgreSQL operations, manifests, checksums, recovery drills |
-| CI/Release | GitHub Actions, Docker builds, GHCR immutable digests, release engineering |
+| FastAPI API and Pydantic contracts | REST API design, validation, safe error boundaries |
+| SQLAlchemy 2 repositories and ownership | relational modeling, transactions, IDOR prevention |
+| PostgreSQL 16 | production relational database design and full-text search |
+| Alembic `20260721_05` | forward/backward schema migration and data backfill |
+| Redis and Dramatiq | asynchronous processing, transient queue transport, worker health |
+| Transactional Outbox | reliable event delivery, recovery, idempotency, dead-letter handling |
+| React and Vite | authenticated frontend application and responsive navigation |
+| Resume ingestion | PDF/DOCX/TXT/Markdown validation, parsing, private storage, versioning |
+| Primary Resume | transactional default selection and user-experience design |
+| Project Knowledge RAG | chunking, PostgreSQL FTS, top-k retrieval, evidence IDs and grounding |
+| Resilient DeepSeek analysis | structured-output design, tolerant parsing, repair, deterministic fallback |
+| Safe prompt and grounding | prompt-injection mitigation, secret protection, claim validation |
+| Monitoring and offline Evaluation | privacy-aware observability and regression testing |
+| Docker Compose and Nginx | containerized HTTPS deployment and private networking |
+| GitHub Actions and GHCR | CI/CD validation and immutable image publication |
+| PostgreSQL 16 Backup Restore | compatibility gates, manifests, checksums, recovery rehearsal |
 
-## 21. Responsible AI controls
+## Evidence-backed Resume Bullets
 
-- AI content is advisory and requires human review.
-- The system never automatically applies to a job.
-- RAG is limited to one curated project evidence source.
-- External JD and URL content remain untrusted.
-- Secrets are blocked and PII is minimized before model invocation.
-- The model cannot create source metadata; source fields come from retrieval.
-- Skills require direct Resume or retrieved evidence support.
-- Unsupported generated claims are blocked.
-- Monitoring avoids raw user and provider content.
-- Tests and CI use deterministic mock providers; real provider checks use only fictional data and bounded tokens.
+- Built a FastAPI/React job-analysis application with PostgreSQL-backed Profile,
+  Resume Version, History, monitoring, and Project Knowledge.
+- Implemented PDF, DOCX, TXT, and Markdown ingestion with private File Assets,
+  immutable Versions, and automatic Primary Resume selection.
+- Designed resilient DeepSeek output handling with tolerant Pydantic parsing,
+  one format repair, and deterministic fallback.
+- Integrated PostgreSQL FTS Project Knowledge RAG with top-k evidence IDs,
+  Backend sources, synonym recall, skill reconciliation, and claim filtering.
+- Implemented Argon2, hashed server Sessions, Remember Me, CSRF/Origin,
+  revocation, throttling, and ownership isolation.
+- Designed a PostgreSQL Transactional Outbox with Redis/Dramatiq, leases,
+  heartbeat, retry, recovery, and dead letters.
+- Migrated verified SQLite data to PostgreSQL with source fingerprint, rows,
+  checksums, ownership, foreign keys, and sequence validation.
+- Implemented PostgreSQL 16 Backup Restore gates with custom archive, immutable
+  tools, manifest checksums, empty target, inventory, and owner mapping.
+- Deployed immutable GHCR images behind HTTPS Nginx with private data services,
+  candidate staging, health assertions, and Version 2.0.2 rollback assets.
+- Built GitHub Actions checks for Python, PostgreSQL, React, Docker Compose,
+  repository safety, Mock LLM, and isolated recovery rehearsal.
 
-## 22. Known limitations
+These bullets describe implementation evidence only. They do not claim team
+leadership, commercial scale, revenue, user counts, hiring outcomes, automatic
+application submission, or employer adoption.
 
-The deployment is a single-host Compose architecture, not Kubernetes or high availability. PostgreSQL full-text retrieval is lexical rather than embedding-based. Evidence reconciliation and local fallback rely on bounded keywords/synonyms and can miss semantic equivalence. URL extraction cannot parse every job site. LLM analysis can still be incomplete or stylistically poor after normalization. Scanned PDFs without selectable text require conversion outside the application because Version 2.0.3 does not add OCR. Historical Agent Runs may reference retired workflows and are not resumable.
+## Interview-ready Explanations
 
-## 23. Future roadmap
+### Why not call DeepSeek directly from the browser?
 
-Future work may evaluate improved retrieval quality, more precise claim-to-evidence linking, accessibility refinements, operator observability, and safer zero-downtime deployment mechanics. Any future capability must be separately scoped, tested, and released. Version 2.0.3 does not include OCR, Version 2.1 features, an interview system, a browser extension, automatic application submission, or claims of guaranteed job-search success.
+The Backend protects the key, scans input, bounds prompts, classifies failure,
+validates output/evidence, owns scoring/sources, and enforces isolation. A
+browser call would expose secrets and bypass controls.
+
+### Why use Project Knowledge RAG?
+
+A reviewed single corpus supplies auditable transferable project evidence
+without a generic document store. Top-k limits prompt size and exposes sources.
+
+### How is unstable model formatting handled?
+
+It tries JSON, safe extraction, aliases/defaults, then one format repair. On
+provider/repair failure, deterministic matching returns the stable contract;
+non-critical defects do not discard valid fields.
+
+### Why PostgreSQL and Redis?
+
+PostgreSQL owns durable user, Resume, History, knowledge, metrics, and Agent/
+Outbox state. Redis is transient delivery, so broker loss does not erase state.
+
+### Why a Transactional Outbox?
+
+Business state and Outbox row commit together. The dispatcher publishes/retries
+later, closing the database-commit versus Redis-send gap.
+
+### How can an upgrade be rolled back?
+
+Record Version 2.0.2 digests/config, rehearse PostgreSQL 16 recovery, validate
+migration, and test an internal 2.0.3 candidate. Rollback restores old
+images/config and preserves volumes because the schema is additive.
+
+### How does Primary Resume improve the workflow?
+
+Only a successfully parsed upload becomes Primary. Analyze preselects its active
+Version but permits one-request override; archiving Primary selects a remaining
+Resume without a stale reference.
+
+## Known Limitations
+
+- The product is private and administrator-led, with no public signup. It is not
+  presented as a public multi-tenant SaaS platform.
+- DeepSeek can be unavailable or wrong. Every AI result needs human review.
+- Local fallback is deterministic and resilient but less nuanced than a full
+  model response.
+- PostgreSQL full-text RAG is lexical, not embedding/vector retrieval, and can
+  miss semantic equivalents outside bounded synonyms.
+- Scanned PDFs without selectable text require external OCR; OCR is not in
+  Version 2.0.3.
+- Safe job URL extraction cannot parse every site or client-rendered page.
+- The system does not automatically apply, send email, contact employers, or
+  guarantee ATS parsing, ranking, interviews, or hiring.
+- Jobs, Job Rankings, Applications, Approvals, and Tasks remain disabled.
+- Historical Agent Runs may refer to retired workflows and cannot be retried or
+  resumed through the current public workflow.
+- Production is single-host Docker Compose, not Kubernetes or high availability.
+- The application provides privacy-aware local metrics, not distributed tracing
+  or a full observability platform.
+
+## Roadmap
+
+Reasonable future directions include improved retrieval precision, more precise
+claim-to-evidence links, optional OCR after a separate security review,
+accessibility refinement, operator observability, and safer deployment-switch
+mechanics.
+
+Future ideas are not current capabilities until separately implemented, tested,
+reviewed, and released. The Roadmap does not restore Jobs, Applications,
+Approvals, or Tasks as current features and does not promise automatic job
+submission, a browser extension, an interview platform, Kubernetes, or
+guaranteed job-search outcomes.

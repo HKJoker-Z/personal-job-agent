@@ -1,25 +1,35 @@
 # Version 2 roadmap status
 
-## Current release: 2.0.1
+## Current release: 2.0.3
 
-Version 2.0.1 is a patch release focused on safe usability and operational correctness:
+Version 2.0.3 is the stable production release. It retains the simplified
+Version 2.0.1 workspace and PostgreSQL 16 Backup/Restore gates from Version
+2.0.2, then adds resilient DeepSeek parsing/repair/fallback and safe Resume-page
+upload with automatic Primary Resume selection.
 
-- bounded Remember Me and email-only persistence
-- one responsive authenticated navigation
-- direct Resume-to-JD Analyze flow
-- retirement of Jobs, Job Rankings, Applications, Approvals, and Tasks without deleting data
-- verified Project Knowledge updated for the PostgreSQL/Redis/Dramatiq production stack
-- actual Project Knowledge retrieval, prompt evidence, source reporting, and skill reconciliation
-- formal Redis-init, Nginx tmpfs, Docker alias, health-version, and rollback deployment fixes
+Current product scope is Dashboard, Analyze, Profile, Resume Library/Versions,
+History, Project Knowledge RAG, historical Agent Runs, administrator
+Monitoring/Evaluation, and Account controls. Jobs, Job Rankings, Applications,
+Approvals, and Tasks remain removed or disabled from the public workflow.
 
 ## Retained foundations
 
-Profile, Resume Versions, History, Project Knowledge, Monitoring/Evaluation, PostgreSQL, Redis, Dramatiq, Transactional Outbox, SSE, backup/restore, and historical Agent Runs remain supported. Retired-feature tables remain compatible for rollback.
+PostgreSQL 16, Redis, Dramatiq, Transactional Outbox, authenticated SSE,
+server-side Sessions, backup/restore, immutable GHCR images, HTTPS Nginx Edge,
+and rollback assets remain supported. Retired-feature tables remain only for
+compatibility, recovery, and rollback.
 
 ## Historical documents
 
-The `V2_0_2`, `V2_0_3`, and `V2_0_4` architecture/API/test documents record how Version 2.0.0 was built. They do not define the Version 2.0.1 public product surface. Public retirement behavior is defined by the 2.0.1 release notes and tests.
+Files named `V2_0_2_*`, `V2_0_3_*`, and `V2_0_4_*` may describe development
+milestones that were later consolidated into Version 2.0.0. Current public
+scope is defined by the Version 2.0.1, 2.0.2, and 2.0.3 release notes plus the
+current code and retirement tests.
 
 ## Future work
 
-Future work is deliberately uncommitted. Version 2.0.1 does not implement Version 2.1 capabilities, automatic job application, a browser extension, an interview platform, or high-availability orchestration.
+Reasonable future work includes retrieval precision, claim-to-evidence links,
+optional OCR after security review, accessibility, operator observability, and
+safer deployment switching. These are not implemented commitments. Version
+2.0.3 does not include automatic application submission, a browser extension,
+an interview platform, Kubernetes, or high availability.
