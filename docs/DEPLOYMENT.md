@@ -1,6 +1,10 @@
 # Version 2.0.3 deployment and rollback
 
-Version 2.0.3 upgrades the current production Version 2.0.2 release. It changes only resilient analysis behavior and Primary Resume upload/selection. Existing navigation, authentication, retired-feature boundaries, Redis/Worker/Outbox topology, TLS, Mihomo, `pja-br0`, and policy preference 8999 remain unchanged.
+Version 2.0.3 is the current production release. This runbook records its
+promotion from Version 2.0.2 and remains the rollback reference. The release
+changed resilient analysis behavior and Primary Resume upload/selection;
+navigation, authentication, retired-feature boundaries, Redis/Worker/Outbox
+topology, TLS, Mihomo, `pja-br0`, and policy preference 8999 were unchanged.
 
 ## Production artifacts
 
@@ -19,7 +23,7 @@ Stop before cutover unless all of these pass:
 5. Validate Alembic upgrade to `20260721_05` in an isolated database, including Resume preservation, newest-active backfill, and the one-active-primary constraint.
 6. Apply the production migration without dropping Resume data and confirm readiness.
 7. Start immutable Version 2.0.3 images as an internal candidate only on `127.0.0.1:18090`.
-8. Candidate acceptance covers exact health 2.0.3, readiness, healthy containers, PDF/DOCX/TXT upload, latest-upload primary selection, Analyze auto-selection, standard/tolerant/fallback analysis, RAG, History, PostgreSQL, Redis, Worker, Outbox, and stable restart counts. Mock responses may validate tolerant/fallback behavior; no production DeepSeek call is required.
+8. Candidate acceptance covers exact health 2.0.3, readiness, healthy containers, PDF/DOCX/TXT/Markdown upload, latest-upload primary selection, Analyze auto-selection, standard/tolerant/fallback analysis, RAG, History, PostgreSQL, Redis, Worker, Outbox, and stable restart counts. Mock responses may validate tolerant/fallback behavior; no production DeepSeek call is required.
 
 Never bind the candidate publicly, use 8080 before cutover, delete volumes, run `docker compose down -v`/prune, or modify production networking/TLS.
 
@@ -27,7 +31,7 @@ Never bind the candidate publicly, use 8080 before cutover, delete volumes, run 
 
 After every gate passes, use the existing safe switch to place immutable Version 2.0.3 images on public 8080. Record the Asia/Shanghai switch timestamp.
 
-After switching, require 100 consecutive `/api/health` responses reporting exactly `2.0.3`. Verify HTTPS and Login; PDF/DOCX/TXT upload; Primary Resume selection; Analyze default Resume; complete, normalized, and fallback behavior; RAG and History; healthy PostgreSQL/Redis/Worker/Outbox; stable restart counts; and no public Backend/PostgreSQL/Redis ports. Remove the 18090 candidate only after public acceptance.
+After switching, require 100 consecutive `/api/health` responses reporting exactly `2.0.3`. Verify HTTPS and Login; PDF/DOCX/TXT/Markdown upload; Primary Resume selection; Analyze default Resume; complete, normalized, and fallback behavior; RAG and History; healthy PostgreSQL/Redis/Worker/Outbox; stable restart counts; and no public Backend/PostgreSQL/Redis ports. Remove the 18090 candidate only after public acceptance.
 
 ## Rollback
 
