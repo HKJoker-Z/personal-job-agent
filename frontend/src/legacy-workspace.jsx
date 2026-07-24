@@ -30,6 +30,11 @@ const ANALYSIS_ERROR_MESSAGES = {
   PROJECT_KNOWLEDGE_RETRIEVAL_FAILED: "Project Knowledge could not be retrieved safely.",
   OUTPUT_SECURITY_BLOCKED: "The model output failed security validation. Please try again.",
   ANALYZE_PERSISTENCE_FAILED: "The analysis could not be saved safely. Please try again later.",
+  IDEMPOTENCY_KEY_INVALID: "The Analyze retry key was invalid. Start a new submission.",
+  IDEMPOTENCY_KEY_REUSED: "The pending Analyze submission changed. Start a new submission.",
+  IDEMPOTENCY_REQUEST_IN_PROGRESS: "This Analyze submission is still processing. Wait briefly, then retry.",
+  IDEMPOTENCY_OUTCOME_UNKNOWN: "The provider outcome is uncertain. Start a new Analyze submission.",
+  IDEMPOTENCY_PERSISTENCE_FAILED: "Analyze retry protection is temporarily unavailable. Please retry.",
   UNEXPECTED_SERVER_ERROR: "An unexpected server error occurred. Please try again.",
   MODEL_OUTPUT_TRUNCATED: "The model response was cut off before completion. No analysis was saved. Please retry with a more focused input.",
   MODEL_OUTPUT_INVALID_JSON: "The model returned an invalid structured response. No analysis was saved; you can safely retry.",
@@ -220,6 +225,11 @@ function getAnalysisErrorMessage(error) {
 }
 
 async function requestJson(url, options, fallback) {
+  const { data } = await requestJsonWithResponse(url, options, fallback);
+  return data;
+}
+
+async function requestJsonWithResponse(url, options, fallback) {
   const response = await apiFetch(url, options);
   const data = await response.json().catch(() => null);
 
@@ -231,7 +241,48 @@ async function requestJson(url, options, fallback) {
     throw error;
   }
 
-  return data || {};
+  return { data: data || {}, response };
+}
+
+function digestAnalyzePayload({
+  resume,
+  resumeVersionId,
+  jobText,
+  jobUrl,
+  saveToHistory,
+  useProjectKnowledge,
+  ragTopK,
+}) {
+  const uploadHash = resume
+    ? `${resume.name}:${resume.size}:${resume.lastModified}:${resume.type}`
+    : null;
+  const canonical = JSON.stringify({
+    version: 1,
+    resume_version_id: resumeVersionId || null,
+    upload_hash: uploadHash,
+    job_text: jobText.trim() || null,
+    job_url: jobUrl.trim() || null,
+    save_to_history: Boolean(saveToHistory),
+    rag_enabled: Boolean(useProjectKnowledge),
+    rag_top_k: Math.max(1, Math.min(10, Number(ragTopK) || 5)),
+  });
+  let hash = 2166136261;
+  for (let index = 0; index < canonical.length; index += 1) {
+    hash ^= canonical.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return `fallback-${(hash >>> 0).toString(16)}`;
+}
+
+function newAnalyzeIdempotencyKey() {
+  if (typeof globalThis.crypto?.randomUUID === "function") {
+    return globalThis.crypto.randomUUID();
+  }
+  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (character) => {
+    const random = Math.floor(Math.random() * 16);
+    const value = character === "x" ? random : ((random & 0x3) | 0x8);
+    return value.toString(16);
+  });
 }
 
 function getDownloadFilename(response, fallback) {
@@ -913,6 +964,7 @@ function AnalyzePage() {
   const [supportRequestId, setSupportRequestId] = useState("");
   const [result, setResult] = useState(null);
   const submittingRef = useRef(false);
+  const pendingAnalyzeRef = useRef(null);
 
   useEffect(() => {
     Promise.all([
@@ -982,16 +1034,38 @@ function AnalyzePage() {
     submittingRef.current = true;
     setLoading(true);
     try {
-      const data = await requestJson(
+      const payloadHash = digestAnalyzePayload({
+        resume,
+        resumeVersionId,
+        jobText,
+        jobUrl,
+        saveToHistory,
+        useProjectKnowledge,
+        ragTopK,
+      });
+      if (!pendingAnalyzeRef.current || pendingAnalyzeRef.current.payloadHash !== payloadHash) {
+        pendingAnalyzeRef.current = {
+          key: newAnalyzeIdempotencyKey(),
+          payloadHash,
+        };
+      }
+      const { data, response } = await requestJsonWithResponse(
         `${API_BASE_URL}/api/analyze`,
         {
           method: "POST",
           body: formData,
+          headers: {
+            "Idempotency-Key": pendingAnalyzeRef.current.key,
+          },
         },
         "Analyze request failed.",
       );
 
+      if (response.headers.get("Idempotency-Replayed") === "true") {
+        data.idempotency_replayed = true;
+      }
       setResult(data);
+      pendingAnalyzeRef.current = null;
     } catch (err) {
       const safeDetails = err.apiError?.details;
       const safeSecurityDetails = safeAnalyzeSecurityDetails(safeDetails);
@@ -1000,6 +1074,13 @@ function AnalyzePage() {
       }
       setSupportRequestId(err.apiError?.request_id || "");
       setError(getAnalysisErrorMessage(err));
+      const retryCode = err.apiError?.code || "";
+      if (
+        !(err instanceof TypeError)
+        && !["IDEMPOTENCY_REQUEST_IN_PROGRESS", "IDEMPOTENCY_PERSISTENCE_FAILED"].includes(retryCode)
+      ) {
+        pendingAnalyzeRef.current = null;
+      }
     } finally {
       submittingRef.current = false;
       setLoading(false);

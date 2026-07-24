@@ -19,7 +19,7 @@ from app.db.models import User, WorkerHeartbeat, ensure_utc, utc_now
 from app.db.session import session_factory
 
 
-ALEMBIC_HEAD = "20260721_05"
+ALEMBIC_HEAD = "20260724_06"
 REQUIRED_TABLES = {
     "users",
     "user_sessions",
@@ -28,6 +28,7 @@ REQUIRED_TABLES = {
     "resumes",
     "resume_versions",
     "application_records",
+    "analyze_idempotency_records",
     "analysis_metrics",
     "evaluation_runs",
     "knowledge_documents",

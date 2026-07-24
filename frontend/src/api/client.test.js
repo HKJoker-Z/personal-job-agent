@@ -53,10 +53,17 @@ describe("CSRF-aware API client", () => {
       }), { status: 403, headers: { "Content-Type": "application/json" } }))
       .mockResolvedValueOnce(new Response("{}", { status: 200 }));
     configureApiSecurity({ csrf: "old", refreshSession: refresh });
-    const response = await apiFetch("/api/analyze", { method: "POST" });
+    const response = await apiFetch("/api/analyze", {
+      method: "POST",
+      headers: { "Idempotency-Key": "12345678-1234-4123-8123-123456789abc" },
+    });
     expect(response.ok).toBe(true);
     expect(refresh).toHaveBeenCalledOnce();
     expect(fetch).toHaveBeenCalledTimes(2);
+    expect(new Headers(fetch.mock.calls[0][1].headers).get("Idempotency-Key"))
+      .toBe("12345678-1234-4123-8123-123456789abc");
+    expect(new Headers(fetch.mock.calls[1][1].headers).get("Idempotency-Key"))
+      .toBe("12345678-1234-4123-8123-123456789abc");
   });
 
   it("normalizes the four-field Analyze error envelope", () => {

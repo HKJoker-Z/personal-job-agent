@@ -135,6 +135,33 @@ describe("Version 2.0.1 simplified workspace", () => {
     expect(screen.getByRole("button", { name: "Analyze" })).toBeEnabled();
   });
 
+  it("sends a bounded UUID idempotency key without browser persistence", async () => {
+    global.fetch
+      .mockResolvedValueOnce(new Response(JSON.stringify([{
+        title: "Synthetic Resume", active_version_id: "resume-version-1", is_primary: true,
+      }]), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        title: "Synthetic Resume", active_version_id: "resume-version-1", is_primary: true,
+      }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        analysis_status: "complete", match_score: 80, matched_skills: [],
+        missing_skills: [], scoring_breakdown: {},
+      }), { status: 200 }));
+    render(<AnalyzePage />);
+    await screen.findByRole("option", { name: /Synthetic Resume/ });
+    fireEvent.change(screen.getByLabelText("Job Description"), {
+      target: { value: "Synthetic FastAPI role" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Analyze" }));
+    await screen.findByText("Match Score");
+    const headers = new Headers(global.fetch.mock.calls[2][1].headers);
+    expect(headers.get("Idempotency-Key")).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+    );
+    expect(localStorage.length).toBe(0);
+    expect(sessionStorage.length).toBe(0);
+  });
+
   it("maps stable Analyze errors, shows the support reference, and hides raw details", async () => {
     global.fetch
       .mockResolvedValueOnce(new Response(JSON.stringify([{

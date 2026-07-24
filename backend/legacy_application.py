@@ -41,6 +41,15 @@ from app.api.errors import (
     analyze_error_response,
     analyze_exception_response,
     is_analyze_request,
+    request_id_for,
+)
+from app.analyze.idempotency import (
+    AnalyzeIdempotencyService,
+    IdempotencyError,
+    hash_key as hash_idempotency_key,
+    project_knowledge_version,
+    request_fingerprint as analyze_request_fingerprint,
+    validate_key as validate_idempotency_key,
 )
 from app.jobs.acquisition import SafeJobUrlFetcher, UnsafeJobUrl
 from app.materials.grounding import EvidenceSource, validate_claims, validation_summary
@@ -333,7 +342,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
-    expose_headers=["Content-Disposition", "X-Request-ID"],
+    expose_headers=["Idempotency-Replayed", "X-Request-ID"],
 )
 if settings.app_env == "production":
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=list(settings.trusted_hosts))
@@ -1201,6 +1210,7 @@ def call_deepseek_raw(
         api_key=api_key,
         base_url=DEEPSEEK_BASE_URL,
         timeout=runtime_settings.request_timeout_seconds,
+        max_retries=0,
     )
 
     started = time.perf_counter()
@@ -1294,6 +1304,7 @@ def call_deepseek_repair(
         api_key=runtime_settings.deepseek_api_key,
         base_url=DEEPSEEK_BASE_URL,
         timeout=runtime_settings.request_timeout_seconds,
+        max_retries=0,
     )
     repair_tokens = min(800, runtime_settings.model_max_output_tokens)
     repair_prompt = (
@@ -1786,6 +1797,26 @@ def analyze_error_detail(
         "error_stage": error_stage,
         "details": details or {},
     }
+
+
+def idempotency_http_exception(exc: IdempotencyError) -> HTTPException:
+    headers = {"Retry-After": str(exc.retry_after)} if exc.retry_after is not None else None
+    status_code = 503 if exc.code == "IDEMPOTENCY_PERSISTENCE_FAILED" else 409
+    if exc.code == "IDEMPOTENCY_KEY_INVALID":
+        status_code = 400
+    return HTTPException(
+        status_code=status_code,
+        detail=analyze_error_detail(
+            str(exc),
+            exc.code,
+            "idempotency",
+            details={"retryable": exc.code in {
+                "IDEMPOTENCY_REQUEST_IN_PROGRESS",
+                "IDEMPOTENCY_PERSISTENCE_FAILED",
+            }},
+        ),
+        headers=headers,
+    )
 
 
 def raise_security_blocked(
@@ -2495,6 +2526,7 @@ async def delete_application(application_id: str, request: Request) -> dict[str,
 @app.post("/api/analyze")
 async def analyze(
     request: Request,
+    idempotency_key: str | None = Header(None, alias="Idempotency-Key"),
     resume: UploadFile | None = File(None),
     job_text: str | None = Form(None),
     job_url: str | None = Form(None),
@@ -2507,6 +2539,12 @@ async def analyze(
     resume_version_id: str | None = Form(None),
 ) -> dict[str, Any]:
     logger.info("Received analysis request")
+    try:
+        clean_idempotency_key = validate_idempotency_key(idempotency_key)
+    except IdempotencyError as exc:
+        raise idempotency_http_exception(exc) from exc
+    idempotency_service: AnalyzeIdempotencyService | None = None
+    idempotency_claim = None
     workflow = AgentWorkflow()
     context = WorkflowContext(workflow_id=workflow.workflow_id)
     input_warnings: list[str] = []
@@ -2716,6 +2754,55 @@ async def analyze(
             exc=exc,
         )
 
+    if clean_idempotency_key:
+        current_user = getattr(request.state, "v2_user", None)
+        current_db = getattr(request.state, "v2_db", None)
+        if current_user is None or current_db is None:
+            raise HTTPException(
+                status_code=401,
+                detail=analyze_error_detail(
+                    "Authentication required.",
+                    "AUTHENTICATION_REQUIRED",
+                    "authentication",
+                ),
+            )
+        knowledge_version = project_knowledge_version(
+            current_db, context.rag_mode == "project"
+        )
+        fingerprint = analyze_request_fingerprint(
+            resume_version_id=clean_resume_version_id or None,
+            resume_text=context.resume_text,
+            job_text=context.job_text,
+            job_url=context.job_url,
+            rag_enabled=context.rag_mode == "project",
+            rag_top_k=context.rag_top_k,
+            project_knowledge=knowledge_version,
+            save_to_history=save_to_history,
+            model=DEEPSEEK_MODEL,
+            security_policy_version=SECURITY_POLICY_VERSION,
+        )
+        idempotency_service = AnalyzeIdempotencyService()
+        try:
+            idempotency_claim = idempotency_service.claim(
+                user_id=current_user.id,
+                key_hash=hash_idempotency_key(clean_idempotency_key),
+                fingerprint=fingerprint,
+                request_id=request_id_for(request),
+            )
+        except IdempotencyError as exc:
+            raise idempotency_http_exception(exc) from exc
+        if idempotency_claim.is_replay:
+            return JSONResponse(
+                status_code=idempotency_claim.replay_status or 200,
+                content=idempotency_claim.replay_body,
+                headers={
+                    "Idempotency-Replayed": "true",
+                    "X-Request-ID": request_id_for(request),
+                },
+            )
+        request.state.analyze_idempotency_service = idempotency_service
+        request.state.analyze_idempotency_claim = idempotency_claim
+
     workflow.start_step("scan_untrusted_input", "Scan Untrusted Input")
     try:
         sanitized_resume_text, resume_scan = prepare_resume_for_llm(context.resume_text)
@@ -2887,6 +2974,8 @@ async def analyze(
     analysis_warnings: list[str] = list(input_warnings)
     provider_available = True
     try:
+        if idempotency_service is not None and idempotency_claim is not None:
+            idempotency_service.provider_started(idempotency_claim)
         provider_response = call_deepseek_raw(
             context.sanitized_resume_text,
             context.sanitized_job_text,
@@ -2900,6 +2989,8 @@ async def analyze(
             "run_llm_analysis",
             "Provider returned a complete response with safe completion metadata.",
         )
+    except IdempotencyError as exc:
+        raise idempotency_http_exception(exc) from exc
     except Exception as exc:
         provider_available = False
         workflow.add_warning()
@@ -2967,8 +3058,14 @@ async def analyze(
     workflow.start_step("parse_model_json", "Parse Model JSON")
     if provider_available:
         try:
+            repairer = None
+            if idempotency_service is not None and idempotency_claim is not None:
+                def repairer(raw_response: str) -> ProviderAnalysisResponse:
+                    idempotency_service.provider_started(idempotency_claim)
+                    return call_deepseek_repair(raw_response)
             result, analysis_status, parsed_warnings = model_response_to_result(
-                context.llm_raw_response
+                context.llm_raw_response,
+                repairer=repairer,
             )
             analysis_warnings.extend(parsed_warnings)
             context.json_parse_success = True
@@ -2983,6 +3080,8 @@ async def analyze(
                 "validate_structured_output",
                 "Usable analysis fields passed the tolerant compact Schema.",
             )
+        except IdempotencyError as exc:
+            raise idempotency_http_exception(exc) from exc
         except Exception as exc:
             context.json_parse_success = False
             workflow.add_warning()
@@ -3140,31 +3239,39 @@ async def analyze(
 
     if save_to_history:
         workflow.start_step("save_application", "Save Application")
-        try:
+        if idempotency_claim is not None:
             result["workflow_id"] = context.workflow_id
             result["workflow_steps"] = workflow.to_list()
-            context.application_id = insert_application_record(
-                result,
-                job_url=context.job_url,
-                resume_filename=context.resume_filename,
-                owner_user_id=getattr(getattr(request.state, "v2_user", None), "id", None),
-            )
-            context.saved_to_history = True
             workflow.complete_step(
                 "save_application",
-                f"Application record saved with ID {context.application_id}.",
+                "History and the idempotency result will be committed atomically.",
             )
-            logger.info("Analysis saved to history application_id=%s", context.application_id)
-        except Exception as exc:
-            fail_analysis_and_raise(
-                workflow,
-                context,
-                step_key="save_application",
-                message="Could not save application record.",
-                error_code="ANALYZE_PERSISTENCE_FAILED",
-                exc=exc,
-                status_code=503,
-            )
+        else:
+            try:
+                result["workflow_id"] = context.workflow_id
+                result["workflow_steps"] = workflow.to_list()
+                context.application_id = insert_application_record(
+                    result,
+                    job_url=context.job_url,
+                    resume_filename=context.resume_filename,
+                    owner_user_id=getattr(getattr(request.state, "v2_user", None), "id", None),
+                )
+                context.saved_to_history = True
+                workflow.complete_step(
+                    "save_application",
+                    f"Application record saved with ID {context.application_id}.",
+                )
+                logger.info("Analysis saved to history application_id=%s", context.application_id)
+            except Exception as exc:
+                fail_analysis_and_raise(
+                    workflow,
+                    context,
+                    step_key="save_application",
+                    message="Could not save application record.",
+                    error_code="ANALYZE_PERSISTENCE_FAILED",
+                    exc=exc,
+                    status_code=503,
+                )
     else:
         workflow.skip_step(
             "save_application",
@@ -3215,7 +3322,23 @@ async def analyze(
     result["workflow_duration_us"] = workflow_duration["workflow_duration_us"]
     result["workflow_steps"] = workflow.to_list()
 
-    if context.application_id is not None:
+    if idempotency_service is not None and idempotency_claim is not None:
+        current_user = getattr(request.state, "v2_user", None)
+        try:
+            result, history_id = idempotency_service.finalize(
+                idempotency_claim,
+                result,
+                save_to_history=save_to_history,
+                user_id=current_user.id,
+                job_url=context.job_url,
+                resume_filename=context.resume_filename,
+            )
+        except IdempotencyError as exc:
+            raise idempotency_http_exception(exc) from exc
+        context.application_id = history_id
+        context.saved_to_history = save_to_history
+        request.state.analyze_idempotency_finalized = True
+    elif context.application_id is not None:
         update_application_workflow_steps(
             context.application_id,
             workflow_steps=result["workflow_steps"],

@@ -252,9 +252,9 @@ class V203AnalysisApiTest(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 400, response.text)
         exposed = response.headers["Access-Control-Expose-Headers"]
-        self.assertIn("Content-Disposition", exposed)
+        self.assertIn("Idempotency-Replayed", exposed)
         self.assertIn("X-Request-ID", exposed)
-        self.assertNotIn("Idempotency-Replayed", exposed)
+        self.assertNotIn("Content-Disposition", exposed)
 
     def test_empty_job_input_is_rejected(self):
         response = self.client.post(
