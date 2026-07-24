@@ -19,6 +19,23 @@ Provider-assisted wording and result state may vary. The backend-owned evidence
 checks and scoring rules still apply, and a provider failure may produce a
 `fallback` result instead.
 
+## Three-minute English demo
+
+Use this exact three-minute speaking plan in a warmed Version 2.0.3
+environment. Provider or network latency may extend the live wait without
+changing the supported workflow or the narration sequence.
+
+| Time | Action | English narration | Expected application state |
+| --- | --- | --- | --- |
+| 0:00–0:20 | Sign in and open **Resumes**. | “Personal Job Agent is a private Version 2.0.3 workspace for evidence-grounded Resume and Job Description comparison.” | The authenticated Resume Library is visible. |
+| 0:20–0:45 | Upload `fictional-resume.md` and point to its Primary marker. | “This entirely fictional Resume is parsed, saved as a versioned private asset, and selected as the Primary Resume.” | The fictional Resume is listed and marked **Primary Resume**. |
+| 0:45–1:05 | Open **Project Knowledge** and confirm its status. | “Project Knowledge is one reviewed project corpus. When enabled, retrieval supplies bounded evidence rather than invented experience.” | Project Knowledge reports that the reviewed corpus and index are ready. |
+| 1:05–1:35 | Open **Analyze**, confirm the Primary Resume, paste `fictional-job-description.md`, enable Project Knowledge with top-k `5`, and keep **Save to History** enabled. | “The normal workflow compares one selected Resume with one fictional Job Description and optionally retrieves relevant Project Knowledge chunks.” | Analyze shows the saved Resume Version, pasted JD, RAG controls, and History option. |
+| 1:35–2:05 | Run the analysis. | “This is a synchronous `/api/analyze` request. DeepSeek provides advisory judgments; tolerant parsing, repair or fallback, evidence reconciliation, and final scoring remain backend controlled.” | The request is in progress and then shows `complete`, `repaired`, `partial`, or `fallback`; no Agent Run is created. |
+| 2:05–2:35 | Review status, warnings, score breakdown, skills, evidence mapping, sources, and recommendations. | “The score is calculated deterministically after evidence reconciliation. Warnings and sources stay visible so a person reviews the advisory output.” | The normalized result is visible with its actual state, evidence, and warnings; no particular score is promised. |
+| 2:35–2:50 | Open **History** and select the saved result. | “History persistence is optional and keeps the normalized analysis and workflow audit details for later human review.” | The saved fictional comparison and workflow details are visible. |
+| 2:50–3:00 | Open **Architecture**. | “The static overview separates synchronous analysis from retained asynchronous infrastructure. The product does not apply, contact employers, or make hiring decisions.” | The read-only Architecture page is visible. |
+
 ## Walkthrough
 
 1. Sign in with the prepared demo account.
