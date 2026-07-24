@@ -1,8 +1,8 @@
 # Analyze PostgreSQL Idempotency Work Report
 
-Date: 2026-07-24  
-Scope: Phase A2, synchronous `POST /api/analyze` only  
-Production access: none  
+Date: 2026-07-24
+Scope: Phase A2, synchronous `POST /api/analyze` only
+Production access: none
 Real DeepSeek calls: none
 
 ## 1. PR #20 merge commit
@@ -156,17 +156,21 @@ detects Resume/JD/URL/RAG/top-k/History changes and causes a new key. CSRF refre
 reuses request headers and therefore the key. Success and terminal rejection
 clear pending state; in-progress, persistence unavailability, and network
 unknown retain it. Resume/JD content and keys are not written to LocalStorage or
-SessionStorage.
+SessionStorage. Selecting a different uploaded Resume explicitly clears the
+pending record, including the edge case where browser file metadata is
+otherwise identical; retrying an unchanged unknown network outcome keeps the
+same key.
 
 ## 21. Retention and cleanup
 
 Default retention is 24 hours, configurable by
 `ANALYZE_IDEMPOTENCY_RETENTION_HOURS` (1–168). Leases default to 180 seconds,
-bounded 5–300 to cover primary and optional repair timeouts. Claim-time maintenance handles at most 100 rows, marks stale
-provider-started work indeterminate, marks fully expired pre-provider work
-failed, and deletes only expired terminal records. The JSON cap, retention, and
-indexes bound PostgreSQL growth; volume still scales with request rate and
-stored response size.
+bounded 5–300 to cover primary and optional repair timeouts. Claim-time
+maintenance handles at most 100 rows in each transition/deletion query, marks
+stale provider-started work indeterminate, marks fully expired pre-provider
+work failed, and deletes only expired terminal records. The JSON cap,
+retention, and indexes bound PostgreSQL growth; volume still scales with request
+rate and stored response size.
 
 ## 22. Security and ownership
 
@@ -181,8 +185,11 @@ secrets are not stored in the ledger, response errors, or logs.
 success/replay, replay header, changed request, user scope, no-key compatibility,
 active lease, safe takeover, indeterminate state, stale token, atomic rollback,
 History deduplication, no-History replay, fallback replay, auth/CSRF precedence,
-cleanup, and SDK retry settings. Existing correlation/resilience tests remain
-green after the CORS contract update.
+cleanup, known pre-provider retry, one-primary/one-repair call limits, and SDK
+retry settings. Existing correlation/resilience tests remain green after the
+CORS contract update. Frontend tests cover UUIDv4 shape, automatic CSRF retry
+reuse, unknown-network-outcome reuse, Resume-change rotation, and the
+prohibition on browser persistence.
 
 ## 24. PostgreSQL integration tests
 
@@ -193,17 +200,20 @@ upgrade, downgrade, and upgrade paths ran on PostgreSQL.
 
 ## 25. Full backend tests
 
-The complete backend discovery suite ran 431 tests with no provider network
-access. Its first run exposed one obsolete CORS assertion and one order-sensitive
-monitoring log assertion; the CORS assertion was corrected and both exact tests
-then passed in isolation. GitHub's clean-environment full-suite result is
-recorded in the CI section after delivery.
+The complete backend discovery suite passed 433 tests with 10 opt-in PostgreSQL
+tests skipped in that SQLite job and no provider network access. An earlier run
+exposed one obsolete CORS assertion and then an order-sensitive monitoring log
+assertion caused by Alembic test logging configuration; the contract assertion
+was updated and the new migration test was isolated with programmatic Alembic
+configuration. The exact ordered regression and GitHub's clean-environment
+backend job then passed.
 
 ## 26. Frontend tests and build
 
-Vitest: 9 files, 63 tests passed. Coverage includes generated UUID syntax,
-non-persistence, and exact key reuse across the automatic CSRF refresh retry.
-Production Vite build passed (38 modules, 334.98 kB main JS, 99.06 kB gzip).
+Vitest: 9 files, 64 tests passed. Coverage includes generated UUID syntax,
+non-persistence, exact key reuse across automatic CSRF refresh and unchanged
+unknown-outcome retries, and key rotation after a Resume change. Production
+Vite build passed (38 modules, 335.00 kB main JS, 99.06 kB gzip).
 
 ## 27. Docker/Compose/smoke results
 
@@ -221,17 +231,46 @@ backup including the new required ledger table.
 
 ## 29. Changed files
 
-Changes are limited to Analyze idempotency: ORM/model/migration/readiness,
-idempotency service and middleware, Analyze/provider integration, focused tests,
-frontend submission lifecycle/tests, backup required-table inventory,
-configuration examples, API/architecture/README/Project Knowledge documents,
-and Work Reports.
+The 24 changed files are:
+
+- configuration and overview: `.env.example`, `.env.production.example`,
+  `README.md`;
+- migration and backend implementation:
+  `backend/alembic/versions/20260724_06_add_analyze_idempotency.py`,
+  `backend/app/analyze/__init__.py`,
+  `backend/app/analyze/idempotency.py`, `backend/app/api/errors.py`,
+  `backend/app/application.py`, `backend/app/db/models.py`,
+  `backend/app/readiness.py`, `backend/legacy_application.py`;
+- backend tests: `backend/test_analyze_idempotency.py`,
+  `backend/test_v203_analysis_resilience.py`,
+  `backend/test_v2_database_migration.py`,
+  `backend/test_v2_postgres_integration.py`;
+- frontend implementation and tests: `frontend/src/legacy-workspace.jsx`,
+  `frontend/src/api/client.test.js`,
+  `frontend/src/pages/V201Pages.test.jsx`;
+- operational inventory: `scripts/v2_backup_restore.py`;
+- documentation: `docs/ANALYZE_IDEMPOTENCY.md`,
+  `docs/PROJECT_KNOWLEDGE.md`, `docs/V2_0_3_API.md`,
+  `docs/work-reports/README.md`, and this Work Report.
+
+All changes are limited to Analyze idempotency, its schema/operational
+inventory, focused regression coverage, frontend submission lifecycle, and
+documentation.
 
 ## 30. Commit SHAs
 
-Implementation commit: `459861ff7bc9dfe78e4f67cbdc3b62c586d0630a`.  
-Documentation and initial Work Report commit:
-`269a67f7db16ffb5da52450e66726658c3487fc3`.
+- Core implementation:
+  `459861ff7bc9dfe78e4f67cbdc3b62c586d0630a`
+- Documentation and initial Work Report:
+  `269a67f7db16ffb5da52450e66726658c3487fc3`
+- Delivery link:
+  `202ef9c2c5c9013edfe025f778206cacb356a477`
+- Alembic test logging isolation:
+  `2fa11e26f60b2cd724e4b2d6b214921982adddc6`
+- Frontend Resume-change key lifecycle:
+  `778cebe97b16044c9aa8edecd3e39fffcac5880c`
+- Failure-boundary test coverage:
+  `ab54227269bc7c02af37503f6191c8f5ad9086a4`
 
 ## 31. PR URL
 
@@ -239,8 +278,12 @@ PR #21: https://github.com/HKJoker-Z/personal-job-agent/pull/21
 
 ## 32. CI results
 
-PR checks will be recorded after all required GitHub checks reach terminal
-success. Required-check bypass will not be used.
+CI runs `30097046636`, `30097357094`, and final test-head run `30097607578`
+each passed all 10 jobs: backend tests, PostgreSQL integration, frontend
+test/build, Docker builds, Mock LLM Docker smoke, PostgreSQL 16 backup/restore,
+Compose validation, production-runtime regression, script validation, and
+repository safety. The final backend job ran 433 tests in 62.765 seconds. No
+check or branch-protection bypass was used.
 
 ## 33. Risks
 
@@ -282,11 +325,11 @@ or the repository Mock LLM mode. No real DeepSeek request was made.
 | Targeted idempotency/backend regression | PASS |
 | PostgreSQL 16 integration/concurrency | PASS, 10 tests |
 | Clean migration / upgrade from `20260721_05` / downgrade | PASS |
-| Frontend suite | PASS, 63 tests |
-| Full backend suite | 431-test run found 2 test-state/assertion issues; both exact reruns PASS; clean CI pending |
+| Frontend suite | PASS, 64 tests |
+| Full backend suite | PASS, 433 tests; 10 PostgreSQL opt-in skips in this job |
 | Frontend production build | PASS |
 | Docker builds / image verification | PASS |
 | Compose validation | PASS |
 | Mock LLM Docker smoke | PASS |
-| PostgreSQL backup/restore regression | PASS in isolated smoke |
-| Repository safety / secret scan / `git diff --check` | pending |
+| PostgreSQL backup/restore regression | PASS, strict PostgreSQL 16 CI and isolated smoke |
+| Repository safety / secret scan / `git diff --check` | PASS |
