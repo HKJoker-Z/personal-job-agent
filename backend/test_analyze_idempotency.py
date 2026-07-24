@@ -57,7 +57,11 @@ class AnalyzeIdempotencyTest(unittest.TestCase):
         )
         self.environment.start()
         build_engine.cache_clear()
-        command.upgrade(Config(str(Path(__file__).parent / "alembic.ini")), "head")
+        migration_config = Config()
+        migration_config.set_main_option(
+            "script_location", str(Path(__file__).parent / "alembic")
+        )
+        command.upgrade(migration_config, "head")
         db = session_factory()()
         self.user_id = uuid4()
         self.other_user_id = uuid4()
