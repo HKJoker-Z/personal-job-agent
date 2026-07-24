@@ -230,11 +230,12 @@ and Work Reports.
 ## 30. Commit SHAs
 
 Implementation commit: `459861ff7bc9dfe78e4f67cbdc3b62c586d0630a`.  
-Work Report commit: to be finalized after CI evidence is recorded.
+Documentation and initial Work Report commit:
+`269a67f7db16ffb5da52450e66726658c3487fc3`.
 
 ## 31. PR URL
 
-To be created after the implementation branch is pushed.
+PR #21: https://github.com/HKJoker-Z/personal-job-agent/pull/21
 
 ## 32. CI results
 
