@@ -44,6 +44,7 @@ REQUIRED_TABLES = frozenset(
         "alembic_version",
         "users",
         "application_records",
+        "analyze_idempotency_records",
         "analysis_metrics",
         "evaluation_runs",
         "knowledge_documents",
