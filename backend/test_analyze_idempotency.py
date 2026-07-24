@@ -190,6 +190,18 @@ class AnalyzeIdempotencyTest(unittest.TestCase):
         self.assertEqual(raised.exception.code, "IDEMPOTENCY_REQUEST_IN_PROGRESS")
         self.assertGreaterEqual(raised.exception.retry_after, 1)
 
+    def test_known_pre_provider_failure_can_retry_with_the_same_key(self):
+        failed = self.claim()
+        self.service.fail_unfinalized(failed, "INPUT_SECURITY_BLOCKED")
+        retry = self.claim()
+        self.assertNotEqual(failed.attempt_token, retry.attempt_token)
+        db = session_factory()()
+        record = db.get(AnalyzeIdempotencyRecord, retry.record_id)
+        self.assertEqual(record.status, "processing")
+        self.assertEqual(record.attempt_count, 2)
+        self.assertIsNone(record.provider_started_at)
+        db.close()
+
     def test_stale_pre_provider_attempt_is_reclaimed_and_old_token_loses(self):
         old = self.claim()
         db = session_factory()()
@@ -463,6 +475,30 @@ class AnalyzeEndpointIdempotencyTest(unittest.TestCase):
         self.assertEqual(replay.json(), first.json())
         self.assertEqual(replay.headers["Idempotency-Replayed"], "true")
         self.assertEqual(provider.call_count, 1)
+
+    def test_primary_and_explicit_repair_are_each_called_at_most_once(self):
+        from analysis_contract import ProviderAnalysisResponse
+
+        key = "52345678-1234-4123-8123-123456789abc"
+        malformed = ProviderAnalysisResponse(
+            content="not valid JSON",
+            metadata={"finish_reason": "stop", "response_length": 14},
+        )
+        with patch(
+            "legacy_application.call_deepseek_raw",
+            return_value=malformed,
+        ) as primary, patch(
+            "legacy_application.call_deepseek_repair",
+            return_value=self.provider_response(),
+        ) as repair:
+            first = self.request(key, save=False)
+            replay = self.request(key, save=False)
+        self.assertEqual(first.status_code, 200, first.text)
+        self.assertEqual(first.json()["analysis_status"], "repaired")
+        self.assertEqual(replay.json(), first.json())
+        self.assertEqual(replay.headers["Idempotency-Replayed"], "true")
+        self.assertEqual(primary.call_count, 1)
+        self.assertEqual(repair.call_count, 1)
 
 
 if __name__ == "__main__":
