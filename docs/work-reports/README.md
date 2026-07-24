@@ -6,4 +6,5 @@ reviewable in Git history.
 
 | Date | Report |
 |---|---|
+| 2026-07-24 | [HTTP Request Correlation and Analyze Idempotency Design Audit](2026-07-24-http-idempotency-design-audit-work-report.md) |
 | 2026-07-24 | [PostgreSQL Query Optimization Phase 1](2026-07-24-postgresql-query-optimization-phase-1-work-report.md) |
