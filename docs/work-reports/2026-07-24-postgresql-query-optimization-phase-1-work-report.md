@@ -6,8 +6,8 @@
 
 **Scope:** One PostgreSQL query optimization case
 
-**Status:** Implementation and local evidence complete; pull-request metadata
-and CI results are updated in the delivery section after publication
+**Status:** Implementation, local validation, pull-request publication, and a
+complete GitHub CI run are recorded below
 
 ## Executive outcome
 
@@ -680,15 +680,40 @@ was changed.
 | Commit | Purpose |
 |---|---|
 | `b70fccf` | PostgreSQL workflow-Step aggregation, integration tests, and representative plans |
-| Pending documentation commit | Case study, verified Project Knowledge, README link, and Work Report |
+| `5b1204c` | Case study, verified Project Knowledge, README link, and Work Report |
 
 ## 25. Pull request number and URL
 
-Pending branch publication and pull-request creation.
+| Item | Value |
+|---|---|
+| Pull request | #18 |
+| URL | `https://github.com/HKJoker-Z/personal-job-agent/pull/18` |
+| Title | `Performance: Add the first PostgreSQL query optimization case study` |
+| Base | `main` |
+| Head | `perf/postgresql-query-optimization-phase-1` |
+| State at report update | Open and unmerged |
 
 ## 26. CI results
 
-Pending pull-request creation. The branch will not be merged by this task.
+The complete GitHub Actions matrix passed on pull request #18 for published
+implementation/documentation commit `5b1204c`:
+
+| Job | Result | Duration |
+|---|---|---:|
+| `backend-tests` | Passed | 1m 7s |
+| `backend-postgres` | Passed | 59s |
+| `frontend-build` | Passed | 17s |
+| `docker-build` | Passed | 51s |
+| `docker-smoke-v2` | Passed | 1m 42s |
+| `postgres16-backup-restore` | Passed | 1m 32s |
+| `compose-validation` | Passed | 8s |
+| `production-runtime-regression` | Passed | 39s |
+| `script-validation` | Passed | 18s |
+| `repository-safety` | Passed | 5s |
+
+GitHub reruns the matrix after any pull-request head update. The task waits for
+the final Work Report metadata commit to pass the same checks before completion;
+the pull request check page is the authoritative final-head status.
 
 ## 27. Confirmation that production was untouched
 
