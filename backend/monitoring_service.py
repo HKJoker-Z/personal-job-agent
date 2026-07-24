@@ -7,7 +7,7 @@ import sqlite3
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from database import get_connection
+from database import get_connection, is_postgresql_backend
 from security_utils import normalized_security_scan
 
 
@@ -23,6 +23,34 @@ RECOMMENDATION_ACTIONS = (
 DECISIONS = ("pending", "accepted", "dismissed", "completed")
 
 logger = logging.getLogger("personal-job-agent.monitoring")
+
+_POSTGRES_WORKFLOW_STEP_AGGREGATE_SQL = """
+    SELECT
+        step_key,
+        COUNT(*) AS total_count,
+        COUNT(*) FILTER (WHERE status = 'completed') AS completed_count,
+        COUNT(*) FILTER (WHERE status = 'failed') AS failed_count,
+        COUNT(*) FILTER (WHERE status = 'skipped') AS skipped_count,
+        AVG(duration_ms) FILTER (
+            WHERE duration_ms IS NOT NULL AND status <> 'skipped'
+        ) AS average_ms,
+        MIN(duration_ms) FILTER (
+            WHERE duration_ms IS NOT NULL AND status <> 'skipped'
+        ) AS minimum_ms,
+        MAX(duration_ms) FILTER (
+            WHERE duration_ms IS NOT NULL AND status <> 'skipped'
+        ) AS maximum_ms,
+        percentile_disc(0.50) WITHIN GROUP (ORDER BY duration_ms) FILTER (
+            WHERE duration_ms IS NOT NULL AND status <> 'skipped'
+        ) AS p50_ms,
+        percentile_disc(0.95) WITHIN GROUP (ORDER BY duration_ms) FILTER (
+            WHERE duration_ms IS NOT NULL AND status <> 'skipped'
+        ) AS p95_ms
+    FROM analysis_step_metrics
+    WHERE created_at >= ? AND created_at <= ?
+    GROUP BY step_key
+    ORDER BY step_key
+"""
 
 
 def utc_now() -> str:
@@ -82,6 +110,12 @@ def nearest_rank_percentile(values: list[float], percentile: int) -> float:
         return 0.0
     rank = max(1, math.ceil((percentile / 100) * len(clean_values)))
     return round(clean_values[rank - 1], 3)
+
+
+def rounded_metric(value: Any) -> float:
+    if value is None:
+        return 0.0
+    return round(float(value), 3)
 
 
 def safe_json_list(value: Any) -> list[str]:
@@ -362,6 +396,34 @@ def get_overview(days: Any = 30) -> dict[str, Any]:
 
 def get_workflow_step_performance(days: Any = 30) -> dict[str, Any]:
     start, end, safe_days = period_bounds(days)
+    if is_postgresql_backend():
+        with get_connection() as connection:
+            rows = connection.execute(
+                _POSTGRES_WORKFLOW_STEP_AGGREGATE_SQL,
+                (start, end),
+            ).fetchall()
+        items = [
+            {
+                "step_key": row["step_key"],
+                "total_count": int(row["total_count"]),
+                "completed_count": int(row["completed_count"]),
+                "failed_count": int(row["failed_count"]),
+                "skipped_count": int(row["skipped_count"]),
+                "average_ms": rounded_metric(row["average_ms"]),
+                "minimum_ms": rounded_metric(row["minimum_ms"]),
+                "maximum_ms": rounded_metric(row["maximum_ms"]),
+                "p50_ms": rounded_metric(row["p50_ms"]),
+                "p95_ms": rounded_metric(row["p95_ms"]),
+            }
+            for row in rows
+        ]
+        return {
+            "period_days": safe_days,
+            "period_start": start,
+            "period_end": end,
+            "items": items,
+        }
+
     with get_connection() as connection:
         rows = connection.execute(
             """

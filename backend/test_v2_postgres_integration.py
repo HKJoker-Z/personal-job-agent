@@ -1,5 +1,6 @@
 import os
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 from uuid import UUID
@@ -11,6 +12,7 @@ from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
 
 import database
+import monitoring_service
 from app.auth.service import AuthService
 from app.core.config import load_v2_settings
 from app.db.engine import build_engine
@@ -22,7 +24,12 @@ from app.resumes.service import ResumeService
 from app.migration.postgres_writer import PostgreSQLV1Writer
 from app.migration.sqlite_reader import SQLiteV1Reader
 from data_management_service import delete_monitoring_data, preview_monitoring_deletion
-from monitoring_service import build_analysis_metric, get_overview, persist_analysis_metrics
+from monitoring_service import (
+    build_analysis_metric,
+    get_overview,
+    get_workflow_step_performance,
+    persist_analysis_metrics,
+)
 from test_support import temporary_test_database
 
 
@@ -107,6 +114,127 @@ class V2PostgreSQLIntegrationTest(unittest.TestCase):
         )
         self.assertEqual(deleted["analysis_metrics_deleted"], 1)
         self.assertTrue(database.delete_knowledge_document(document["id"]))
+
+    def test_workflow_step_aggregate_preserves_counts_latency_and_date_boundaries(self):
+        start = datetime(2026, 6, 24, 4, 0, tzinfo=timezone.utc)
+        end = datetime(2026, 7, 24, 4, 0, tzinfo=timezone.utc)
+        raw_url = self.database_url.replace("postgresql+psycopg://", "postgresql://", 1)
+        rows = [
+            ("wf-start", "parse_resume", "completed", 10.0, start),
+            ("wf-middle-a", "parse_resume", "completed", 20.0, start + timedelta(days=1)),
+            ("wf-middle-b", "parse_resume", "failed", 30.0, start + timedelta(days=2)),
+            ("wf-middle-c", "parse_resume", "running", 40.0, start + timedelta(days=3)),
+            ("wf-null", "parse_resume", "completed", None, start + timedelta(days=4)),
+            ("wf-end", "parse_resume", "skipped", 9999.0, end),
+            ("wf-other-a", "run_llm_analysis", "failed", 5.0, start + timedelta(days=5)),
+            ("wf-other-b", "run_llm_analysis", "completed", 7.0, start + timedelta(days=6)),
+            ("wf-before", "parse_resume", "completed", 1.0, start - timedelta(microseconds=1)),
+            ("wf-after", "parse_resume", "completed", 1.0, end + timedelta(microseconds=1)),
+        ]
+        with psycopg.connect(raw_url) as connection:
+            with connection.cursor() as cursor:
+                cursor.executemany(
+                    """
+                    INSERT INTO analysis_step_metrics (
+                        workflow_id, step_key, status, duration_ms, duration_us, created_at
+                    )
+                    VALUES (%s, %s, %s, %s, NULL, %s)
+                    """,
+                    rows,
+                )
+
+        with patch(
+            "monitoring_service.period_bounds",
+            return_value=(start.isoformat(), end.isoformat(), 30),
+        ):
+            result = get_workflow_step_performance(30)
+
+        self.assertEqual(result["period_start"], start.isoformat())
+        self.assertEqual(result["period_end"], end.isoformat())
+        self.assertEqual([item["step_key"] for item in result["items"]], ["parse_resume", "run_llm_analysis"])
+        self.assertEqual(
+            result["items"][0],
+            {
+                "step_key": "parse_resume",
+                "total_count": 6,
+                "completed_count": 3,
+                "failed_count": 1,
+                "skipped_count": 1,
+                "average_ms": 25.0,
+                "minimum_ms": 10.0,
+                "maximum_ms": 40.0,
+                "p50_ms": 20.0,
+                "p95_ms": 40.0,
+            },
+        )
+        self.assertEqual(result["items"][1]["total_count"], 2)
+        self.assertEqual(result["items"][1]["average_ms"], 6.0)
+        self.assertEqual(result["items"][1]["p50_ms"], 5.0)
+        self.assertEqual(result["items"][1]["p95_ms"], 7.0)
+        with patch(
+            "monitoring_service.period_bounds",
+            return_value=(
+                datetime(2030, 1, 1, tzinfo=timezone.utc).isoformat(),
+                datetime(2030, 1, 2, tzinfo=timezone.utc).isoformat(),
+                1,
+            ),
+        ):
+            self.assertEqual(get_workflow_step_performance(1)["items"], [])
+
+    def test_workflow_step_aggregate_plan_returns_bounded_grouped_rows(self):
+        raw_url = self.database_url.replace("postgresql+psycopg://", "postgresql://", 1)
+        with psycopg.connect(raw_url) as connection:
+            connection.execute(
+                """
+                INSERT INTO analysis_step_metrics (
+                    workflow_id, step_key, status, duration_ms, duration_us, created_at
+                )
+                SELECT
+                    'plan-workflow-' || value,
+                    (ARRAY[
+                        'parse_resume',
+                        'parse_job',
+                        'retrieve_project_evidence',
+                        'build_prompt',
+                        'run_llm_analysis',
+                        'normalize_result'
+                    ])[(value % 6) + 1],
+                    CASE
+                        WHEN value % 10 = 0 THEN 'skipped'
+                        WHEN value % 17 = 0 THEN 'failed'
+                        ELSE 'completed'
+                    END,
+                    CASE WHEN value % 29 = 0 THEN NULL ELSE (value % 2000) + 0.125 END,
+                    NULL,
+                    CURRENT_TIMESTAMP - INTERVAL '1 day'
+                FROM generate_series(1, 50000) AS fixture(value)
+                """
+            )
+            connection.execute("ANALYZE analysis_step_metrics")
+            start = datetime.now(timezone.utc) - timedelta(days=2)
+            end = datetime.now(timezone.utc) + timedelta(minutes=1)
+            plan_document = connection.execute(
+                "EXPLAIN (ANALYZE, BUFFERS, VERBOSE, FORMAT JSON) "
+                + monitoring_service._POSTGRES_WORKFLOW_STEP_AGGREGATE_SQL.replace("?", "%s"),
+                (start, end),
+            ).fetchone()[0][0]
+
+        def plan_nodes(node):
+            yield node
+            for child in node.get("Plans", []):
+                yield from plan_nodes(child)
+
+        root = plan_document["Plan"]
+        nodes = list(plan_nodes(root))
+        self.assertEqual(root["Actual Rows"], 6)
+        self.assertEqual(sum(item["total_count"] for item in get_workflow_step_performance(2)["items"]), 50000)
+        self.assertFalse(
+            any(
+                node.get("Node Type") in {"Sort", "Incremental Sort"}
+                and node.get("Sort Space Type") == "Disk"
+                for node in nodes
+            )
+        )
 
     def test_sqlite_migration_preserves_rows_and_advances_sequences(self):
         owner = self.create_owner()

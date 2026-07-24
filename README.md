@@ -416,6 +416,7 @@ the repository evidence. Version 1.6 and later link to formal releases.
 
 ## Documentation
 
+- [PostgreSQL query optimization case study](docs/POSTGRESQL_QUERY_OPTIMIZATION_CASE_STUDY.md)
 - [Verified Project Knowledge](docs/PROJECT_KNOWLEDGE.md)
 - [Architecture overview](docs/ARCHITECTURE.md)
 - [Architecture Decision Records](docs/adr/README.md)
