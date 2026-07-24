@@ -985,6 +985,7 @@ function AnalyzePage() {
 
   function handleResumeChange(event) {
     const file = event.target.files?.[0] || null;
+    pendingAnalyzeRef.current = null;
     setResume(file);
     if (file) {
       setResumeVersionId("");

@@ -162,6 +162,54 @@ describe("Version 2.0.1 simplified workspace", () => {
     expect(sessionStorage.length).toBe(0);
   });
 
+  it("reuses an unknown-outcome key and replaces it when the resume changes", async () => {
+    global.fetch
+      .mockResolvedValueOnce(new Response("[]", { status: 200 }))
+      .mockResolvedValueOnce(new Response("{}", { status: 200 }))
+      .mockRejectedValueOnce(new TypeError("synthetic network outcome unknown"))
+      .mockRejectedValueOnce(new TypeError("synthetic network outcome still unknown"))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        analysis_status: "complete", match_score: 80, matched_skills: [],
+        missing_skills: [], scoring_breakdown: {},
+      }), { status: 200 }));
+    render(<AnalyzePage />);
+    await waitFor(() => expect(global.fetch).toHaveBeenCalledTimes(2));
+    const firstResume = new File(["first"], "resume.docx", {
+      type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      lastModified: 1,
+    });
+    fireEvent.change(screen.getByLabelText("Resume upload"), {
+      target: { files: [firstResume] },
+    });
+    fireEvent.change(screen.getByLabelText("Job Description"), {
+      target: { value: "Synthetic FastAPI role" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Analyze" }));
+    await screen.findByText(/Cannot connect to backend/);
+    const unknownKey = new Headers(global.fetch.mock.calls[2][1].headers)
+      .get("Idempotency-Key");
+    const analyzeButton = screen.getByRole("button", { name: "Analyze" });
+    await waitFor(() => expect(analyzeButton).toBeEnabled());
+    fireEvent.click(analyzeButton);
+    await waitFor(() => expect(global.fetch).toHaveBeenCalledTimes(4));
+    const retryKey = new Headers(global.fetch.mock.calls[3][1].headers)
+      .get("Idempotency-Key");
+    expect(retryKey).toBe(unknownKey);
+
+    const changedResume = new File(["other"], "resume.docx", {
+      type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      lastModified: 1,
+    });
+    fireEvent.change(screen.getByLabelText("Resume upload"), {
+      target: { files: [changedResume] },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Analyze" }));
+    await screen.findByText("Match Score");
+    const changedKey = new Headers(global.fetch.mock.calls[4][1].headers)
+      .get("Idempotency-Key");
+    expect(changedKey).not.toBe(unknownKey);
+  });
+
   it("maps stable Analyze errors, shows the support reference, and hides raw details", async () => {
     global.fetch
       .mockResolvedValueOnce(new Response(JSON.stringify([{
