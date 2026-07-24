@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
+from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 
@@ -94,7 +95,30 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
         started = time.perf_counter_ns()
         status_code = 500
         try:
-            response = await call_next(request)
+            try:
+                response = await call_next(request)
+            except Exception as exc:
+                request.state.error_code = "UNEXPECTED_SERVER_ERROR"
+                request.state.error_stage = ""
+                self.logger.error(
+                    "Unhandled server error path=%s error_type=%s",
+                    request.url.path,
+                    type(exc).__name__,
+                )
+                if request.method.upper() == "POST" and request.url.path == "/api/analyze":
+                    from app.api.errors import analyze_error_response
+
+                    response = analyze_error_response(
+                        request,
+                        status_code=500,
+                        code="UNEXPECTED_SERVER_ERROR",
+                        message="Unexpected server error. Please try again.",
+                    )
+                else:
+                    response = JSONResponse(
+                        status_code=500,
+                        content={"detail": "Unexpected server error. Please try again."},
+                    )
             status_code = response.status_code
             response.headers["X-Request-ID"] = request_id
             return response

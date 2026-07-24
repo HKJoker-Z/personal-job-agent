@@ -1,5 +1,5 @@
 import React, { Component, useEffect, useRef, useState } from "react";
-import { apiFetch } from "./api/client";
+import { apiFetch, normalizeApiError } from "./api/client";
 
 const API_BASE_URL = import.meta.env.DEV ? (import.meta.env.VITE_API_BASE_URL || "") : "";
 const APP_VERSION = "2.0.3";
@@ -15,7 +15,22 @@ const SCORING_DIMENSIONS = [
   { key: "work_experience", label: "Work Experience" },
   { key: "keyword_match", label: "Keyword Match" },
 ];
-const ANALYSIS_MODEL_ERROR_MESSAGES = {
+const ANALYSIS_ERROR_MESSAGES = {
+  AUTHENTICATION_REQUIRED: "Your Session has expired. Please sign in again.",
+  REQUEST_ORIGIN_NOT_TRUSTED: "The request origin was not trusted. Reload the application and try again.",
+  CSRF_VALIDATION_FAILED: "The security token expired. Reload the application and try again.",
+  REQUEST_TOO_LARGE: "The Analyze request is too large. Reduce the uploaded content and try again.",
+  REQUEST_VALIDATION_FAILED: "The Analyze request could not be processed. Check the submitted fields.",
+  RESUME_SOURCE_INVALID: "Select one valid Resume Version or upload one supported resume file.",
+  RESUME_NOT_FOUND: "The selected Resume Version is unavailable. Select another resume.",
+  RESUME_PARSING_FAILED: "The resume could not be parsed into usable text.",
+  JOB_SOURCE_INVALID: "Provide either pasted job-description text or one Job URL.",
+  JOB_DESCRIPTION_ACQUISITION_FAILED: "The Job Description could not be acquired safely.",
+  INPUT_SECURITY_BLOCKED: "Credential-like content was detected. Remove secrets before retrying.",
+  PROJECT_KNOWLEDGE_RETRIEVAL_FAILED: "Project Knowledge could not be retrieved safely.",
+  OUTPUT_SECURITY_BLOCKED: "The model output failed security validation. Please try again.",
+  ANALYZE_PERSISTENCE_FAILED: "The analysis could not be saved safely. Please try again later.",
+  UNEXPECTED_SERVER_ERROR: "An unexpected server error occurred. Please try again.",
   MODEL_OUTPUT_TRUNCATED: "The model response was cut off before completion. No analysis was saved. Please retry with a more focused input.",
   MODEL_OUTPUT_INVALID_JSON: "The model returned an invalid structured response. No analysis was saved; you can safely retry.",
   MODEL_OUTPUT_SCHEMA_INVALID: "The model response did not match the required analysis format. No partial result was accepted.",
@@ -29,6 +44,50 @@ function asArray(value) {
 
 function asObject(value) {
   return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+}
+
+function safeSecurityLabel(value, fallback) {
+  const text = typeof value === "string" ? value : "";
+  return /^[A-Za-z0-9_.:-]{1,80}$/.test(text) ? text : fallback;
+}
+
+function safeAnalyzeSecurityDetails(value) {
+  const details = asObject(value);
+  if (details.security_status !== "blocked") {
+    return null;
+  }
+  const scan = asObject(details.security_scan);
+  const summary = asObject(scan.redaction_summary);
+  const boundedCount = (item) => Math.max(0, Math.min(1000000, Number.parseInt(item, 10) || 0));
+  return {
+    security_status: "blocked",
+    security_scan: {
+      policy_version: safeSecurityLabel(scan.policy_version, "not_available"),
+      risk_level: safeSecurityLabel(scan.risk_level, "critical"),
+      prompt_injection_detected: Boolean(scan.prompt_injection_detected),
+      sensitive_data_detected: Boolean(scan.sensitive_data_detected),
+      pii_redacted: Boolean(scan.pii_redacted),
+      blocked: true,
+      findings: asArray(scan.findings).slice(0, 32).map((item) => {
+        const finding = asObject(item);
+        return {
+          code: safeSecurityLabel(finding.code, "security_finding"),
+          category: safeSecurityLabel(finding.category, "security"),
+          severity: safeSecurityLabel(finding.severity, "critical"),
+          source: safeSecurityLabel(finding.source, "unknown"),
+          message: "Security finding detected.",
+        };
+      }),
+      redaction_summary: {
+        email_count: boundedCount(summary.email_count),
+        phone_count: boundedCount(summary.phone_count),
+        address_count: boundedCount(summary.address_count),
+        secret_count: boundedCount(summary.secret_count),
+        private_key_count: boundedCount(summary.private_key_count),
+      },
+    },
+    workflow_steps: [],
+  };
 }
 
 function clampScore(value) {
@@ -120,6 +179,10 @@ function formatDate(value) {
 }
 
 function getBackendErrorMessage(data, fallback = "Request failed.") {
+  const normalized = normalizeApiError(data, fallback);
+  if (normalized.stable) {
+    return normalized.message;
+  }
   if (!data?.detail) {
     return fallback;
   }
@@ -149,8 +212,10 @@ function getRequestErrorPayload(error) {
 
 function getAnalysisErrorMessage(error) {
   const payload = getRequestErrorPayload(error);
-  const errorCode = typeof payload?.error_code === "string" ? payload.error_code : "";
-  return ANALYSIS_MODEL_ERROR_MESSAGES[errorCode]
+  const errorCode = error?.apiError?.code
+    || (typeof payload?.error_code === "string" ? payload.error_code : "");
+  return ANALYSIS_ERROR_MESSAGES[errorCode]
+    || error?.apiError?.message
     || getRequestErrorMessage(error, "Analyze request failed.");
 }
 
@@ -160,7 +225,9 @@ async function requestJson(url, options, fallback) {
 
   if (!response.ok) {
     const error = new Error(getBackendErrorMessage(data, fallback));
-    error.payload = data?.detail;
+    error.apiError = normalizeApiError(data, fallback);
+    error.payload = error.apiError.stable ? error.apiError.details : data?.detail;
+    error.status = response.status;
     throw error;
   }
 
@@ -843,6 +910,7 @@ function AnalyzePage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [securityError, setSecurityError] = useState(null);
+  const [supportRequestId, setSupportRequestId] = useState("");
   const [result, setResult] = useState(null);
   const submittingRef = useRef(false);
 
@@ -880,6 +948,7 @@ function AnalyzePage() {
 
     setError("");
     setSecurityError(null);
+    setSupportRequestId("");
     setResult(null);
 
     if (!resume && !resumeVersionId) {
@@ -924,9 +993,12 @@ function AnalyzePage() {
 
       setResult(data);
     } catch (err) {
-      if (err.payload?.security_status === "blocked") {
-        setSecurityError(err.payload);
+      const safeDetails = err.apiError?.details;
+      const safeSecurityDetails = safeAnalyzeSecurityDetails(safeDetails);
+      if (safeSecurityDetails) {
+        setSecurityError(safeSecurityDetails);
       }
+      setSupportRequestId(err.apiError?.request_id || "");
       setError(getAnalysisErrorMessage(err));
     } finally {
       submittingRef.current = false;
@@ -1023,6 +1095,7 @@ function AnalyzePage() {
         <section className="panel state-panel error-panel" role="alert">
           <strong>Analysis failed</strong>
           <p>{error}</p>
+          {supportRequestId && <p className="field-help">Support reference: <code>{supportRequestId}</code></p>}
         </section>
       )}
 

@@ -10,6 +10,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.responses import Response
 
+from app.api.errors import route_error_response
 from app.auth.service import AuthService, InvalidSession
 from app.core.config import V2Settings
 from app.db.session import session_factory
@@ -62,9 +63,21 @@ class V2SecurityMiddleware(BaseHTTPMiddleware):
         if content_length:
             try:
                 if int(content_length) > self.settings.request_max_body_mb * 1024 * 1024:
-                    return JSONResponse(status_code=413, content={"detail": "Request body is too large."})
+                    return route_error_response(
+                        request,
+                        status_code=413,
+                        legacy_message="Request body is too large.",
+                        analyze_code="REQUEST_TOO_LARGE",
+                        error_stage="request_body",
+                    )
             except ValueError:
-                return JSONResponse(status_code=400, content={"detail": "Content-Length is invalid."})
+                return route_error_response(
+                    request,
+                    status_code=400,
+                    legacy_message="Content-Length is invalid.",
+                    analyze_code="REQUEST_VALIDATION_FAILED",
+                    error_stage="request_body",
+                )
         db = self._session_factory()
         request.state.v2_db = db
         try:
@@ -80,17 +93,35 @@ class V2SecurityMiddleware(BaseHTTPMiddleware):
                     )
                 except InvalidSession:
                     db.rollback()
-                    return JSONResponse(status_code=401, content={"detail": "Authentication required."})
+                    return route_error_response(
+                        request,
+                        status_code=401,
+                        legacy_message="Authentication required.",
+                        analyze_code="AUTHENTICATION_REQUIRED",
+                        error_stage="authentication",
+                    )
                 request.state.v2_session = user_session
                 request.state.v2_user = user
                 if request.method not in SAFE_METHODS:
                     origin = _request_origin(request)
                     if origin not in self.settings.auth_trusted_origins:
                         db.rollback()
-                        return JSONResponse(status_code=403, content={"detail": "Request origin is not trusted."})
+                        return route_error_response(
+                            request,
+                            status_code=403,
+                            legacy_message="Request origin is not trusted.",
+                            analyze_code="REQUEST_ORIGIN_NOT_TRUSTED",
+                            error_stage="origin",
+                        )
                     if not auth.validate_csrf(user_session, request.headers.get("x-csrf-token")):
                         db.rollback()
-                        return JSONResponse(status_code=403, content={"detail": "CSRF validation failed."})
+                        return route_error_response(
+                            request,
+                            status_code=403,
+                            legacy_message="CSRF validation failed.",
+                            analyze_code="CSRF_VALIDATION_FAILED",
+                            error_stage="csrf",
+                        )
                 if _admin_destructive(request) and user.role != "admin":
                     db.rollback()
                     return JSONResponse(status_code=403, content={"detail": "Administrator role required."})
@@ -110,7 +141,13 @@ class V2SecurityMiddleware(BaseHTTPMiddleware):
             return response
         except SQLAlchemyError:
             db.rollback()
-            return JSONResponse(status_code=503, content={"detail": "Database service is unavailable."})
+            return route_error_response(
+                request,
+                status_code=503,
+                legacy_message="Database service is unavailable.",
+                analyze_code="ANALYZE_PERSISTENCE_FAILED",
+                error_stage="database",
+            )
         except Exception:
             db.rollback()
             raise

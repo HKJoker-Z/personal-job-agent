@@ -2,6 +2,24 @@
 
 All endpoints retain the current Session, ownership, Origin, and CSRF requirements. Cross-user Resume IDs are never returned.
 
+## Request correlation
+
+Clients may send `X-Request-ID` using this exact syntax:
+
+```text
+^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$
+```
+
+A valid value is preserved exactly. An absent or invalid value is replaced
+with a server-generated UUIDv4. Every HTTP response includes `X-Request-ID`,
+including body-size, authentication, Origin, CSRF, validation, database, and
+unexpected-error responses. Browser clients may read this response header
+through the existing CORS policy.
+
+The request ID is observational support metadata. It is not an authentication,
+authorization, ownership, or idempotency credential, and it does not represent
+distributed tracing.
+
 ## Analyze
 
 `POST /api/analyze` accepts the existing multipart Resume/JD sources. Resume and JD input limits are configured by `ANALYSIS_RESUME_MAX_CHARS` and `ANALYSIS_JOB_DESCRIPTION_MAX_CHARS` (defaults 100,000 and 60,000). Oversized text is normalized and safely reduced before model use rather than causing a server error.
@@ -26,6 +44,49 @@ All successful model, repaired, partial, and local fallback paths return the sam
 ```
 
 Optional legacy result fields such as cover letter, upgraded bullets, ATS analysis, and dimension assessments receive safe defaults. Provider timeout/5xx and unrepairable output return HTTP 200 with `analysis_status="fallback"`. Empty Resume or JD is still rejected. A database failure while saving History remains a true failure.
+
+Analyze failures use one four-field envelope:
+
+```json
+{
+  "error": {
+    "code": "REQUEST_VALIDATION_FAILED",
+    "message": "The request could not be processed.",
+    "request_id": "uuid-or-valid-client-id",
+    "details": {}
+  }
+}
+```
+
+All four fields are always present and `details` is always an object. The
+focused Analyze codes are:
+
+- `AUTHENTICATION_REQUIRED`
+- `REQUEST_ORIGIN_NOT_TRUSTED`
+- `CSRF_VALIDATION_FAILED`
+- `REQUEST_TOO_LARGE`
+- `REQUEST_VALIDATION_FAILED`
+- `RESUME_SOURCE_INVALID`
+- `RESUME_NOT_FOUND`
+- `RESUME_PARSING_FAILED`
+- `JOB_SOURCE_INVALID`
+- `JOB_DESCRIPTION_ACQUISITION_FAILED`
+- `INPUT_SECURITY_BLOCKED`
+- `PROJECT_KNOWLEDGE_RETRIEVAL_FAILED`
+- `OUTPUT_SECURITY_BLOCKED`
+- `ANALYZE_PERSISTENCE_FAILED`
+- `UNEXPECTED_SERVER_ERROR`
+
+`details` contains only bounded, allowlisted workflow or security metadata.
+It never contains Resume/JD text, prompts, provider output, cookies, CSRF
+values, credentials, SQL, stack traces, filesystem paths, or raw exception
+text. The frontend maps the stable code to a safe user message and displays
+`request_id` as a support reference for terminal failures.
+
+This envelope is intentionally limited to `POST /api/analyze` and security or
+validation failures for that route. Other endpoints retain their existing
+`detail` behavior for compatibility. This version does not add an
+`Idempotency-Key` contract or Analyze idempotency.
 
 ## Resumes
 

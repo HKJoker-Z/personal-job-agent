@@ -22,6 +22,7 @@ from legacy_application import (
     model_response_to_result,
     validate_model_evidence_references,
 )
+from security_utils import INTERNAL_SECURITY_MARKER
 
 
 def docx_bytes(text="Python FastAPI engineer"):
@@ -181,17 +182,54 @@ class V203AnalysisApiTest(unittest.TestCase):
     def tearDown(self):
         self.client.close()
 
-    def analyze(self, provider_error):
+    def analyze(self, provider_error, *, request_id="phase-a1-provider-test"):
         with patch("legacy_application.call_deepseek_raw", side_effect=provider_error):
             return self.client.post(
                 "/api/analyze",
                 files={"resume": ("fictional.docx", docx_bytes(), "application/vnd.openxmlformats-officedocument.wordprocessingml.document")},
                 data={"job_text": "Python and Kubernetes role", "save_to_history": "false", "use_project_knowledge": "false"},
+                headers={"X-Request-ID": request_id},
             )
+
+    def assert_analyze_error(self, response, *, status_code, code):
+        self.assertEqual(response.status_code, status_code, response.text)
+        self.assertEqual(set(response.json()), {"error"})
+        error = response.json()["error"]
+        self.assertEqual(
+            set(error),
+            {"code", "message", "request_id", "details"},
+        )
+        self.assertEqual(error["code"], code)
+        self.assertIsInstance(error["details"], dict)
+        self.assertEqual(error["request_id"], response.headers["X-Request-ID"])
+        return error
+
+    def valid_analyze_request(self, **data_updates):
+        data = {
+            "job_text": "Python and Kubernetes role",
+            "save_to_history": "false",
+            "use_project_knowledge": "false",
+        }
+        data.update(data_updates)
+        return {
+            "files": {
+                "resume": (
+                    "fictional.docx",
+                    docx_bytes(),
+                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                )
+            },
+            "data": data,
+            "headers": {"X-Request-ID": "phase-a1-contract-test"},
+        }
 
     def test_provider_timeout_returns_stable_fallback(self):
         response = self.analyze(TimeoutError("fictional timeout"))
         self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(
+            response.headers["X-Request-ID"],
+            "phase-a1-provider-test",
+        )
         value = response.json()
         self.assertEqual(value["analysis_status"], "fallback")
         for key in (
@@ -205,13 +243,30 @@ class V203AnalysisApiTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["analysis_status"], "fallback")
 
+    def test_cors_exposes_only_the_expected_safe_response_headers(self):
+        response = self.client.post(
+            "/api/analyze",
+            headers={
+                "Origin": "http://localhost:5173",
+            },
+        )
+        self.assertEqual(response.status_code, 400, response.text)
+        exposed = response.headers["Access-Control-Expose-Headers"]
+        self.assertIn("Content-Disposition", exposed)
+        self.assertIn("X-Request-ID", exposed)
+        self.assertNotIn("Idempotency-Replayed", exposed)
+
     def test_empty_job_input_is_rejected(self):
         response = self.client.post(
             "/api/analyze",
             files={"resume": ("fictional.docx", docx_bytes(), "application/vnd.openxmlformats-officedocument.wordprocessingml.document")},
             data={"job_text": ""},
         )
-        self.assertEqual(response.status_code, 400)
+        self.assert_analyze_error(
+            response,
+            status_code=400,
+            code="JOB_SOURCE_INVALID",
+        )
 
     def test_empty_resume_text_is_rejected(self):
         response = self.client.post(
@@ -219,7 +274,162 @@ class V203AnalysisApiTest(unittest.TestCase):
             files={"resume": ("fictional.docx", docx_bytes(""), "application/vnd.openxmlformats-officedocument.wordprocessingml.document")},
             data={"job_text": "Python role"},
         )
-        self.assertEqual(response.status_code, 400)
+        self.assert_analyze_error(
+            response,
+            status_code=400,
+            code="RESUME_PARSING_FAILED",
+        )
+
+    def test_request_validation_failure_uses_stable_envelope(self):
+        request = self.valid_analyze_request(rag_top_k="not-an-integer")
+        response = self.client.post("/api/analyze", **request)
+        error = self.assert_analyze_error(
+            response,
+            status_code=400,
+            code="REQUEST_VALIDATION_FAILED",
+        )
+        self.assertEqual(error["details"], {})
+
+    def test_resume_source_failure_uses_stable_envelope(self):
+        response = self.client.post(
+            "/api/analyze",
+            files={"resume": ("fictional.txt", b"fictional", "text/plain")},
+            data={"job_text": "Python role"},
+        )
+        self.assert_analyze_error(
+            response,
+            status_code=400,
+            code="RESUME_SOURCE_INVALID",
+        )
+
+    def test_job_acquisition_failure_uses_stable_envelope(self):
+        request = self.valid_analyze_request(
+            job_text="",
+            job_url="https://jobs.example.test/fictional",
+        )
+        with patch(
+            "legacy_application.fetch_job_text_from_url",
+            side_effect=RuntimeError("PRIVATE_FETCH_FAILURE"),
+        ):
+            response = self.client.post("/api/analyze", **request)
+        self.assert_analyze_error(
+            response,
+            status_code=500,
+            code="JOB_DESCRIPTION_ACQUISITION_FAILED",
+        )
+        self.assertNotIn("PRIVATE_FETCH_FAILURE", response.text)
+
+    def test_input_security_block_is_safe_and_skips_provider(self):
+        private_secret = "SYNTHETIC_API_KEY=abcdefghijklmnop1234567890"
+        request = self.valid_analyze_request()
+        request["files"] = {
+            "resume": (
+                "fictional.docx",
+                docx_bytes(f"Python engineer {private_secret}"),
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            )
+        }
+        with patch("legacy_application.call_deepseek_raw") as provider:
+            response = self.client.post("/api/analyze", **request)
+        error = self.assert_analyze_error(
+            response,
+            status_code=422,
+            code="INPUT_SECURITY_BLOCKED",
+        )
+        self.assertEqual(error["details"]["security_status"], "blocked")
+        self.assertNotIn(private_secret, response.text)
+        provider.assert_not_called()
+
+    def test_project_knowledge_failure_uses_stable_envelope(self):
+        request = self.valid_analyze_request(use_project_knowledge="true")
+        with patch(
+            "legacy_application.search_project_knowledge",
+            side_effect=RuntimeError("PRIVATE_RETRIEVAL_FAILURE"),
+        ):
+            response = self.client.post("/api/analyze", **request)
+        self.assert_analyze_error(
+            response,
+            status_code=500,
+            code="PROJECT_KNOWLEDGE_RETRIEVAL_FAILED",
+        )
+        self.assertNotIn("PRIVATE_RETRIEVAL_FAILURE", response.text)
+
+    def test_output_security_block_uses_stable_envelope(self):
+        provider_response = ProviderAnalysisResponse(
+            content=f"{INTERNAL_SECURITY_MARKER}\n{json.dumps(complete_payload())}",
+            metadata={"finish_reason": "stop"},
+        )
+        request = self.valid_analyze_request()
+        with patch(
+            "legacy_application.call_deepseek_raw",
+            return_value=provider_response,
+        ):
+            response = self.client.post("/api/analyze", **request)
+        self.assert_analyze_error(
+            response,
+            status_code=502,
+            code="OUTPUT_SECURITY_BLOCKED",
+        )
+        self.assertNotIn(INTERNAL_SECURITY_MARKER, response.text)
+
+    def test_persistence_failure_uses_safe_stable_envelope(self):
+        request = self.valid_analyze_request(save_to_history="true")
+        with patch(
+            "legacy_application.call_deepseek_raw",
+            side_effect=TimeoutError("fictional timeout"),
+        ), patch(
+            "legacy_application.insert_application_record",
+            side_effect=RuntimeError("PRIVATE_DATABASE_FAILURE"),
+        ):
+            response = self.client.post("/api/analyze", **request)
+        self.assert_analyze_error(
+            response,
+            status_code=503,
+            code="ANALYZE_PERSISTENCE_FAILED",
+        )
+        self.assertNotIn("PRIVATE_DATABASE_FAILURE", response.text)
+
+    def test_unknown_exception_uses_generic_stable_envelope(self):
+        request = self.valid_analyze_request(save_to_history="true")
+        with patch(
+            "legacy_application.call_deepseek_raw",
+            side_effect=TimeoutError("fictional timeout"),
+        ), patch(
+            "legacy_application.insert_application_record",
+            return_value=123,
+        ), patch(
+            "legacy_application.update_application_workflow_steps",
+            side_effect=RuntimeError("PRIVATE_UNKNOWN_FAILURE"),
+        ):
+            response = self.client.post("/api/analyze", **request)
+        error = self.assert_analyze_error(
+            response,
+            status_code=500,
+            code="UNEXPECTED_SERVER_ERROR",
+        )
+        self.assertEqual(
+            error["message"],
+            "Unexpected server error. Please try again.",
+        )
+        self.assertNotIn("PRIVATE_UNKNOWN_FAILURE", response.text)
+
+    def test_malformed_provider_output_still_returns_fallback_200(self):
+        provider_response = ProviderAnalysisResponse(
+            content='{"matched_skills":["PRIVATE_MODEL_FRAGMENT"]',
+            metadata={"finish_reason": "stop", "output_tokens": 20},
+        )
+        request = self.valid_analyze_request()
+        with patch(
+            "legacy_application.call_deepseek_raw",
+            return_value=provider_response,
+        ), patch(
+            "legacy_application.call_deepseek_repair",
+            side_effect=ModelOutputError(MODEL_OUTPUT_INVALID_JSON),
+        ):
+            response = self.client.post("/api/analyze", **request)
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["analysis_status"], "fallback")
+        self.assertNotIn("PRIVATE_MODEL_FRAGMENT", response.text)
 
 
 if __name__ == "__main__":
