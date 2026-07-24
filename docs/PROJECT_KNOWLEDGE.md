@@ -83,6 +83,13 @@ that historical data.
 
 ## Technical Architecture
 
+Personal Job Agent is a modular monolith with supporting PostgreSQL, Redis,
+worker, frontend, and operational processes. Concise companion references are
+the [architecture overview](ARCHITECTURE.md), [ADR index](adr/README.md), and
+[fictional Version 2.0.3 demo](demo/README.md). The authenticated frontend also
+includes a static, read-only
+[Architecture page (`/architecture`)](../frontend/src/pages/ArchitecturePage.jsx).
+
 The production request path is:
 
 `Browser → HTTPS Nginx Edge → Nginx Frontend → FastAPI Backend`
@@ -125,8 +132,9 @@ React 19.2.7, React Router 7.18.1, Vite 8.1.3, semantic HTML, and project-owned
 CSS implement the frontend. One `AppLayout` supplies responsive desktop,
 mobile, and iPad navigation. Routes cover Login, Dashboard, Analyze, History,
 Resumes, Profile, Project Knowledge, Agent Runs, Account, and administrator
-Monitoring/Evaluation. Retired workflow routes render Feature Removed and do
-not appear in navigation.
+Monitoring/Evaluation. The authenticated `/architecture` route renders a static,
+read-only system overview without an API or external network request. Retired
+workflow routes render Feature Removed and do not appear in navigation.
 
 ## Resume Management
 

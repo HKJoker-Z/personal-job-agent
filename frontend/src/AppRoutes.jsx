@@ -6,6 +6,7 @@ import { AppLayout } from "./components/AppLayout";
 import { LegacyWorkspace } from "./legacy-workspace";
 import { AccountPage } from "./pages/AccountPage";
 import { AgentRunDetailPage, AgentRunsPage } from "./pages/AgentPages";
+import { ArchitecturePage } from "./pages/ArchitecturePage";
 import { DashboardPage } from "./pages/DashboardPage";
 import { FeatureRemovedPage, NotFoundPage } from "./pages/FeatureStatePage";
 import { LoginPage } from "./pages/LoginPage";
@@ -30,6 +31,7 @@ export function App() {
       <Route path="/application-packages/*" element={<FeatureRemovedPage />} />
       <Route path="/agent-runs" element={<AgentRunsPage />} />
       <Route path="/agent-runs/:runId" element={<AgentRunDetailPage />} />
+      <Route path="/architecture" element={<ArchitecturePage />} />
       <Route path="/approvals/*" element={<FeatureRemovedPage />} />
       <Route path="/tasks/*" element={<FeatureRemovedPage />} />
       <Route path="/profile" element={<ProfilePage />} />

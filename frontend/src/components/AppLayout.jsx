@@ -10,6 +10,7 @@ const primaryItems = [
   ["Profile", "/profile"],
   ["Project Knowledge", "/project-knowledge"],
   ["Agent Runs", "/agent-runs"],
+  ["Architecture", "/architecture"],
 ];
 
 export function AppLayout() {

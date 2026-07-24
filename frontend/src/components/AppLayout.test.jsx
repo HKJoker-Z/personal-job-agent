@@ -26,6 +26,25 @@ describe("unified navigation", () => {
     expect(screen.getByRole("link", { name: "Analyze" })).toHaveClass("active");
   });
 
+  it("keeps the existing navigation destinations and adds Architecture", () => {
+    view("/architecture");
+    const expectedLinks = {
+      Dashboard: "/dashboard",
+      Analyze: "/analyze",
+      History: "/history",
+      Resumes: "/resumes",
+      Profile: "/profile",
+      "Project Knowledge": "/project-knowledge",
+      "Agent Runs": "/agent-runs",
+      Architecture: "/architecture",
+      Monitoring: "/monitoring",
+    };
+    for (const [label, path] of Object.entries(expectedLinks)) {
+      expect(screen.getByRole("link", { name: label })).toHaveAttribute("href", path);
+    }
+    expect(screen.getByRole("link", { name: "Architecture" })).toHaveAttribute("aria-current", "page");
+  });
+
   it("uses the same component for its collapsible mobile menu", () => {
     view();
     const menu = screen.getByRole("button", { name: /Menu/ });
