@@ -37,6 +37,11 @@ from analysis_fallback import (
     normalize_analysis_text,
     structure_aware_truncate,
 )
+from app.api.errors import (
+    analyze_error_response,
+    analyze_exception_response,
+    is_analyze_request,
+)
 from app.jobs.acquisition import SafeJobUrlFetcher, UnsafeJobUrl
 from app.materials.grounding import EvidenceSource, validate_claims, validation_summary
 from config import APP_VERSION, load_config
@@ -328,7 +333,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
-    expose_headers=["Content-Disposition"],
+    expose_headers=["Content-Disposition", "X-Request-ID"],
 )
 if settings.app_env == "production":
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=list(settings.trusted_hosts))
@@ -337,6 +342,18 @@ app.add_middleware(RequestLoggingMiddleware, logger=logger)
 
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:
+    if is_analyze_request(request):
+        logger.warning(
+            "Request failed path=%s status_code=%s error_type=HTTPException",
+            request.url.path,
+            exc.status_code,
+        )
+        return analyze_exception_response(
+            request,
+            status_code=exc.status_code,
+            detail=exc.detail,
+            headers=exc.headers,
+        )
     detail = exc.detail if isinstance(exc.detail, dict) else {}
     request.state.error_code = detail.get("error_code", "HTTP_ERROR")
     request.state.error_stage = detail.get("error_stage", "")
@@ -353,6 +370,19 @@ async def validation_exception_handler(
     request: Request,
     exc: RequestValidationError,
 ) -> JSONResponse:
+    if is_analyze_request(request):
+        logger.warning(
+            "Request validation failed path=%s error_type=%s",
+            request.url.path,
+            type(exc).__name__,
+        )
+        return analyze_error_response(
+            request,
+            status_code=400,
+            code="REQUEST_VALIDATION_FAILED",
+            message="Invalid request. Please check the uploaded file and form fields.",
+            error_stage="request_validation",
+        )
     request.state.error_code = "REQUEST_VALIDATION_FAILED"
     logger.warning(
         "Request validation failed path=%s error_type=%s",
@@ -367,6 +397,18 @@ async def validation_exception_handler(
 
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    if is_analyze_request(request):
+        logger.error(
+            "Unhandled server error path=%s error_type=%s",
+            request.url.path,
+            type(exc).__name__,
+        )
+        return analyze_error_response(
+            request,
+            status_code=500,
+            code="UNEXPECTED_SERVER_ERROR",
+            message="Unexpected server error. Please try again.",
+        )
     request.state.error_code = "UNEXPECTED_SERVER_ERROR"
     logger.error(
         "Unhandled server error path=%s error_type=%s",
@@ -1731,13 +1773,28 @@ def skip_workflow_steps_after(
             workflow.skip_step(key, name, message)
 
 
+def analyze_error_detail(
+    message: str,
+    error_code: str,
+    error_stage: str,
+    *,
+    details: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    return {
+        "message": message,
+        "error_code": error_code,
+        "error_stage": error_stage,
+        "details": details or {},
+    }
+
+
 def raise_security_blocked(
     workflow: AgentWorkflow,
     context: WorkflowContext,
     *,
     status_code: int = 422,
     message: str = "Sensitive credential-like content was detected. Remove secrets before analysis.",
-    error_code: str = "CREDENTIAL_LIKE_CONTENT_DETECTED",
+    error_code: str = "INPUT_SECURITY_BLOCKED",
     error_stage: str = "scan_untrusted_input",
 ) -> None:
     context.security_scan = normalized_security_scan(context.security_scan or empty_security_scan())
@@ -1822,12 +1879,18 @@ def fail_analysis_and_raise(
     message: str,
     error_code: str,
     exc: Exception,
+    status_code: int = 500,
 ) -> None:
+    http_detail = exc.detail if isinstance(exc, HTTPException) and isinstance(exc.detail, dict) else {}
     effective_error_code = (
-        exc.error_code if isinstance(exc, ModelOutputError) else error_code
+        exc.error_code
+        if isinstance(exc, ModelOutputError)
+        else str(http_detail.get("error_code") or error_code)
     )
     effective_message = (
-        exc.safe_message if isinstance(exc, ModelOutputError) else message
+        exc.safe_message
+        if isinstance(exc, ModelOutputError)
+        else str(http_detail.get("message") or message)
     )
     workflow.fail_step(step_key, effective_message)
     record_analysis_observation(
@@ -1866,7 +1929,8 @@ def fail_analysis_and_raise(
             },
         ) from exc
     if isinstance(exc, HTTPException):
-        message = exc.detail if isinstance(exc.detail, str) else "Request failed."
+        message = exc.detail if isinstance(exc.detail, str) else effective_message
+        details = http_detail.get("details")
         raise HTTPException(
             status_code=exc.status_code,
             detail={
@@ -1874,9 +1938,19 @@ def fail_analysis_and_raise(
                 "workflow_id": context.workflow_id,
                 "error_code": effective_error_code,
                 "error_stage": step_key,
+                "details": details if isinstance(details, dict) else {},
             },
         ) from exc
-    raise exc
+    raise HTTPException(
+        status_code=status_code,
+        detail={
+            "message": effective_message,
+            "workflow_id": context.workflow_id,
+            "error_code": effective_error_code,
+            "error_stage": step_key,
+            "details": {},
+        },
+    ) from exc
 
 
 @app.get("/")
@@ -2445,7 +2519,12 @@ async def analyze(
             logger.warning("Analyze request rejected error_type=MissingResume")
             raise HTTPException(
                 status_code=400,
-                detail="Provide exactly one resume source: an upload or resume_version_id.",
+                detail=analyze_error_detail(
+                    "Provide exactly one resume source: an upload or resume_version_id.",
+                    "RESUME_SOURCE_INVALID",
+                    "validate_input",
+                    details={"field": "resume"},
+                ),
             )
 
         resume_filename = resume.filename or "" if resume else ""
@@ -2453,14 +2532,27 @@ async def analyze(
         if resume is not None:
             if not clean_resume_filename.endswith((".pdf", ".docx")):
                 logger.warning("Analyze request rejected error_type=UnsupportedResumeType")
-                raise HTTPException(status_code=400, detail="Resume must be a PDF or DOCX file.")
+                raise HTTPException(
+                    status_code=400,
+                    detail=analyze_error_detail(
+                        "Resume must be a PDF or DOCX file.",
+                        "RESUME_SOURCE_INVALID",
+                        "validate_input",
+                        details={"field": "resume"},
+                    ),
+                )
 
             upload_size = getattr(resume, "size", None)
             if isinstance(upload_size, int) and upload_size > MAX_RESUME_UPLOAD_BYTES:
                 logger.warning("Analyze request rejected error_type=ResumeTooLarge")
                 raise HTTPException(
                     status_code=400,
-                    detail=f"Resume file is too large. Maximum size is {settings.max_upload_size_mb} MB.",
+                    detail=analyze_error_detail(
+                        f"Resume file is too large. Maximum size is {settings.max_upload_size_mb} MB.",
+                        "RESUME_SOURCE_INVALID",
+                        "validate_input",
+                        details={"field": "resume"},
+                    ),
                 )
 
         clean_job_text = (job_text or "").strip()
@@ -2469,7 +2561,12 @@ async def analyze(
             logger.warning("Analyze request rejected error_type=MissingJobInput")
             raise HTTPException(
                 status_code=400,
-                detail="Provide exactly one job source: job description text or job URL.",
+                detail=analyze_error_detail(
+                    "Provide exactly one job source: job description text or job URL.",
+                    "JOB_SOURCE_INVALID",
+                    "validate_input",
+                    details={"field": "job"},
+                ),
             )
 
         context.resume_filename = resume_filename or ("Stored Resume Version" if clean_resume_version_id else None)
@@ -2488,7 +2585,7 @@ async def analyze(
             context,
             step_key="validate_input",
             message="Input validation failed.",
-            error_code="INPUT_VALIDATION_FAILED",
+            error_code="REQUEST_VALIDATION_FAILED",
             exc=exc,
         )
 
@@ -2498,21 +2595,66 @@ async def analyze(
             from uuid import UUID
 
             from app.core.config import load_v2_settings
-            from app.resumes.service import ResumeService
+            from app.resumes.service import ResumeConflict, ResumeNotFound, ResumeService
 
             current_user = getattr(request.state, "v2_user", None)
             current_db = getattr(request.state, "v2_db", None)
             if current_user is None or current_db is None:
-                raise HTTPException(status_code=401, detail="Authentication required.")
-            resume_text = ResumeService(
-                current_db, current_user.id, load_v2_settings()
-            ).analysis_text(UUID(clean_resume_version_id))
+                raise HTTPException(
+                    status_code=401,
+                    detail=analyze_error_detail(
+                        "Authentication required.",
+                        "AUTHENTICATION_REQUIRED",
+                        "authentication",
+                    ),
+                )
+            try:
+                version_id = UUID(clean_resume_version_id)
+            except ValueError as exc:
+                raise HTTPException(
+                    status_code=400,
+                    detail=analyze_error_detail(
+                        "Resume Version ID is invalid.",
+                        "RESUME_SOURCE_INVALID",
+                        "parse_resume",
+                        details={"field": "resume_version_id"},
+                    ),
+                ) from exc
+            try:
+                resume_text = ResumeService(
+                    current_db, current_user.id, load_v2_settings()
+                ).analysis_text(version_id)
+            except ResumeNotFound as exc:
+                raise HTTPException(
+                    status_code=404,
+                    detail=analyze_error_detail(
+                        "Resume Version not found.",
+                        "RESUME_NOT_FOUND",
+                        "parse_resume",
+                    ),
+                ) from exc
+            except ResumeConflict as exc:
+                raise HTTPException(
+                    status_code=400,
+                    detail=analyze_error_detail(
+                        "Resume Version has no analyzable content.",
+                        "RESUME_PARSING_FAILED",
+                        "parse_resume",
+                    ),
+                ) from exc
             context.source_type = "saved_resume_version"
         else:
             resume_text = await extract_resume_text(resume)
         resume_text, resume_was_truncated = truncate_text(resume_text, MAX_RESUME_TEXT_CHARS)
         if not resume_text.strip():
-            raise HTTPException(status_code=400, detail="Resume text is required for analysis.")
+            raise HTTPException(
+                status_code=400,
+                detail=analyze_error_detail(
+                    "Resume text is required for analysis.",
+                    "RESUME_PARSING_FAILED",
+                    "parse_resume",
+                ),
+            )
         context.resume_text = resume_text
         logger.info("Resume parsing succeeded characters=%s", len(resume_text))
         if resume_was_truncated:
@@ -2548,7 +2690,14 @@ async def analyze(
 
         job_description, jd_was_truncated = truncate_text(job_description, MAX_JOB_TEXT_CHARS)
         if not job_description.strip():
-            raise HTTPException(status_code=400, detail="Job Description text is required for analysis.")
+            raise HTTPException(
+                status_code=400,
+                detail=analyze_error_detail(
+                    "Job Description text is required for analysis.",
+                    "JOB_DESCRIPTION_ACQUISITION_FAILED",
+                    "acquire_job_description",
+                ),
+            )
         context.job_text = job_description
         if jd_was_truncated:
             logger.info("JD text truncated characters=%s", MAX_JOB_TEXT_CHARS)
@@ -2690,7 +2839,7 @@ async def analyze(
                 raise_security_blocked(
                     workflow,
                     context,
-                    error_code="PROJECT_KNOWLEDGE_CREDENTIAL_LIKE_CONTENT_DETECTED",
+                    error_code="INPUT_SECURITY_BLOCKED",
                     error_stage="scan_project_evidence",
                 )
             workflow.complete_step(
@@ -2791,7 +2940,7 @@ async def analyze(
                     context,
                     status_code=502,
                     message="LLM output failed security validation. Please try again.",
-                    error_code="LLM_OUTPUT_SECURITY_VALIDATION_FAILED",
+                    error_code="OUTPUT_SECURITY_BLOCKED",
                     error_stage="scan_llm_output",
                 )
             context.llm_raw_response = sanitized_output
@@ -3012,8 +3161,9 @@ async def analyze(
                 context,
                 step_key="save_application",
                 message="Could not save application record.",
-                error_code="APPLICATION_SAVE_FAILED",
+                error_code="ANALYZE_PERSISTENCE_FAILED",
                 exc=exc,
+                status_code=503,
             )
     else:
         workflow.skip_step(

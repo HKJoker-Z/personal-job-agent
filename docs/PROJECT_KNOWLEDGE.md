@@ -333,6 +333,32 @@ Remember email stores only a normalized email at
 `pja.v2.login.rememberedEmail`. JavaScript never stores plaintext password,
 Session token, or CSRF token in browser storage.
 
+## HTTP Request Correlation and Analyze Errors
+
+Request correlation wraps the complete HTTP security stack. A client
+`X-Request-ID` matching `^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$` is preserved
+exactly; an absent or invalid value is replaced with a UUIDv4. The same ID is
+available through request state and a ContextVar, is included in structured
+completion logs, and is returned in `X-Request-ID` for successes and early
+body-size, authentication, Origin, CSRF, validation, database, and unexpected
+error responses. CORS exposes only the existing `Content-Disposition` header
+and the new `X-Request-ID` response header.
+
+`POST /api/analyze` and security/validation failures for that route use a
+stable `error` envelope with mandatory `code`, `message`, `request_id`, and
+object-valued `details`. Details are bounded and allowlisted; raw Resume/JD,
+prompts, model output, tokens, cookies, SQL, paths, exception text, and stack
+traces are excluded. The frontend maps stable codes, retains legacy `detail`
+parsing for endpoints outside this focused migration, performs the existing
+one-time CSRF refresh retry by code, and shows the request ID as a support
+reference for terminal Analyze errors.
+
+Request IDs remain observational metadata and are never used for
+authentication, authorization, ownership, or idempotency. Analyze idempotency
+is not implemented. The provider SDK retry setting also remains unchanged at
+`max_retries=2`; a later phase must define provider retry policy before making
+an at-most-one automatic provider-attempt claim.
+
 ## AI Reliability
 
 DeepSeek can return Markdown fences, prose around JSON, wrapper objects,

@@ -134,4 +134,85 @@ describe("Version 2.0.1 simplified workspace", () => {
     expect(await screen.findByText(/local fallback analysis is shown/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Analyze" })).toBeEnabled();
   });
+
+  it("maps stable Analyze errors, shows the support reference, and hides raw details", async () => {
+    global.fetch
+      .mockResolvedValueOnce(new Response(JSON.stringify([{
+        title: "Synthetic Resume", active_version_id: "resume-version-1", is_primary: true,
+      }]), { status: 200, headers: { "Content-Type": "application/json" } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        title: "Synthetic Resume", active_version_id: "resume-version-1", is_primary: true,
+      }), { status: 200, headers: { "Content-Type": "application/json" } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        error: {
+          code: "ANALYZE_PERSISTENCE_FAILED",
+          message: "PRIVATE_INTERNAL_MESSAGE",
+          request_id: "support-request-123",
+          details: {
+            internal_exception: "PRIVATE_INTERNAL_DETAIL",
+            security_status: "not_blocked",
+          },
+        },
+      }), { status: 503, headers: { "Content-Type": "application/json", "X-Request-ID": "support-request-123" } }));
+
+    render(<AnalyzePage />);
+    await screen.findByRole("option", { name: /Synthetic Resume/ });
+    fireEvent.change(screen.getByLabelText("Job Description"), {
+      target: { value: "Synthetic FastAPI role" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Analyze" }));
+
+    expect(await screen.findByText(/could not be saved safely/)).toBeInTheDocument();
+    expect(screen.getByText("support-request-123")).toBeInTheDocument();
+    expect(screen.queryByText("PRIVATE_INTERNAL_MESSAGE")).not.toBeInTheDocument();
+    expect(screen.queryByText("PRIVATE_INTERNAL_DETAIL")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Analyze" })).toBeEnabled();
+  });
+
+  it("renders only allowlisted security metadata from a stable Analyze error", async () => {
+    global.fetch
+      .mockResolvedValueOnce(new Response(JSON.stringify([{
+        title: "Synthetic Resume", active_version_id: "resume-version-1", is_primary: true,
+      }]), { status: 200, headers: { "Content-Type": "application/json" } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        title: "Synthetic Resume", active_version_id: "resume-version-1", is_primary: true,
+      }), { status: 200, headers: { "Content-Type": "application/json" } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        error: {
+          code: "INPUT_SECURITY_BLOCKED",
+          message: "PRIVATE_INTERNAL_MESSAGE",
+          request_id: "security-request-123",
+          details: {
+            security_status: "blocked",
+            security_scan: {
+              risk_level: "critical",
+              blocked: true,
+              sensitive_data_detected: true,
+              findings: [{
+                code: "secret_api_key",
+                category: "secret",
+                severity: "critical",
+                source: "resume",
+                message: "PRIVATE_RAW_FINDING",
+              }],
+            },
+            workflow_steps: [{ message: "PRIVATE_WORKFLOW_DETAIL" }],
+          },
+        },
+      }), { status: 422, headers: { "Content-Type": "application/json" } }));
+
+    render(<AnalyzePage />);
+    await screen.findByRole("option", { name: /Synthetic Resume/ });
+    fireEvent.change(screen.getByLabelText("Job Description"), {
+      target: { value: "Synthetic FastAPI role" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Analyze" }));
+
+    expect((await screen.findAllByText(/Credential-like content was detected/)).length).toBeGreaterThan(0);
+    expect(screen.getByText("Security finding detected.")).toBeInTheDocument();
+    expect(screen.queryByText("PRIVATE_RAW_FINDING")).not.toBeInTheDocument();
+    expect(screen.queryByText("PRIVATE_WORKFLOW_DETAIL")).not.toBeInTheDocument();
+    expect(screen.queryByText("PRIVATE_INTERNAL_MESSAGE")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Analyze" })).toBeEnabled();
+  });
 });
