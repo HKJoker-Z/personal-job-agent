@@ -161,13 +161,20 @@ empty.
 
 ## Architecture
 
+Personal Job Agent is a modular monolith with supporting PostgreSQL, Redis,
+worker, frontend, and operational processes. See the
+[architecture overview](docs/ARCHITECTURE.md), [ADR index](docs/adr/README.md),
+and [fictional Version 2.0.3 demo](docs/demo/README.md). The running
+authenticated application also provides a static, read-only
+[Architecture page](/architecture).
+
 ```mermaid
 flowchart LR
     Client[Browser client] -->|HTTPS :8080| Edge[Nginx Edge<br/>TLS termination]
     Edge --> Web[Nginx Frontend<br/>React/Vite static files]
     Web -->|/api reverse proxy| API[FastAPI Backend]
     API --> DB[(PostgreSQL 16)]
-    API -->|queue/readiness| Redis[(Redis 7)]
+    API -->|readiness and SSE limits| Redis[(Redis 7)]
     API -->|structured analysis| DeepSeek[DeepSeek API]
     Runtime[Runtime Project Knowledge] --> API
     API -->|chunks and FTS search| DB
@@ -410,6 +417,9 @@ the repository evidence. Version 1.6 and later link to formal releases.
 ## Documentation
 
 - [Verified Project Knowledge](docs/PROJECT_KNOWLEDGE.md)
+- [Architecture overview](docs/ARCHITECTURE.md)
+- [Architecture Decision Records](docs/adr/README.md)
+- [Fictional Version 2.0.3 demo](docs/demo/README.md)
 - [Version 2.0.3 architecture](docs/V2_0_3_ARCHITECTURE.md)
 - [Version 2.0.3 API](docs/V2_0_3_API.md)
 - [Authentication and Remember Me](docs/V2_AUTHENTICATION.md)
