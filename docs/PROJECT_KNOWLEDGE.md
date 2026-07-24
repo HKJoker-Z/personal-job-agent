@@ -386,6 +386,16 @@ and metadata-only traces. Administrator cleanup requires preview and exact
 confirmation for filtered/all metrics, one trace, or Evaluation history, while
 preserving History and Project Knowledge.
 
+The PostgreSQL workflow-Step summary is aggregated in the database instead of
+loading every matching metric into Python. In an isolated PostgreSQL 16.14
+benchmark with 300,000 synthetic Step rows and 194,399 rows inside the measured
+window, two warm-ups plus seven measured runs showed median database execution
+falling from 541.065 ms to 185.212 ms and median application-level execution
+falling from 1,308.238 ms to 163.765 ms. The six returned summaries were
+identical, the 17,656 KiB disk sort and temporary I/O were removed, and no new
+index or migration was required. These are local comparative benchmark results,
+not production latency claims.
+
 Offline Evaluation runs reviewed behavioral/security/retrieval/recommendation/
 timing cases without DeepSeek. Pass rate is regression evidence, not model
 accuracy or hiring probability.
