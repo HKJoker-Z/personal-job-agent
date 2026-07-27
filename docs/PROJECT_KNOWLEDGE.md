@@ -4,7 +4,7 @@
 
 Personal Job Agent is a private, administrator-led web application for
 evidence-grounded Resume and Job Description analysis. The current stable and
-production version is **2.0.3**. The current Alembic schema revision is
+production version is **2.0.4**. The current Alembic schema revision is
 `20260724_06` (`head`).
 
 The application uses a React/Vite frontend, a FastAPI/Python backend,
@@ -18,7 +18,28 @@ AI output is advisory and requires human review. Personal Job Agent does not
 automatically submit applications, send email, contact employers, or guarantee
 Applicant Tracking System (ATS), interview, or hiring outcomes.
 
-## Current Version 2.0.3 Changes
+## Current Version 2.0.4 Changes
+
+Version 2.0.4 adds the English Architecture page, architecture documentation
+and ADRs, and a reproducible fictional three-minute demo. PostgreSQL now performs
+the Monitoring aggregation in SQL instead of loading all observations into
+Python; the published synthetic plans are engineering evidence, not production
+latency.
+
+Request IDs correlate the Edge/Frontend/Backend path, safe errors, workflow
+observations, and History audit details. Analyze errors use a stable
+`error_code`, `message`, `request_id`, and `retryable` contract.
+
+Analyze accepts an optional user-scoped `Idempotency-Key`. PostgreSQL table
+`analyze_idempotency_records` is the durable source of truth at Alembic
+`20260724_06`. Completed duplicates replay without a new provider call or
+History row. A unique constraint and row locks select one concurrent winner,
+and History/result finalization is atomic. The synchronous workflow records
+provider-start boundaries, configures SDK `max_retries=0`, permits one explicit
+format repair, and treats an ambiguous provider-started crash as indeterminate
+rather than claiming external exactly-once execution.
+
+## Prior Version 2.0.3 Changes
 
 Version 2.0.3 adds tolerant JSON extraction/normalization, at most one
 format-only DeepSeek repair, and deterministic local fallback. Results identify
@@ -28,14 +49,6 @@ The Resume page now accepts PDF, DOCX, TXT, MD, and Markdown (10 MB default).
 The latest successful upload becomes Primary and Analyze loads its active
 Version. Alembic `20260721_05` adds `resumes.is_primary`, backfills the newest
 active Resume per user, and preserves existing data.
-
-Analyze accepts an optional user-scoped `Idempotency-Key`. PostgreSQL table
-`analyze_idempotency_records` is the durable source of truth at Alembic
-`20260724_06`. Completed duplicates replay without a new provider call or
-History row. The synchronous workflow records provider-start boundaries,
-disables SDK automatic transport retries, permits one explicit format repair,
-and treats an ambiguous provider-started crash as indeterminate rather than
-claiming external exactly-once execution.
 
 ## Current Product Workflow
 
@@ -94,7 +107,7 @@ that historical data.
 Personal Job Agent is a modular monolith with supporting PostgreSQL, Redis,
 worker, frontend, and operational processes. Concise companion references are
 the [architecture overview](ARCHITECTURE.md), [ADR index](adr/README.md), and
-[fictional Version 2.0.3 demo](demo/README.md). The authenticated frontend also
+[fictional Version 2.0.4 demo](demo/README.md). The authenticated frontend also
 includes a static, read-only
 [Architecture page (`/architecture`)](../frontend/src/pages/ArchitecturePage.jsx).
 
@@ -374,7 +387,7 @@ trailing commas, unexpected aliases, nulls, optional-field omissions, scalar
 values where a list was requested, numeric strings, truncated output, or no
 usable response. Network timeouts and provider 5xx errors are also possible.
 
-Version 2.0.3 treats these as expected reliability conditions. It uses bounded
+Version 2.0.4 treats these as expected reliability conditions. It uses bounded
 local parsing first, tolerates non-critical schema differences, requests one
 format-only repair only when necessary, and selects local fallback when the
 model path is unusable. Non-critical omissions no longer force the entire
@@ -435,7 +448,7 @@ timing cases without DeepSeek. Pass rate is regression evidence, not model
 accuracy or hiring probability.
 
 History separately supports cover-letter DOCX and analysis-report PDF export.
-Version 2.0.3 does not provide OpenTelemetry export, Prometheus, Grafana,
+Version 2.0.4 does not provide OpenTelemetry export, Prometheus, Grafana,
 Langfuse, or distributed tracing.
 
 Worker and Outbox health are part of readiness. Worker heartbeat, stale-worker
@@ -478,20 +491,22 @@ inventory with explicit owner mapping where authorized.
 
 Version 2.0.1 was not deployed after restore rehearsal exposed a PostgreSQL
 17.10 archive incompatible with PostgreSQL 16. Version 2.0.2 added these strict
-gates; Version 2.0.3 retains them.
+gates; Version 2.0.4 retains them.
 
 ### Candidate, health, and rollback
 
-Upgrade stages immutable images on internal `127.0.0.1:18090`, then checks exact
-2.0.3 health/readiness, head schema, healthy/private dependencies, stable
-restarts, Resume/Primary, analysis, RAG, History, and restore assets.
+Upgrade stages immutable images on internal `127.0.0.1:18091`, then checks exact
+2.0.4 health/readiness, head schema, healthy/private dependencies, stable
+restarts, Resume/Primary, analysis idempotency, RAG, History, Architecture,
+optimized Monitoring, and restore assets.
 
 Readiness checks database/schema, files, Project Knowledge/search, Redis, Worker,
 disk, auth initialization, and LLM configuration without calling DeepSeek.
 
-Rollback restores Version 2.0.2 digests/config without deleting volumes, Resume
-files, backups, or knowledge. Additive `is_primary` is backward compatible;
-database restore is only for a separate data incident.
+Rollback restores Version 2.0.3 digests/config without deleting volumes, Resume
+files, backups, or knowledge. The additive idempotency ledger remains during
+ordinary image rollback; database/schema rollback is only for a separately
+diagnosed incompatibility after Analyze traffic is stopped.
 
 ## Data Migration
 
@@ -583,7 +598,7 @@ fictional, and separate from ordinary CI.
 - Implemented PostgreSQL 16 Backup Restore gates with custom archive, immutable
   tools, manifest checksums, empty target, inventory, and owner mapping.
 - Deployed immutable GHCR images behind HTTPS Nginx with private data services,
-  candidate staging, health assertions, and Version 2.0.2 rollback assets.
+  candidate staging, health assertions, and Version 2.0.3 rollback assets.
 - Built GitHub Actions checks for Python, PostgreSQL, React, Docker Compose,
   repository safety, Mock LLM, and isolated recovery rehearsal.
 
@@ -622,8 +637,8 @@ later, closing the database-commit versus Redis-send gap.
 
 ### How can an upgrade be rolled back?
 
-Record Version 2.0.2 digests/config, rehearse PostgreSQL 16 recovery, validate
-migration, and test an internal 2.0.3 candidate. Rollback restores old
+Record Version 2.0.3 digests/config, rehearse PostgreSQL 16 recovery, validate
+migration, and test an internal 2.0.4 candidate. Rollback restores old
 images/config and preserves volumes because the schema is additive.
 
 ### How does Primary Resume improve the workflow?
@@ -642,7 +657,7 @@ Resume without a stale reference.
 - PostgreSQL full-text RAG is lexical, not embedding/vector retrieval, and can
   miss semantic equivalents outside bounded synonyms.
 - Scanned PDFs without selectable text require external OCR; OCR is not in
-  Version 2.0.3.
+  Version 2.0.4.
 - Safe job URL extraction cannot parse every site or client-rendered page.
 - The system does not automatically apply, send email, contact employers, or
   guarantee ATS parsing, ranking, interviews, or hiring.

@@ -1,8 +1,8 @@
 # Version 2 roadmap status
 
-## Current release: 2.0.3
+## Current release: 2.0.4
 
-Version 2.0.3 is the stable production release. It retains the simplified
+Version 2.0.4 is the stable production release. It retains the simplified
 Version 2.0.1 workspace and PostgreSQL 16 Backup/Restore gates from Version
 2.0.2, then adds resilient DeepSeek parsing/repair/fallback and safe Resume-page
 upload with automatic Primary Resume selection.
@@ -23,7 +23,7 @@ compatibility, recovery, and rollback.
 
 Files named `V2_0_2_*`, `V2_0_3_*`, and `V2_0_4_*` may describe development
 milestones that were later consolidated into Version 2.0.0. Current public
-scope is defined by the Version 2.0.1, 2.0.2, and 2.0.3 release notes plus the
+scope is defined by the Version 2.0.1, 2.0.2, 2.0.3, and 2.0.4 release notes plus the
 current code and retirement tests.
 
 ## Future work

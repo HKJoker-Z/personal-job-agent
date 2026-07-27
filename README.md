@@ -13,19 +13,20 @@ applications, contact employers, or guarantee an Applicant Tracking System
 
 | Item | Current state |
 | --- | --- |
-| Stable release | **2.0.3** — Resilient Analysis and Primary Resume Upload |
+| Stable release | **2.0.4** — Backend Reliability and Portfolio Architecture |
 | Production schema | Alembic `20260724_06` (`head`) |
 | Production database | PostgreSQL 16 |
 | Runtime topology | HTTPS Edge, Frontend, Backend, PostgreSQL, Redis, Worker, and Outbox Dispatcher |
 
-Version 2.0.3 makes model-output handling tolerant of common formatting defects,
-allows at most one format-only repair call, and returns a deterministic local
-fallback when the provider or response is unusable. It also adds safe Resume
-upload, automatic Primary Resume selection, and Analyze-page Primary Resume
-loading. The migration is additive: it adds `resumes.is_primary`, backfills the
-newest active Resume per user, and keeps existing Resume and Resume Version data.
+Version 2.0.4 adds the English Architecture page, ADRs, a reproducible
+three-minute demo, PostgreSQL monitoring aggregation optimization, end-to-end
+Request ID correlation, a stable Analyze error envelope, and durable
+PostgreSQL-backed Analyze idempotency. Completed keyed requests replay without
+another provider call or History row; concurrent duplicates have one database
+winner, and ambiguous provider outcomes become explicitly indeterminate. The
+release does not claim external exactly-once execution.
 
-See the [Version 2.0.3 release notes](docs/V2_0_3_RELEASE_NOTES.md) for upgrade
+See the [Version 2.0.4 release notes](docs/V2_0_4_RELEASE_NOTES.md) for upgrade
 and rollback details.
 
 ## Core Features
@@ -171,7 +172,7 @@ empty.
 Personal Job Agent is a modular monolith with supporting PostgreSQL, Redis,
 worker, frontend, and operational processes. See the
 [architecture overview](docs/ARCHITECTURE.md), [ADR index](docs/adr/README.md),
-and [fictional Version 2.0.3 demo](docs/demo/README.md). The running
+and [fictional Version 2.0.4 demo](docs/demo/README.md). The running
 authenticated application also provides a static, read-only
 [Architecture page](/architecture).
 
@@ -247,7 +248,7 @@ Frontend Nginx service, and the Frontend proxies `/api` to FastAPI. Only Edge
 8080 is host-published; Backend 8000, PostgreSQL 5432, and Redis 6379 stay on
 private Docker networks.
 
-A release is first staged as an internal candidate on `127.0.0.1:18090`.
+A release is first staged as an internal candidate on `127.0.0.1:18091`.
 Acceptance requires exact version/readiness assertions, healthy dependencies,
 stable restart counts, Resume/RAG/History checks, and verified rollback assets
 before the public switch.
@@ -260,11 +261,12 @@ keys, sequences, indexes, and ownership. Restore runs only against a validated
 empty target and compares the complete post-restore inventory, with explicit
 owner mapping where required.
 
-Rollback restores the recorded Version 2.0.2 immutable image digests and saved
+Rollback restores the recorded Version 2.0.3 immutable image digests and saved
 Compose/runtime configuration while preserving PostgreSQL/Redis volumes,
-Resume files, backups, and Project Knowledge. The additive Version 2.0.3 column
-is backward compatible; a database restore is reserved for a separately
-diagnosed data incident. See [Deployment](docs/DEPLOYMENT.md) and
+Resume files, backups, and Project Knowledge. The additive Version 2.0.4 ledger
+is retained during ordinary image rollback; schema downgrade is reserved for a
+separately diagnosed incompatibility after Analyze traffic is stopped. See
+[Deployment](docs/DEPLOYMENT.md) and
 [Version 2 Backup and Restore](docs/V2_BACKUP_AND_RESTORE.md).
 
 ## Local Development
@@ -313,7 +315,7 @@ Mock LLM, persistence, and Backup/Restore together. It uses unique temporary
 resources and removes them after completion:
 
 ```bash
-PJA_SMOKE_MILESTONE=2.0.1 PJA_APP_VERSION=2.0.3 \
+PJA_SMOKE_MILESTONE=2.0.1 PJA_APP_VERSION=2.0.4 \
   scripts/docker-smoke-v2.sh
 ```
 
@@ -367,8 +369,8 @@ The test and CI layers cover:
 - Strict PostgreSQL 16 Backup/Restore, full inventory comparison, and negative
   PostgreSQL 17 client gates before writes.
 
-CI does not call DeepSeek. Any real-provider validation is separately enabled,
-bounded, fictional, and never uses a production Resume or JD. Test counts are
+CI and Version 2.0.4 release validation do not call DeepSeek. Provider behavior
+is covered with deterministic mocks and the isolated Mock LLM. Test counts are
 deliberately not fixed here because they change as regressions are added.
 
 ## Version History
@@ -393,6 +395,7 @@ the repository evidence. Version 1.6 and later link to formal releases.
 | [v2.0.1](docs/V2_0_1_RELEASE_NOTES.md) | Unified navigation, Remember Me, Project Knowledge PostgreSQL RAG, deployment fixes, and removal of Jobs/Rankings/Applications/Approvals/Tasks from the public workflow. |
 | [v2.0.2](docs/V2_0_2_RELEASE_NOTES.md) | PostgreSQL 16 client/server Backup/Restore compatibility gates and complete inventory validation. |
 | [v2.0.3](docs/V2_0_3_RELEASE_NOTES.md) | Resilient DeepSeek parsing/repair/fallback and safe upload with automatic Primary Resume selection. |
+| [v2.0.4](docs/V2_0_4_RELEASE_NOTES.md) | Portfolio architecture material, Request ID/error contracts, monitoring SQL optimization, and PostgreSQL-backed Analyze idempotency. |
 
 ## Known Limitations
 
@@ -417,7 +420,7 @@ the repository evidence. Version 1.6 and later link to formal releases.
 
 - Repository: [HKJoker-Z/personal-job-agent](https://github.com/HKJoker-Z/personal-job-agent)
 - Default branch: `main`
-- Status: Version 2.0.3 is the current stable production release.
+- Status: Version 2.0.4 is the current stable production release.
 - License: no license file is currently included. Public source visibility does
   not itself grant reuse rights; normal copyright rules apply.
 
@@ -427,9 +430,9 @@ the repository evidence. Version 1.6 and later link to formal releases.
 - [Verified Project Knowledge](docs/PROJECT_KNOWLEDGE.md)
 - [Architecture overview](docs/ARCHITECTURE.md)
 - [Architecture Decision Records](docs/adr/README.md)
-- [Fictional Version 2.0.3 demo](docs/demo/README.md)
-- [Version 2.0.3 architecture](docs/V2_0_3_ARCHITECTURE.md)
-- [Version 2.0.3 API](docs/V2_0_3_API.md)
+- [Fictional Version 2.0.4 demo](docs/demo/README.md)
+- [Version 2.0.4 architecture](docs/V2_0_4_ARCHITECTURE.md)
+- [Version 2.0.4 API](docs/V2_0_4_API.md)
 - [Authentication and Remember Me](docs/V2_AUTHENTICATION.md)
 - [Project Knowledge RAG](docs/V2_RAG.md)
 - [Development](docs/V2_DEVELOPMENT.md)

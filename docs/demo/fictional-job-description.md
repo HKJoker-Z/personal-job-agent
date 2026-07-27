@@ -1,7 +1,7 @@
 # Fictional Job Description — Demonstration Use Only
 
 This role and organization are entirely synthetic. The text is provided only
-to demonstrate Personal Job Agent Version 2.0.3.
+to demonstrate Personal Job Agent Version 2.0.4.
 
 ## Software Engineer — Meridian Sample Systems (fictional)
 

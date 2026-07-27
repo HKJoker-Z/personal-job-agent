@@ -1,28 +1,21 @@
-# Version 2.0.3 production readiness
+# Version 2.0.4 production readiness
 
-Version 2.0.3 is the current production release. Before promotion from Version
-2.0.2, it required passing PR/main checks, immutable image publication, the
-standard PostgreSQL 16 backup, one isolated restore rehearsal, isolated
-migration validation, and the `127.0.0.1:18090` candidate. The same gates remain
-the acceptance baseline for rollback rehearsals and any production recovery.
+Version 2.0.4 is ready for production only after the release, immutable-image,
+backup/restore, migration, one-candidate, Project Knowledge, cutover, cleanup,
+and rollback gates in [Deployment](DEPLOYMENT.md) pass.
 
-## Data gates
+Application acceptance covers the English Architecture page and ADRs, fictional
+three-minute demo assets, Request ID correlation, the stable four-field Analyze
+error contract, PostgreSQL-backed keyed Analyze replay/conflict/concurrency,
+atomic History completion, fallback replay, and the optimized PostgreSQL
+Monitoring aggregation.
 
-- Back up PostgreSQL, Compose/configuration, private Resume files, runtime Project Knowledge, and exact Version 2.0.2 Backend/Frontend digests.
-- Preserve the existing PostgreSQL 16 client/server/digest and manifest verification gates; never edit a dump to bypass compatibility.
-- Validate migration `20260721_05` first in isolation. It may add only `resumes.is_primary`, backfill newest active Resumes, and create `uq_resumes_user_primary_active`.
-- Confirm every existing Resume and Resume Version remains present and only one active primary exists per user.
-- Preserve all Volumes and rollback assets.
+Infrastructure acceptance requires PostgreSQL 16 at Alembic `20260724_06`,
+healthy Redis/Worker/Outbox, exact component digests, stable restart counts,
+HTTPS, only public Edge 8080, and preservation of `pja-br0`, routing preference
+8999, Mihomo, TLS, persistent volumes, and Version 2.0.3 rollback assets.
 
-## Application gates
-
-- Full Backend/PostgreSQL and Frontend suites, production bundle, Docker builds, image inspection, Compose validation, and isolated Mock smoke pass.
-- Analysis returns stable `complete`, `repaired`, `partial`, or `fallback` structures. A repair invokes DeepSeek at most once and fallback works on provider timeout/5xx or unusable output.
-- PDF, DOCX, TXT, and Markdown upload works at the configured 10 MB limit. No-text PDF fails safely. Failed upload does not change primary selection.
-- Latest successful upload becomes primary, deletion chooses the newest remaining Resume, ownership isolation holds, and Analyze defaults to primary while allowing a request-only override.
-
-## Infrastructure gates
-
-Only Edge 8080 is public. Backend 8000, PostgreSQL 5432, and Redis 6379 remain unpublished. Production retains private authenticated Redis, Secure/HttpOnly/SameSite=Lax Sessions, trusted Origins/Hosts, CSRF, disabled API docs, configured cost rates, and `MOCK_PROVIDER_ENABLED=false`.
-
-Stop promotion on any failed workflow, migration/data-count mismatch, backup/restore failure, floating application image, secret exposure, candidate/public version instability, unhealthy dependency, upload/primary/Analyze/History/RAG regression, inability to restore Version 2.0.2, or any requirement to alter TLS, Mihomo, `pja-br0`, preference 8999, or delete a Volume.
+Stop promotion on any failed required check, manifest/checksum or restored-data
+mismatch, unexpected Project Knowledge diff, real-provider access, floating
+image, version instability, duplicate History, unhealthy dependency, restart,
+public private-service port, or inability to restore Version 2.0.3.
