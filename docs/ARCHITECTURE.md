@@ -1,6 +1,6 @@
 # Personal Job Agent Architecture
 
-This document describes the architecture implemented by the Version 2.0.3
+This document describes the architecture implemented by the Version 2.0.4
 release. Personal Job Agent is a **modular monolith**, not a collection of
 event-driven microservices. The FastAPI application contains the product
 modules and request orchestration in one deployable backend. PostgreSQL, Redis,
@@ -169,7 +169,7 @@ publication attempts as dead letters. Dramatiq workers claim steps with
 database locks, attempts, and leases; write heartbeats; recover expired work;
 and let application-owned retry rules decide whether a step is rescheduled.
 
-In Version 2.0.3, this machinery remains a production health dependency and
+In Version 2.0.4, this machinery remains a production health dependency and
 supports retained Agent Run state, but the Application-based public workflow
 that created new runs is retired. Users may inspect retained Runs, read their
 Steps/Events and authenticated SSE stream, and cancel them. Public create,
@@ -189,4 +189,4 @@ retry, and resume requests are disabled.
 The [ADR index](adr/README.md) records the existing decisions behind the
 modular monolith, advisory analysis boundary, and Redis/worker foundation.
 Version-specific detail remains in
-[Version 2.0.3 Architecture](V2_0_3_ARCHITECTURE.md).
+[Version 2.0.4 Architecture](V2_0_4_ARCHITECTURE.md).
