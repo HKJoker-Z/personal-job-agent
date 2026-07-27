@@ -75,6 +75,11 @@ focused Analyze codes are:
 - `PROJECT_KNOWLEDGE_RETRIEVAL_FAILED`
 - `OUTPUT_SECURITY_BLOCKED`
 - `ANALYZE_PERSISTENCE_FAILED`
+- `IDEMPOTENCY_KEY_INVALID`
+- `IDEMPOTENCY_KEY_REUSED`
+- `IDEMPOTENCY_REQUEST_IN_PROGRESS`
+- `IDEMPOTENCY_OUTCOME_UNKNOWN`
+- `IDEMPOTENCY_PERSISTENCE_FAILED`
 - `UNEXPECTED_SERVER_ERROR`
 
 `details` contains only bounded, allowlisted workflow or security metadata.
@@ -85,8 +90,33 @@ text. The frontend maps the stable code to a safe user message and displays
 
 This envelope is intentionally limited to `POST /api/analyze` and security or
 validation failures for that route. Other endpoints retain their existing
-`detail` behavior for compatibility. This version does not add an
-`Idempotency-Key` contract or Analyze idempotency.
+`detail` behavior for compatibility.
+
+### Analyze idempotency
+
+`Idempotency-Key` is optional. Omitting it preserves existing synchronous
+behavior. A key contains 8–128 ASCII letters, digits, `.`, `_`, `:`, or `-`,
+starting with a letter or digit. It is scoped to the authenticated user and
+Analyze operation, is not an authentication credential, and is stored only as
+a domain-separated SHA-256 hash.
+
+The authoritative server fingerprint covers effective normalized Resume/JD
+hashes, Resume Version ID, normalized Job URL, RAG/top-k, current Project
+Knowledge version hash, History choice, model, analysis contract, and security
+policy. Canonical JSON uses stable keys, explicit nulls, UTF-8, and a version.
+
+- completed duplicate: stored status/body and `Idempotency-Replayed: true`;
+- changed effective inputs: `409 IDEMPOTENCY_KEY_REUSED`;
+- active lease: `409 IDEMPOTENCY_REQUEST_IN_PROGRESS` and bounded `Retry-After`;
+- stale pre-provider lease: atomic takeover with a new attempt token;
+- stale provider-started lease: `409 IDEMPOTENCY_OUTCOME_UNKNOWN`, without an
+  automatic provider retry.
+
+Only `Idempotency-Replayed` and `X-Request-ID` are exposed through CORS.
+PostgreSQL is the source of truth. The SDK uses `max_retries=0`; one primary
+application call and at most one explicit format-repair call remain possible.
+This prevents duplicate completed work but does not claim external exactly-once
+execution.
 
 ## Resumes
 

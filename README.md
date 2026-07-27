@@ -14,7 +14,7 @@ applications, contact employers, or guarantee an Applicant Tracking System
 | Item | Current state |
 | --- | --- |
 | Stable release | **2.0.3** — Resilient Analysis and Primary Resume Upload |
-| Production schema | Alembic `20260721_05` (`head`) |
+| Production schema | Alembic `20260724_06` (`head`) |
 | Production database | PostgreSQL 16 |
 | Runtime topology | HTTPS Edge, Frontend, Backend, PostgreSQL, Redis, Worker, and Outbox Dispatcher |
 
@@ -93,6 +93,13 @@ The system tries to preserve every usable part of an analysis. An invalid
 non-critical field, unsupported claim, or unknown evidence ID produces a warning
 or is ignored; it no longer discards an otherwise usable result. DeepSeek is not
 guaranteed to return a complete analysis on every request.
+
+Analyze reliability: the frontend supplies a per-submission UUIDv4
+`Idempotency-Key`. PostgreSQL is the durable source of truth for keyed requests,
+so a completed duplicate replays the stored response without another provider
+call or History row. The API stays synchronous. It does not claim external
+exactly-once execution; a crash beyond the recorded provider boundary becomes
+`indeterminate` and is not automatically retried.
 
 | Result state | Meaning |
 | --- | --- |

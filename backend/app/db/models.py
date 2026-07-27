@@ -1166,6 +1166,49 @@ class ApplicationRecord(Base):
     notes: Mapped[str | None] = mapped_column(Text)
 
 
+class AnalyzeIdempotencyRecord(TimestampMixin, Base):
+    """Durable, user-scoped ledger for synchronous Analyze submissions."""
+
+    __tablename__ = "analyze_idempotency_records"
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id",
+            "operation",
+            "idempotency_key_hash",
+            name="uq_analyze_idempotency_scope_key",
+        ),
+        CheckConstraint(
+            "status IN ('processing','completed','failed','indeterminate')",
+            name="analyze_idempotency_status_valid",
+        ),
+        CheckConstraint("attempt_count >= 1", name="analyze_idempotency_attempt_count_positive"),
+        Index("ix_analyze_idempotency_expiry_status", "expires_at", "status"),
+        Index("ix_analyze_idempotency_processing_lease", "status", "lease_expires_at"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    user_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    operation: Mapped[str] = mapped_column(String(80), nullable=False)
+    idempotency_key_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    request_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False)
+    request_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    attempt_token: Mapped[UUID] = mapped_column(Uuid, nullable=False)
+    response_status: Mapped[int | None] = mapped_column(Integer)
+    response_body: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    history_record_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("application_records.id", ondelete="SET NULL")
+    )
+    provider_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    lease_expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    attempt_count: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    error_code: Mapped[str | None] = mapped_column(String(80))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 class KnowledgeDocument(Base):
     __tablename__ = "knowledge_documents"
 

@@ -5,7 +5,7 @@
 Personal Job Agent is a private, administrator-led web application for
 evidence-grounded Resume and Job Description analysis. The current stable and
 production version is **2.0.3**. The current Alembic schema revision is
-`20260721_05` (`head`).
+`20260724_06` (`head`).
 
 The application uses a React/Vite frontend, a FastAPI/Python backend,
 SQLAlchemy 2, PostgreSQL 16, Redis, Dramatiq, a Transactional Outbox, Nginx,
@@ -28,6 +28,14 @@ The Resume page now accepts PDF, DOCX, TXT, MD, and Markdown (10 MB default).
 The latest successful upload becomes Primary and Analyze loads its active
 Version. Alembic `20260721_05` adds `resumes.is_primary`, backfills the newest
 active Resume per user, and preserves existing data.
+
+Analyze accepts an optional user-scoped `Idempotency-Key`. PostgreSQL table
+`analyze_idempotency_records` is the durable source of truth at Alembic
+`20260724_06`. Completed duplicates replay without a new provider call or
+History row. The synchronous workflow records provider-start boundaries,
+disables SDK automatic transport retries, permits one explicit format repair,
+and treats an ambiguous provider-started crash as indeterminate rather than
+claiming external exactly-once execution.
 
 ## Current Product Workflow
 

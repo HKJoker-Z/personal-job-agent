@@ -1,4 +1,6 @@
 import os
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -14,10 +16,11 @@ from sqlalchemy.exc import IntegrityError
 import database
 import monitoring_service
 from app.auth.service import AuthService
+from app.analyze.idempotency import AnalyzeIdempotencyService, IdempotencyError, hash_key
 from app.core.config import load_v2_settings
 from app.db.engine import build_engine
 from app.db.session import session_factory
-from app.db.models import Application, ApplicationStageHistory, Job
+from app.db.models import AnalyzeIdempotencyRecord, Application, ApplicationStageHistory, Job
 from app.jobs.service import JobService
 from app.applications.service import ApplicationConflict, ApplicationService
 from app.resumes.service import ResumeService
@@ -114,6 +117,38 @@ class V2PostgreSQLIntegrationTest(unittest.TestCase):
         )
         self.assertEqual(deleted["analysis_metrics_deleted"], 1)
         self.assertTrue(database.delete_knowledge_document(document["id"]))
+
+    def test_analyze_idempotency_unique_claim_is_process_safe(self):
+        owner = self.create_owner()
+        barrier = Barrier(2)
+
+        def claim():
+            service = AnalyzeIdempotencyService()
+            barrier.wait()
+            try:
+                return service.claim(
+                    user_id=owner.id,
+                    key_hash=hash_key("postgres-12345678-1234-4123-8123-123456789abc"),
+                    fingerprint="f" * 64,
+                    request_id="postgres-concurrent-claim",
+                )
+            except IdempotencyError as exc:
+                return exc
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            outcomes = list(executor.map(lambda _: claim(), range(2)))
+        winners = [item for item in outcomes if not isinstance(item, IdempotencyError)]
+        losers = [item for item in outcomes if isinstance(item, IdempotencyError)]
+        self.assertEqual(len(winners), 1)
+        self.assertEqual(len(losers), 1)
+        self.assertEqual(losers[0].code, "IDEMPOTENCY_REQUEST_IN_PROGRESS")
+        db = session_factory(self.database_url)()
+        try:
+            records = db.scalars(select(AnalyzeIdempotencyRecord)).all()
+            self.assertEqual(len(records), 1)
+            self.assertEqual(records[0].attempt_count, 1)
+        finally:
+            db.close()
 
     def test_workflow_step_aggregate_preserves_counts_latency_and_date_boundaries(self):
         start = datetime(2026, 6, 24, 4, 0, tzinfo=timezone.utc)
