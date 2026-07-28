@@ -1,0 +1,16 @@
+spring:
+  main:
+    banner-mode: "off"
+
+server:
+  address: 127.0.0.1
+
+jd-normalization:
+  security:
+    api-key: TEST_ONLY_INTERNAL_API_KEY_32_BYTES_LONG
+    authentication-disabled: false
+
+logging:
+  structured:
+    format:
+      console:
