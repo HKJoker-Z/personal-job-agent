@@ -1,0 +1,72 @@
+spring:
+  application:
+    name: jd-normalization-service
+  main:
+    banner-mode: "off"
+  jackson:
+    deserialization:
+      fail-on-unknown-properties: true
+  mvc:
+    throw-exception-if-no-handler-found: true
+  web:
+    resources:
+      add-mappings: false
+
+server:
+  address: ${JD_NORMALIZATION_BIND_ADDRESS:127.0.0.1}
+  port: ${JD_NORMALIZATION_PORT:8091}
+  error:
+    include-binding-errors: never
+    include-exception: false
+    include-message: never
+    include-stacktrace: never
+    whitelabel:
+      enabled: false
+
+jd-normalization:
+  dictionary-resource: classpath:skills/skills-v1.json
+  dictionary-max-entries: 256
+  security:
+    api-key: ${JD_NORMALIZATION_API_KEY:}
+    authentication-disabled: false
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      show-components: never
+      show-details: never
+      probes:
+        enabled: true
+  health:
+    livenessstate:
+      enabled: true
+    readinessstate:
+      enabled: true
+
+springdoc:
+  api-docs:
+    enabled: true
+    path: /v3/api-docs
+  packages-to-scan: io.github.hkjokerz.jobagent.jdnormalization.web
+  paths-to-match: /api/v1/job-descriptions/normalize
+  swagger-ui:
+    enabled: false
+
+logging:
+  structured:
+    format:
+      console: ecs
+
+---
+spring:
+  config:
+    activate:
+      on-profile: dev
+
+jd-normalization:
+  security:
+    authentication-disabled: ${JD_NORMALIZATION_AUTH_DISABLED:false}

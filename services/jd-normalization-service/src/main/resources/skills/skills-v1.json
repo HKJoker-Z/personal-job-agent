@@ -1,0 +1,31 @@
+{
+  "version": "skills-v1",
+  "skills": [
+    {"id": "aws", "name": "AWS", "aliases": ["aws", "amazon web services"], "match_type": "PHRASE"},
+    {"id": "azure", "name": "Azure", "aliases": ["azure", "microsoft azure"], "match_type": "PHRASE"},
+    {"id": "c", "name": "C", "aliases": ["c language"], "match_type": "PHRASE"},
+    {"id": "c-sharp", "name": "C#", "aliases": ["c#", "c sharp", "csharp"], "match_type": "TOKEN"},
+    {"id": "c-plus-plus", "name": "C++", "aliases": ["c++", "c plus plus", "cplusplus"], "match_type": "TOKEN"},
+    {"id": "ci-cd", "name": "CI/CD", "aliases": ["ci/cd", "continuous integration", "continuous delivery"], "match_type": "PHRASE"},
+    {"id": "docker", "name": "Docker", "aliases": ["docker", "docker engine"], "match_type": "TOKEN"},
+    {"id": "dotnet", "name": ".NET", "aliases": [".net", "dotnet", "asp.net"], "match_type": "TOKEN"},
+    {"id": "fastapi", "name": "FastAPI", "aliases": ["fastapi", "fast api"], "match_type": "TOKEN"},
+    {"id": "flyway", "name": "Flyway", "aliases": ["flyway"], "match_type": "TOKEN"},
+    {"id": "git", "name": "Git", "aliases": ["git", "git scm"], "match_type": "TOKEN"},
+    {"id": "hibernate", "name": "Hibernate", "aliases": ["hibernate", "hibernate orm"], "match_type": "TOKEN"},
+    {"id": "java", "name": "Java", "aliases": ["java", "java 21"], "match_type": "TOKEN"},
+    {"id": "javascript", "name": "JavaScript", "aliases": ["javascript", "ecmascript"], "match_type": "TOKEN"},
+    {"id": "jpa", "name": "JPA", "aliases": ["jpa", "jakarta persistence"], "match_type": "TOKEN"},
+    {"id": "kubernetes", "name": "Kubernetes", "aliases": ["kubernetes", "k8s"], "match_type": "TOKEN"},
+    {"id": "linux", "name": "Linux", "aliases": ["linux", "gnu/linux"], "match_type": "TOKEN"},
+    {"id": "maven", "name": "Maven", "aliases": ["maven", "apache maven"], "match_type": "TOKEN"},
+    {"id": "nodejs", "name": "Node.js", "aliases": ["node.js", "nodejs"], "match_type": "TOKEN"},
+    {"id": "postgresql", "name": "PostgreSQL", "aliases": ["postgresql", "postgres"], "match_type": "TOKEN"},
+    {"id": "python", "name": "Python", "aliases": ["python", "python 3"], "match_type": "TOKEN"},
+    {"id": "react", "name": "React", "aliases": ["react", "react.js"], "match_type": "TOKEN"},
+    {"id": "redis", "name": "Redis", "aliases": ["redis"], "match_type": "TOKEN"},
+    {"id": "rest", "name": "REST", "aliases": ["rest", "rest api", "restful api"], "match_type": "TOKEN"},
+    {"id": "spring-boot", "name": "Spring Boot", "aliases": ["spring boot", "springboot"], "match_type": "PHRASE"},
+    {"id": "typescript", "name": "TypeScript", "aliases": ["typescript"], "match_type": "TOKEN"}
+  ]
+}
