@@ -163,5 +163,18 @@ class NormalizationApiWebTest {
         mockMvc.perform(get("/swagger-ui/index.html"))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.error.code").value("ROUTE_NOT_FOUND"));
+
+        mockMvc.perform(get("/v3/api-docs.yaml")
+                        .header("Authorization", "Bearer " + API_KEY))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error.code").value("ROUTE_NOT_FOUND"));
+
+        mockMvc.perform(get("/actuator"))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error.code").value("ROUTE_NOT_FOUND"));
+
+        mockMvc.perform(get("/actuator/metrics"))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error.code").value("ROUTE_NOT_FOUND"));
     }
 }

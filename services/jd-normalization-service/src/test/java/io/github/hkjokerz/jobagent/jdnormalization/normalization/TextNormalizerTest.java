@@ -37,6 +37,13 @@ class TextNormalizerTest {
     }
 
     @Test
+    void collapsesOnlyHorizontalWhitespaceInsideJobDescriptionLines() {
+        assertThat(normalizer.normalizeJobDescription(
+                        "a\t\u1680\u2003b\u000bc\u000cd"))
+                .isEqualTo("a b\u000bc\u000cd");
+    }
+
+    @Test
     void removesNulAndNormalizesUnicodeToNfc() {
         assertThat(normalizer.normalizeJobDescription("\u0000A\u030A"))
                 .isEqualTo("Å")
@@ -105,5 +112,14 @@ class TextNormalizerTest {
                 .satisfies(exception -> assertThat(
                                 ((NormalizationPolicy.Violation) exception).rule())
                         .isEqualTo("max_code_points"));
+    }
+
+    @Test
+    void acceptsMetadataAtTheUnicodeCodePointBoundary() {
+        String boundary = "😀".repeat(NormalizationPolicy.MAX_METADATA_CODE_POINTS);
+
+        assertThat(normalizer.normalizeMetadata(boundary, "metadata.title"))
+                .isEqualTo(boundary)
+                .hasSize(NormalizationPolicy.MAX_METADATA_CODE_POINTS * 2);
     }
 }

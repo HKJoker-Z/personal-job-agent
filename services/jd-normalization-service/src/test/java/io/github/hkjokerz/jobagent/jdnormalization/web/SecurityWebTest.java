@@ -5,10 +5,12 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import io.github.hkjokerz.jobagent.jdnormalization.JdNormalizationServiceApplication;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.context.runner.WebApplicationContextRunner;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
@@ -47,5 +49,54 @@ class SecurityWebTest {
                 .andExpect(status().isOk())
                 .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers
                         .header().doesNotExist("Access-Control-Allow-Origin"));
+    }
+
+    @Test
+    void startupRejectsMissingOrShortKeyOutsideDevelopmentMode() {
+        for (String suppliedKey : new String[] {"", "short-test-key"}) {
+            new WebApplicationContextRunner()
+                    .withUserConfiguration(JdNormalizationServiceApplication.class)
+                    .withPropertyValues(
+                            "spring.profiles.active=default",
+                            "server.address=127.0.0.1",
+                            "jd-normalization.security.authentication-disabled=false",
+                            "jd-normalization.security.api-key=" + suppliedKey)
+                    .run(context -> {
+                        org.assertj.core.api.Assertions.assertThat(context).hasFailed();
+                        org.assertj.core.api.Assertions.assertThat(context.getStartupFailure())
+                                .hasRootCauseMessage(
+                                        "JD_NORMALIZATION_API_KEY must contain at least 32 bytes");
+                    });
+        }
+    }
+
+    @Test
+    void startupRejectsDisabledAuthenticationWithoutExactDevLoopbackMode() {
+        new WebApplicationContextRunner()
+                .withUserConfiguration(JdNormalizationServiceApplication.class)
+                .withPropertyValues(
+                        "server.address=127.0.0.1",
+                        "jd-normalization.security.authentication-disabled=true")
+                .run(context -> {
+                    org.assertj.core.api.Assertions.assertThat(context).hasFailed();
+                    org.assertj.core.api.Assertions.assertThat(context.getStartupFailure())
+                            .hasRootCauseMessage(
+                                    "Disabled authentication requires the exact dev profile "
+                                            + "and loopback binding");
+                });
+
+        new WebApplicationContextRunner()
+                .withUserConfiguration(JdNormalizationServiceApplication.class)
+                .withPropertyValues(
+                        "spring.profiles.active=dev",
+                        "server.address=0.0.0.0",
+                        "jd-normalization.security.authentication-disabled=true")
+                .run(context -> {
+                    org.assertj.core.api.Assertions.assertThat(context).hasFailed();
+                    org.assertj.core.api.Assertions.assertThat(context.getStartupFailure())
+                            .hasRootCauseMessage(
+                                    "Disabled authentication requires the exact dev profile "
+                                            + "and loopback binding");
+                });
     }
 }

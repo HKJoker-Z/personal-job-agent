@@ -22,7 +22,7 @@ public class TextNormalizer {
         boolean pendingBlank = false;
 
         for (String sourceLine : sourceLines) {
-            String line = collapseWhitespace(sourceLine);
+            String line = collapseHorizontalWhitespace(sourceLine);
             if (line.isEmpty()) {
                 if (!outputLines.isEmpty()) {
                     pendingBlank = true;
@@ -109,12 +109,23 @@ public class TextNormalizer {
     }
 
     static String collapseWhitespace(String value) {
+        return collapseMatchingWhitespace(value, false);
+    }
+
+    private static String collapseHorizontalWhitespace(String value) {
+        return collapseMatchingWhitespace(value, true);
+    }
+
+    private static String collapseMatchingWhitespace(String value, boolean horizontalOnly) {
         StringBuilder output = new StringBuilder(value.length());
         boolean pendingSpace = false;
         for (int offset = 0; offset < value.length();) {
             int codePoint = value.codePointAt(offset);
             offset += Character.charCount(codePoint);
-            if (isUnicodeWhitespace(codePoint)) {
+            boolean matchingWhitespace = horizontalOnly
+                    ? isHorizontalWhitespace(codePoint)
+                    : isUnicodeWhitespace(codePoint);
+            if (matchingWhitespace) {
                 if (!output.isEmpty()) {
                     pendingSpace = true;
                 }
@@ -127,6 +138,10 @@ public class TextNormalizer {
             }
         }
         return output.toString();
+    }
+
+    private static boolean isHorizontalWhitespace(int codePoint) {
+        return codePoint == '\t' || Character.isSpaceChar(codePoint);
     }
 
     static boolean isUnicodeWhitespace(int codePoint) {

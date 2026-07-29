@@ -48,17 +48,17 @@ public class JobDescriptionNormalizer {
         String contentHash = sha256(normalizedText);
         long durationMillis = (System.nanoTime() - started) / 1_000_000;
 
-        LOGGER.info(
-                "jd_normalization_completed policy={} dictionary={} required_count={} "
-                        + "preferred_count={} mentioned_count={} normalized_code_points={} "
-                        + "duration_ms={}",
-                NormalizationPolicy.VERSION,
-                skillExtractor.dictionaryVersion(),
-                matches.required().size(),
-                matches.preferred().size(),
-                matches.mentioned().size(),
-                normalizedText.codePointCount(0, normalizedText.length()),
-                durationMillis);
+        LOGGER.atInfo()
+                .addKeyValue("normalization_policy", NormalizationPolicy.VERSION)
+                .addKeyValue("skill_dictionary", skillExtractor.dictionaryVersion())
+                .addKeyValue("required_count", matches.required().size())
+                .addKeyValue("preferred_count", matches.preferred().size())
+                .addKeyValue("mentioned_count", matches.mentioned().size())
+                .addKeyValue(
+                        "normalized_code_points",
+                        normalizedText.codePointCount(0, normalizedText.length()))
+                .addKeyValue("normalization_duration_ms", durationMillis)
+                .log("jd_normalization_completed");
 
         return new NormalizationResult(
                 normalizedText,

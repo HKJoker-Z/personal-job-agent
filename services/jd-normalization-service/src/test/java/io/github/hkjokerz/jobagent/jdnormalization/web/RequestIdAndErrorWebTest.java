@@ -15,6 +15,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import io.github.hkjokerz.jobagent.jdnormalization.normalization.JobDescriptionNormalizer;
 import io.github.hkjokerz.jobagent.jdnormalization.normalization.NormalizationPolicy;
 import org.junit.jupiter.api.Test;
+import org.slf4j.MDC;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -64,6 +65,17 @@ class RequestIdAndErrorWebTest {
                 .andExpect(jsonPath("$.error.code").value("INVALID_REQUEST_ID"))
                 .andExpect(jsonPath("$.error.request_id")
                         .value(matchesPattern(UUID_V4_PATTERN)));
+
+        mockMvc.perform(post(ENDPOINT)
+                        .header("X-Request-ID", "a".repeat(65))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"raw_text\":\"private-text\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value("INVALID_REQUEST_ID"))
+                .andExpect(jsonPath("$.error.request_id")
+                        .value(matchesPattern(UUID_V4_PATTERN)));
+
+        org.assertj.core.api.Assertions.assertThat(MDC.getCopyOfContextMap()).isNull();
     }
 
     @Test
@@ -83,6 +95,16 @@ class RequestIdAndErrorWebTest {
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error.code").value("INVALID_REQUEST"))
                 .andExpect(jsonPath("$.error.details").isMap());
+
+        byte[] utf16Json = "{\"raw_text\":\"secret-marker\"}"
+                .getBytes(java.nio.charset.StandardCharsets.UTF_16BE);
+        mockMvc.perform(post(ENDPOINT)
+                        .header("Authorization", "Bearer " + API_KEY)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(utf16Json))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value("INVALID_REQUEST"))
+                .andExpect(content().string(not(containsString("secret-marker"))));
     }
 
     @Test
