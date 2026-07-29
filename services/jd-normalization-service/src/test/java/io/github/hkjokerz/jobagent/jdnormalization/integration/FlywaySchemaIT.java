@@ -76,9 +76,11 @@ class FlywaySchemaIT extends PostgreSqlIntegrationSupport {
                         "spring.flyway.enabled=false",
                         "spring.jpa.hibernate.ddl-auto=validate",
                         "spring.jpa.database-platform=org.hibernate.dialect.PostgreSQLDialect",
+                        "spring.jpa.properties.hibernate.default_schema="
+                                + "startup_invalid_schema",
                         "jd-normalization.security.api-key=" + API_KEY,
                         "server.address=127.0.0.1",
-                        "management.endpoint.health.group.readiness.include=readinessState,db")
+                        "management.endpoint.health.validate-group-membership=false")
                 .run(context -> {
                     assertThat(context).hasFailed();
                     assertThat(context.getStartupFailure())
