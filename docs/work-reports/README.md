@@ -6,6 +6,7 @@ reviewable in Git history.
 
 | Date | Report |
 |---|---|
+| 2026-07-29 | [Java JD Normalization Service Phase 2A PostgreSQL Read Model](2026-07-29-java-jd-normalization-service-phase-2a-postgresql-read-model-work-report.md) |
 | 2026-07-28 | [Java JD Normalization Service Phase 1](2026-07-28-java-jd-normalization-service-phase-1-work-report.md) |
 | 2026-07-28 | [Java JD Normalization Service Design Audit](2026-07-28-java-jd-normalization-service-design-audit-work-report.md) |
 | 2026-07-27 | [Redis Caching Suitability Audit](2026-07-27-redis-caching-suitability-audit-work-report.md) |

@@ -1,56 +1,104 @@
 # JD Normalization Service
 
-The JD Normalization Service is a small, independent Java 21 portfolio service.
-Phase 1 accepts bounded Job Description text and explicitly supplied metadata,
-applies deterministic normalization, extracts lexical skill keywords from a
-reviewed versioned dictionary, and returns a SHA-256 content hash.
+The JD Normalization Service is a small, independent Java 21 portfolio
+service. It deterministically normalizes bounded Job Description text and owns
+a dedicated PostgreSQL database for an immutable read model.
 
-The honest repository architecture is one existing FastAPI modular monolith
-plus this one bounded Java portfolio service. The Java service does not replace
-the FastAPI Analyze pipeline and does not share application state with it.
+The honest repository architecture remains one existing FastAPI modular
+monolith plus this one bounded Java service. The Java service does not connect
+to the Personal Job Agent database, share SQLAlchemy tables, replace the
+FastAPI Analyze pipeline, or constitute a broad microservice platform.
 
-## Phase 1 scope
+## Implemented scope
 
-The only product endpoint is:
+Phase 1 remains unchanged:
 
 ```text
 POST /api/v1/job-descriptions/normalize
 ```
 
-Phase 1 has no persistence, database, JPA, Flyway, idempotent create operation,
-version history, pagination, Docker image, Compose service, scraping, URL
-fetching, FastAPI integration, DeepSeek call, LLM use, ranking, job
-application, task creation, or autonomous decision.
+Phase 2A adds read-only database APIs:
 
-Future persistence and optional FastAPI HTTP integration are planned phases,
-not implemented behavior. This service must not be exposed publicly without a
-separately approved authentication and operations design.
+```text
+GET /api/v1/job-descriptions/{id}
+GET /api/v1/job-descriptions
+GET /api/v1/job-descriptions/{id}/versions
+```
+
+There is no public persistence `POST`, `PUT`, `PATCH`, or `DELETE` endpoint.
+There is no idempotency key, request-idempotency table, update path, seed
+endpoint, Dockerfile, Compose service, FastAPI integration, Redis cache,
+DeepSeek/LLM call, image publication, release, or deployment.
+
+Phase 2B public idempotent create behavior is planned and not implemented.
+This service is not approved for public or production exposure.
 
 ## Requirements
 
 - Java 21
+- PostgreSQL 16 for manual runtime use
+- Docker access for the PostgreSQL 16.14 Testcontainers integration suite
 - POSIX shell or Windows PowerShell/Command Prompt
 - Internet access for the Maven Wrapper's first dependency download
 
-The repository-safe Maven Wrapper downloads Maven 3.9.16. It does not require a
-system Maven installation and does not commit a wrapper JAR.
+The repository-safe Maven Wrapper downloads Maven 3.9.16 and does not commit a
+wrapper JAR.
+
+## Dedicated database
+
+The service conceptually owns a database named `jd_normalization`. It must use
+database roles and credentials separate from the Personal Job Agent
+application.
+
+Required runtime configuration:
+
+```text
+JD_NORMALIZATION_JDBC_URL
+JD_NORMALIZATION_DB_USERNAME
+JD_NORMALIZATION_DB_PASSWORD
+JD_NORMALIZATION_FLYWAY_USERNAME
+JD_NORMALIZATION_FLYWAY_PASSWORD
+```
+
+The application credentials are used by JPA reads. The Flyway credentials may
+be a separate migration role. No password has a repository default. The
+tracked `.env.example` contains names only.
+
+Flyway migration `V1__create_job_description_schema.sql` owns:
+
+- `job_descriptions`, the mutable aggregate pointer;
+- `job_description_versions`, immutable committed snapshots;
+- deferred ownership and exact-current-version foreign keys;
+- unique canonical URL and current deduplication fingerprint constraints;
+- hash, version, policy, JSONB-array, and lock-version checks;
+- keyset, version-history, canonical URL, content hash, and metadata indexes;
+- a trigger rejecting every version-row `UPDATE` and `DELETE`.
+
+Flyway migrations are append-only after merge. Hibernate uses
+`ddl-auto=validate`; it does not generate the schema. Timestamps use UTC,
+open-in-view is disabled, Flyway clean and baseline are disabled, and SQL
+logging is off by default.
 
 ## Safe local startup
 
-Authentication is enabled by default. Generate a new local key with at least
-32 random bytes and keep it only in the current shell:
+Create the dedicated database and least-privilege roles outside this
+repository. Export only local credentials, then generate a fresh API key of at
+least 32 random bytes:
 
 ```bash
+export JD_NORMALIZATION_JDBC_URL='jdbc:postgresql://127.0.0.1:5432/jd_normalization'
+export JD_NORMALIZATION_DB_USERNAME='jd_normalization_app'
+export JD_NORMALIZATION_FLYWAY_USERNAME='jd_normalization_migrator'
+# Load JD_NORMALIZATION_DB_PASSWORD and JD_NORMALIZATION_FLYWAY_PASSWORD from
+# a local secret manager without echoing or committing either value.
 export JD_NORMALIZATION_API_KEY="$(openssl rand -base64 32)"
 ./mvnw -B -ntp spring-boot:run
 ```
 
-The default binding is `127.0.0.1:8091`. Do not put a real key in Git, command
-history, screenshots, or examples.
+Do not put real values in Git, shell history, screenshots, or examples.
 
-Authentication can be disabled only for explicitly local development when the
-active Spring profile is exactly `dev` and the server remains bound to a
-loopback address:
+The default binding is `127.0.0.1:8091`. Authentication can be disabled only
+when the active Spring profile is exactly `dev` and binding remains loopback:
 
 ```bash
 SPRING_PROFILES_ACTIVE=dev \
@@ -59,12 +107,12 @@ JD_NORMALIZATION_BIND_ADDRESS=127.0.0.1 \
 ./mvnw -B -ntp spring-boot:run
 ```
 
-This mode is unsafe for public or shared-network exposure. Browser session
-cookies are not accepted as authentication, and CORS is disabled.
+The development-only mode is unsafe for public or shared-network exposure.
+CORS is disabled, and browser session cookies are not authentication.
 
-## Request
+## Normalize preview
 
-Requests must be UTF-8 JSON, no larger than 512 KiB:
+Requests are UTF-8 JSON no larger than 512 KiB:
 
 ```json
 {
@@ -78,112 +126,133 @@ Requests must be UTF-8 JSON, no larger than 512 KiB:
 }
 ```
 
-`raw_text` is required and is limited to 100,000 Unicode code points.
-`metadata` and each metadata field are optional. Title, company, and location
-are each limited to 200 Unicode code points. Canonical URLs must normalize to
-an absolute HTTPS URL of no more than 2,048 ASCII characters; normalization
+`raw_text` is required and limited to 100,000 Unicode code points. Title,
+company, and location are limited to 200 code points. Canonical URLs must
+normalize to absolute HTTPS with at most 2,048 ASCII characters; normalization
 never contacts the host.
-
-With authentication enabled:
 
 ```bash
 curl --fail-with-body \
   -H "Authorization: Bearer ${JD_NORMALIZATION_API_KEY}" \
   -H "Content-Type: application/json" \
-  -H "X-Request-ID: local-example-1" \
+  -H "X-Request-ID: local-normalize-1" \
   --data '{"raw_text":"Required:\r\n- Java 21"}' \
   http://127.0.0.1:8091/api/v1/job-descriptions/normalize
 ```
 
-## Response
+`jd-normalization-v1` removes NUL, applies NFC, normalizes line separators,
+collapses bounded whitespace, preserves headings/bullets/line order, collapses
+blank lines, and emits no trailing newline. It does not translate, spell-check,
+infer metadata, rewrite prose, use network access, or claim semantic
+understanding. The content hash is
+`SHA-256(UTF-8(normalized_text))`.
 
-```json
-{
-  "normalized_text": "Required:\n- Java 21",
-  "content_hash": "ccfadb52dc7e1bb70d8700f4b1db1ed8055d0263990828da80b9ccbb5f12f68f",
-  "normalization_policy_version": "jd-normalization-v1",
-  "skill_dictionary_version": "skills-v1",
-  "required_skills": [
-    {
-      "id": "java",
-      "name": "Java"
-    }
-  ],
-  "preferred_skills": [],
-  "mentioned_skills": [],
-  "metadata": {
-    "title": null,
-    "company": null,
-    "location": null,
-    "canonical_url": null
-  }
-}
+The reviewed `skills-v1` Git artifact provides deterministic lexical matching.
+Required overrides preferred, preferred overrides mentioned, and each list is
+sorted by canonical skill ID. This is bounded keyword classification, not AI.
+
+## Current resource and ETag
+
+```bash
+curl --fail-with-body \
+  -H "Authorization: Bearer ${JD_NORMALIZATION_API_KEY}" \
+  -H "X-Request-ID: local-read-1" \
+  -D - \
+  http://127.0.0.1:8091/api/v1/job-descriptions/00000000-0000-4000-8000-000000000001
 ```
 
-The content hash is `SHA-256(UTF-8(normalized_text))`. Skill arrays contain
-only canonical `id` and display `name`, are deduplicated, and are sorted by
-canonical ID.
+The response joins the aggregate to its exact current immutable version. It
+contains the aggregate ID, normalized canonical URL, optimistic lock version,
+current version number, normalized text, lowercase SHA-256 content hash,
+policy/dictionary versions, bounded skill snapshots, normalized metadata, and
+timestamps. Internal fingerprints and byte arrays are never exposed.
 
-## Normalization policy
+The endpoint returns a strong ETag derived from
+`optimistic_lock_version`—initially `"0"`. One matching strong
+`If-None-Match` returns `304` with no body:
 
-`jd-normalization-v1` performs these operations in order:
+```bash
+curl \
+  -H "Authorization: Bearer ${JD_NORMALIZATION_API_KEY}" \
+  -H 'If-None-Match: "0"' \
+  http://127.0.0.1:8091/api/v1/job-descriptions/00000000-0000-4000-8000-000000000001
+```
 
-1. enforce the request-byte and Unicode code-point bounds;
-2. remove U+0000 NUL;
-3. normalize Unicode to NFC;
-4. convert CRLF, CR, U+0085, U+2028, and U+2029 to LF;
-5. collapse horizontal Unicode whitespace on each line to one ASCII space;
-6. trim horizontal whitespace from each line;
-7. preserve nonblank line boundaries, heading punctuation, and bullets;
-8. collapse multiple blank lines to one;
-9. remove leading and trailing blank lines; and
-10. produce no trailing newline.
+## Keyset list
 
-It does not lowercase the document, translate, spell-check, infer metadata,
-rewrite headings, reorder lines, or claim semantic understanding. An empty
-normalized value returns `422 EMPTY_JOB_DESCRIPTION`.
+The list endpoint returns summaries only; normalized text and skill arrays are
+excluded. `limit` defaults to 20 and is bounded to 1–100. Supported sort values
+are `created_at_desc` (default) and `created_at_asc`.
 
-## Skill dictionary and classification
+Exact filters:
 
-`src/main/resources/skills/skills-v1.json` is a small reviewed dictionary.
-Startup fails if required fields are missing, IDs duplicate, normalized aliases
-collide, a match type is unsupported, or the dictionary exceeds 256 entries.
-Dictionary aliases are treated as quoted data, never executable regular
-expressions.
+- case-insensitive normalized `title`, `company`, and `location`;
+- lowercase 64-character `content_hash`;
+- normalized absolute-HTTPS `canonical_url`.
 
-Versioned lexical heading and line cues classify matches as `required`,
-`preferred`, or `mentioned`. Required overrides preferred, and preferred
-overrides mentioned. This deterministic keyword matching is not semantic or AI
-understanding and can miss context, unfamiliar aliases, and nuanced prose.
+```bash
+curl --get --fail-with-body \
+  -H "Authorization: Bearer ${JD_NORMALIZATION_API_KEY}" \
+  --data-urlencode 'limit=20' \
+  --data-urlencode 'sort=created_at_desc' \
+  --data-urlencode 'company=Example Ltd' \
+  http://127.0.0.1:8091/api/v1/job-descriptions
+```
+
+Pagination uses `(created_at,id)` keysets and fetches `limit + 1`; it never uses
+`OFFSET` and does not calculate an unrequested total. `next_cursor` is
+Base64URL-encoded versioned JSON containing the sort, last timestamp/UUID, and
+a SHA-256 fingerprint of normalized filters. It contains no secret or
+authorization meaning. Changing filters or sort returns
+`400 INVALID_CURSOR`.
+
+## Immutable version history
+
+Version history defaults to `limit=10`, is bounded to 1–25, and supports
+`version_desc` (default) or `version_asc`. Its opaque versioned cursor performs
+keyset pagination by `version_number`.
+
+```bash
+curl --get --fail-with-body \
+  -H "Authorization: Bearer ${JD_NORMALIZATION_API_KEY}" \
+  --data-urlencode 'limit=10' \
+  --data-urlencode 'sort=version_desc' \
+  http://127.0.0.1:8091/api/v1/job-descriptions/00000000-0000-4000-8000-000000000001/versions
+```
+
+The API returns committed immutable versions only. It provides no mutation or
+deletion operation.
 
 ## Request IDs and errors
 
-Clients may send one `X-Request-ID` matching:
+Clients may send exactly one `X-Request-ID` matching:
 
 ```text
 [A-Za-z0-9][A-Za-z0-9._:-]{0,63}
 ```
 
-The service otherwise creates a UUIDv4. The trusted value is returned on all
-responses and placed in logging MDC. It is correlation metadata, not
+Otherwise the service creates a trusted UUIDv4. The value is returned on every
+response and placed in logging MDC. It is correlation metadata, not
 authentication or deduplication.
 
-Every API error uses this envelope:
+Every API error uses:
 
 ```json
 {
   "error": {
-    "code": "VALIDATION_FAILED",
-    "message": "The request could not be processed.",
-    "request_id": "local-example-1",
+    "code": "INVALID_CURSOR",
+    "message": "The pagination cursor is invalid.",
+    "request_id": "local-read-1",
     "details": {}
   }
 }
 ```
 
-Errors and logs omit raw and normalized JD text, metadata values, canonical
-URLs, API keys, authorization headers, request and response bodies, stack
-traces, internal paths, and exception messages.
+Read-specific codes are `JOB_DESCRIPTION_NOT_FOUND`, `INVALID_CURSOR`, and
+`DATABASE_UNAVAILABLE`. Errors and logs omit SQL, constraint names, JDBC URLs,
+database users/hosts, exception text, JD content, metadata values, canonical
+URLs, hashes, API keys, authorization headers, request/response bodies,
+filesystem paths, and stack traces.
 
 ## Health and OpenAPI
 
@@ -195,42 +264,49 @@ GET /actuator/health/liveness
 GET /actuator/health/readiness
 ```
 
-OpenAPI JSON is at `GET /v3/api-docs`. It is protected by the internal API key
-outside the `dev` profile. The document includes only the approved normalize
-endpoint, Bearer authentication, `X-Request-ID`, and the shared error schema.
-Swagger UI is not included. No other Actuator endpoint is exposed.
+Liveness contains only application liveness state and is not failed by a
+temporary database outage. Readiness requires PostgreSQL plus the migrated V1
+schema. No other Actuator endpoint is exposed.
+
+OpenAPI JSON is `GET /v3/api-docs`, protected by the internal key outside
+`dev`. It documents only the normalize and three approved read endpoints,
+Bearer authentication, `X-Request-ID`, conditional ETag behavior, and shared
+errors. Swagger UI is not included.
 
 ## Tests
 
-Run the complete Phase 1 suite:
+Unit, normalization, cursor, MockMvc, security, and application-context tests
+run without Docker:
+
+```bash
+./mvnw -B -ntp test
+```
+
+Full verification requires Docker and runs PostgreSQL 16.14 Testcontainers
+through Maven Failsafe:
 
 ```bash
 ./mvnw -B -ntp verify
 ```
 
-Target only deterministic normalization:
+Target only integration tests:
 
 ```bash
-./mvnw -B -ntp \
-  -Dtest='TextNormalizerTest,UrlNormalizerTest,SkillDictionaryLoaderTest,SkillExtractorTest,JobDescriptionNormalizerTest' \
-  test
+./mvnw -B -ntp -DskipTests -Dit.test='*IT' failsafe:integration-test failsafe:verify
 ```
 
-Target the HTTP, security, and application-context tests:
-
-```bash
-./mvnw -B -ntp \
-  -Dtest='NormalizationApiWebTest,RequestIdAndErrorWebTest,SecurityWebTest,JdNormalizationServiceApplicationTest' \
-  test
-```
-
-Tests use no PostgreSQL, Redis, H2, Testcontainers, DeepSeek, production
-configuration, or arbitrary external network call.
+The integration suite performs fresh Flyway migration/validation, Hibernate
+schema validation, direct constraint/trigger checks, current and history
+reads, ETag/304, exact filters, keyset pagination, rollback checks, and
+`EXPLAIN (FORMAT JSON)` index-eligibility evidence. It uses deterministic
+synthetic rows and never connects to production. No H2, Redis, DeepSeek, or
+arbitrary external network service is used.
 
 ## Logging
 
-The default console output uses Spring Boot structured ECS JSON. Request
-completion records include the request ID, method, route template where
-available, status, duration, and bounded response size. Normalization records
-include only policy versions, counts, normalized code-point count, and
-duration—not content or metadata.
+The console uses Spring Boot structured ECS JSON. Request completion records
+include trusted request ID, method, route template where available, status,
+duration, and bounded response size. Normalization outcome records contain
+only policy versions, counts, code-point count, and duration. JD text,
+metadata, URLs, content hashes, credentials, SQL, and complete bodies are not
+logged.
