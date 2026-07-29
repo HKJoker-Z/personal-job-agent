@@ -6,6 +6,8 @@ on:
       - "services/jd-normalization-service/**"
       - ".github/workflows/jd-normalization-service-ci.yml"
       - "docs/work-reports/2026-07-28-java-jd-normalization-service-phase-1-work-report.md"
+      - "docs/work-reports/2026-07-29-java-jd-normalization-service-phase-2a-postgresql-read-model-work-report.md"
+      - "docs/work-reports/README.md"
   push:
     branches: [main]
     paths:
@@ -65,7 +67,7 @@ jobs:
       - name: Scan Java service for obvious secrets
         working-directory: .
         run: |
-          credential_pattern='github_pat_[A-Za-z0-9_]{20,}|ghp_[A-Za-z0-9]{20,}|BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|JD_NORMALIZATION_API_KEY''=.+'
+          credential_pattern='github_pat_[A-Za-z0-9_]{20,}|ghp_[A-Za-z0-9]{20,}|BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|JD_NORMALIZATION_(API_KEY|DB_PASSWORD|FLYWAY_PASSWORD)''=.+'
           if git grep -n -E "${credential_pattern}" -- \
             'services/jd-normalization-service/' \
             ':!services/jd-normalization-service/.env.example' \
@@ -73,14 +75,31 @@ jobs:
             exit 1
           fi
 
-      - name: Verify Java service
+      - name: Require Docker for PostgreSQL Testcontainers
+        run: docker info >/dev/null
+
+      - name: Verify Java service including PostgreSQL integration tests
         run: ./mvnw -B -ntp verify
 
-      - name: Upload failed Surefire reports
+      - name: Reject skipped PostgreSQL integration tests
+        run: |
+          report_count="$(find target/failsafe-reports -name 'TEST-*.xml' -type f | wc -l)"
+          if [[ "${report_count}" -lt 3 ]]; then
+            echo "Expected all PostgreSQL integration test reports."
+            exit 1
+          fi
+          if grep -E 'skipped=\"[1-9][0-9]*\"' target/failsafe-reports/TEST-*.xml; then
+            echo "PostgreSQL integration tests must not be skipped in CI."
+            exit 1
+          fi
+
+      - name: Upload failed Surefire and Failsafe reports
         if: failure()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
-          name: jd-normalization-surefire-reports
-          path: services/jd-normalization-service/target/surefire-reports/
+          name: jd-normalization-test-reports
+          path: |
+            services/jd-normalization-service/target/surefire-reports/
+            services/jd-normalization-service/target/failsafe-reports/
           if-no-files-found: ignore
           retention-days: 7
