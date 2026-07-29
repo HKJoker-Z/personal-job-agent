@@ -2,7 +2,8 @@
 
 The JD Normalization Service is a small, independent Java 21 portfolio
 service. It deterministically normalizes bounded Job Description text and owns
-a dedicated PostgreSQL database for an immutable read model.
+a dedicated PostgreSQL database for idempotent creation and an immutable read
+model.
 
 The honest repository architecture remains one existing FastAPI modular
 monolith plus this one bounded Java service. The Java service does not connect
@@ -17,7 +18,7 @@ Phase 1 remains unchanged:
 POST /api/v1/job-descriptions/normalize
 ```
 
-Phase 2A adds read-only database APIs:
+Phase 2A read APIs remain:
 
 ```text
 GET /api/v1/job-descriptions/{id}
@@ -25,12 +26,15 @@ GET /api/v1/job-descriptions
 GET /api/v1/job-descriptions/{id}/versions
 ```
 
-There is no public persistence `POST`, `PUT`, `PATCH`, or `DELETE` endpoint.
-There is no idempotency key, request-idempotency table, update path, seed
-endpoint, Dockerfile, Compose service, FastAPI integration, Redis cache,
-DeepSeek/LLM call, image publication, release, or deployment.
+Phase 2B adds exactly one persistence endpoint:
 
-Phase 2B public idempotent create behavior is planned and not implemented.
+```text
+POST /api/v1/job-descriptions
+```
+
+There is no `PUT`, `PATCH`, `DELETE`, version-2 creation, update transaction,
+seed endpoint, Dockerfile, Compose service, FastAPI integration, Redis cache,
+DeepSeek/LLM call, image publication, release, or deployment.
 This service is not approved for public or production exposure.
 
 ## Requirements
@@ -73,6 +77,15 @@ Flyway migration `V1__create_job_description_schema.sql` owns:
 - hash, version, policy, JSONB-array, and lock-version checks;
 - keyset, version-history, canonical URL, content hash, and metadata indexes;
 - a trigger rejecting every version-row `UPDATE` and `DELETE`.
+
+Flyway migration `V2__create_request_idempotency.sql` owns:
+
+- the `request_idempotency` processing/completed ledger;
+- operation plus SHA-256 key-hash uniqueness;
+- exact 32-byte hash, state/response, JSON-object, HTTP-status, lease, and
+  retention checks;
+- a restricted optional Job Description foreign key;
+- partial indexes for expired completed cleanup and processing leases.
 
 Flyway migrations are append-only after merge. Hibernate uses
 `ddl-auto=validate`; it does not generate the schema. Timestamps use UTC,
@@ -150,6 +163,87 @@ understanding. The content hash is
 The reviewed `skills-v1` Git artifact provides deterministic lexical matching.
 Required overrides preferred, preferred overrides mentioned, and each list is
 sorted by canonical skill ID. This is bounded keyword classification, not AI.
+
+## Idempotent create
+
+`POST /api/v1/job-descriptions` accepts the same bounded body as normalize and
+requires exactly one:
+
+```text
+Idempotency-Key: [A-Za-z0-9][A-Za-z0-9._:-]{15,127}
+```
+
+The total length is 16–128 ASCII characters. UUIDv4 is recommended but is not
+required. The key is not authentication, authorization, a request ID, or an
+object ID. Its raw value is never stored, logged, or returned. PostgreSQL stores:
+
+```text
+SHA-256(UTF-8("jd-normalization:idempotency-key:v1\0" + raw_key))
+```
+
+Example:
+
+```bash
+curl --fail-with-body \
+  -H "Authorization: Bearer ${JD_NORMALIZATION_API_KEY}" \
+  -H "Idempotency-Key: $(uuidgen)" \
+  -H "Content-Type: application/json" \
+  -H "X-Request-ID: local-create-1" \
+  --data '{"raw_text":"Required:\n- Java 21","metadata":{"title":"Backend Engineer"}}' \
+  -D - \
+  http://127.0.0.1:8091/api/v1/job-descriptions
+```
+
+The first success returns `201 Created`, `Location`, strong `ETag: "0"`,
+`Cache-Control: no-store`, and the same current-resource JSON shape as
+`GET /api/v1/job-descriptions/{id}`. One PostgreSQL transaction creates the
+root, immutable version 1, and completed replay record. No network or provider
+call occurs.
+
+A completed retry with the same key and canonical request returns the stored
+status, JSON body, `Location`, and `ETag` and adds
+`Idempotency-Replayed: true`. The request is still authenticated, validated,
+normalized, and fingerprinted before replay; normalization, inserts, and
+response construction are not repeated after the ledger lookup.
+
+The ledger uses only `processing` and `completed`. A short committed claim
+transaction prevents process-local locking assumptions. An active lease
+returns `409 IDEMPOTENCY_REQUEST_IN_PROGRESS` with bounded `Retry-After`.
+An expired lease can be atomically taken over with a new attempt token, and a
+stale token cannot finalize. This differs from the FastAPI DeepSeek
+indeterminate state: Phase 2B has no external side effect, so every business
+mutation can safely occur inside the final PostgreSQL transaction.
+
+Same-key/different-request returns `409 IDEMPOTENCY_KEY_REUSED`. Canonical URL
+or current deduplication uniqueness returns
+`409 JOB_DESCRIPTION_ALREADY_EXISTS` with only an authenticated resource ID
+and `canonical_url` or `deduplication_fingerprint` category. Conflict-aware
+`INSERT ... ON CONFLICT DO NOTHING` plus a bounded lookup avoids PostgreSQL's
+aborted-transaction state, rolls back no committed aggregate, and completes
+the accepted key with a replayable stable 409.
+
+The three hashes are separate:
+
+- `content_hash` is SHA-256 of UTF-8 normalized text;
+- `jd-deduplication:v1` hashes canonical JSON covering normalized text,
+  normalized metadata, policy/dictionary versions, and ordered skill IDs;
+- `jd-create-request:v1` hashes separate canonical JSON covering the create
+  contract and all effective deterministic normalization inputs/outputs.
+
+Canonical JSON has stable key/array order and explicit nulls. It contains no
+timestamp, request ID, credential, idempotency key, generated UUID, or database
+state. Metadata changes may preserve `content_hash` while changing the
+deduplication and request fingerprints.
+
+Completed results default to 24-hour retention, processing leases default to
+30 seconds, cleanup deletes at most 100 expired completed rows per best-effort
+create-path pass, and processing rows are never cleanup targets. Stored JSON is
+limited to 256 KiB by application and database checks. Cleanup delay does not
+change replay correctness.
+
+Idempotency uniqueness is scoped to operation plus key hash. The service has
+one internal caller security scope; this is not user-level multi-tenancy and
+the ledger is not an authorization mechanism.
 
 ## Current resource and ETag
 
@@ -249,7 +343,10 @@ Every API error uses:
 ```
 
 Read-specific codes are `JOB_DESCRIPTION_NOT_FOUND`, `INVALID_CURSOR`, and
-`DATABASE_UNAVAILABLE`. Errors and logs omit SQL, constraint names, JDBC URLs,
+`DATABASE_UNAVAILABLE`. Create adds `IDEMPOTENCY_KEY_REQUIRED`,
+`IDEMPOTENCY_KEY_INVALID`, `IDEMPOTENCY_KEY_REUSED`,
+`IDEMPOTENCY_REQUEST_IN_PROGRESS`, `IDEMPOTENCY_PERSISTENCE_FAILED`, and
+`JOB_DESCRIPTION_ALREADY_EXISTS`. Errors and logs omit SQL, constraint names, JDBC URLs,
 database users/hosts, exception text, JD content, metadata values, canonical
 URLs, hashes, API keys, authorization headers, request/response bodies,
 filesystem paths, and stack traces.
@@ -265,13 +362,14 @@ GET /actuator/health/readiness
 ```
 
 Liveness contains only application liveness state and is not failed by a
-temporary database outage. Readiness requires PostgreSQL plus the migrated V1
+temporary database outage. Readiness requires PostgreSQL plus the migrated V2
 schema. No other Actuator endpoint is exposed.
 
 OpenAPI JSON is `GET /v3/api-docs`, protected by the internal key outside
-`dev`. It documents only the normalize and three approved read endpoints,
-Bearer authentication, `X-Request-ID`, conditional ETag behavior, and shared
-errors. Swagger UI is not included.
+`dev`. It documents only normalize, idempotent create, and the three approved
+read endpoints, including key grammar, replay/conflict behavior, response
+headers, Bearer authentication, `X-Request-ID`, conditional ETag behavior, and
+shared errors. Swagger UI is not included and CORS remains disabled.
 
 ## Tests
 
@@ -295,18 +393,20 @@ Target only integration tests:
 ./mvnw -B -ntp -DskipTests -Dit.test='*IT' failsafe:integration-test failsafe:verify
 ```
 
-The integration suite performs fresh Flyway migration/validation, Hibernate
-schema validation, direct constraint/trigger checks, current and history
-reads, ETag/304, exact filters, keyset pagination, rollback checks, and
-`EXPLAIN (FORMAT JSON)` index-eligibility evidence. It uses deterministic
-synthetic rows and never connects to production. No H2, Redis, DeepSeek, or
-arbitrary external network service is used.
+The integration suite performs fresh V1+V2 migration, isolated V1-to-V2
+upgrade, Flyway validation/no-op migration, V1 checksum locking, Hibernate
+schema validation, ledger constraints/indexes, create/replay/duplicate API
+behavior, separate-session concurrency, lease takeover, stale-token rejection,
+bounded cleanup, rollback checks, all prior reads, ETag/304, filters,
+pagination, and `EXPLAIN (FORMAT JSON)` index evidence. It uses PostgreSQL
+16.14 with deterministic synthetic rows and never connects to production. No
+H2, Redis, DeepSeek, or arbitrary external network service is used.
 
 ## Logging
 
 The console uses Spring Boot structured ECS JSON. Request completion records
-include trusted request ID, method, route template where available, status,
-duration, and bounded response size. Normalization outcome records contain
-only policy versions, counts, code-point count, and duration. JD text,
-metadata, URLs, content hashes, credentials, SQL, and complete bodies are not
-logged.
+contain trusted request ID, route template, status, duration, replay boolean,
+stable idempotency outcome, and a created resource ID only for a newly created
+authenticated resource. Normalization records contain duration only. JD text,
+metadata, URLs, all fingerprints/hashes, raw idempotency keys, credentials,
+SQL, constraint names, and request/response bodies are not logged.
