@@ -97,15 +97,15 @@ public record NormalizedCreate(
                 ApiErrorResponse.of(code, message, requestId, details));
     }
 
-    String requiredSkillsJson(ObjectMapper objectMapper) {
+    public String requiredSkillsJson(ObjectMapper objectMapper) {
         return json(requiredSkills, objectMapper);
     }
 
-    String preferredSkillsJson(ObjectMapper objectMapper) {
+    public String preferredSkillsJson(ObjectMapper objectMapper) {
         return json(preferredSkills, objectMapper);
     }
 
-    String mentionedSkillsJson(ObjectMapper objectMapper) {
+    public String mentionedSkillsJson(ObjectMapper objectMapper) {
         return json(mentionedSkills, objectMapper);
     }
 
