@@ -8,13 +8,13 @@ import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import io.github.hkjokerz.jobagent.jdnormalization.persistence.entity.SkillSnapshot;
+import io.github.hkjokerz.jobagent.jdnormalization.persistence.create.IdempotencyLedgerRepository;
 import io.github.hkjokerz.jobagent.jdnormalization.persistence.read.CursorCodec;
 import io.github.hkjokerz.jobagent.jdnormalization.persistence.read.JobDescriptionReadService;
 import io.github.hkjokerz.jobagent.jdnormalization.persistence.read.ReadApiException;
@@ -48,6 +48,9 @@ class JobDescriptionReadApiWebTest {
 
     @MockitoBean
     private JobDescriptionReadService readService;
+
+    @MockitoBean
+    private IdempotencyLedgerRepository idempotencyLedgerRepository;
 
     @Test
     void returnsCurrentResourceStrongEtagAndConditional304() throws Exception {
@@ -187,10 +190,6 @@ class JobDescriptionReadApiWebTest {
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error.code").value("INVALID_REQUEST"));
 
-        mockMvc.perform(post("/api/v1/job-descriptions")
-                        .header("Authorization", "Bearer " + API_KEY))
-                .andExpect(status().isMethodNotAllowed())
-                .andExpect(jsonPath("$.error.code").value("METHOD_NOT_ALLOWED"));
     }
 
     @Test
@@ -219,7 +218,11 @@ class JobDescriptionReadApiWebTest {
                         .exists())
                 .andExpect(jsonPath("$.paths['/api/v1/job-descriptions'].get").exists())
                 .andExpect(jsonPath("$.paths['/api/v1/job-descriptions'].post")
-                        .doesNotExist())
+                        .exists())
+                .andExpect(jsonPath(
+                                "$.paths['/api/v1/job-descriptions'].post.parameters"
+                                        + "[?(@.name == 'Idempotency-Key')].required")
+                        .value(true))
                 .andExpect(jsonPath("$.paths['/api/v1/job-descriptions/{id}'].get")
                         .exists())
                 .andExpect(jsonPath(
