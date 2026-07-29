@@ -10,12 +10,12 @@ command -v openssl >/dev/null 2>&1 || {
   exit 1
 }
 
-[[ "${HOST_PORT}" =~ ^[0-9]+$ ]] \
-  && ((HOST_PORT >= 1024 && HOST_PORT <= 65535)) \
-  && [[ "${HOST_PORT}" != "8080" ]] || {
+if ! [[ "${HOST_PORT}" =~ ^[0-9]+$ ]] \
+  || ((HOST_PORT < 1024 || HOST_PORT > 65535)) \
+  || [[ "${HOST_PORT}" == "8080" ]]; then
     echo "generate-compose-env: invalid loopback host port" >&2
     exit 1
-  }
+fi
 
 if [[ -e "${OUTPUT_FILE}" ]]; then
   echo "generate-compose-env: refusing to overwrite an existing file" >&2

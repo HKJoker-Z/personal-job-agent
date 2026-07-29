@@ -37,13 +37,12 @@ for variable_name in \
     required_value "${variable_name}"
 done
 
-valid_role "${POSTGRES_USER}" \
-    && valid_role "${JD_COMPOSE_MIGRATION_DB_USER}" \
-    && valid_role "${JD_COMPOSE_APP_DB_USER}" \
-    || {
-        printf '%s\n' 'Database role names must use a bounded SQL identifier grammar.' >&2
-        exit 1
-    }
+if ! valid_role "${POSTGRES_USER}" \
+    || ! valid_role "${JD_COMPOSE_MIGRATION_DB_USER}" \
+    || ! valid_role "${JD_COMPOSE_APP_DB_USER}"; then
+    printf '%s\n' 'Database role names must use a bounded SQL identifier grammar.' >&2
+    exit 1
+fi
 
 if [ "${POSTGRES_USER}" = "${JD_COMPOSE_MIGRATION_DB_USER}" ] \
     || [ "${POSTGRES_USER}" = "${JD_COMPOSE_APP_DB_USER}" ] \
