@@ -64,7 +64,6 @@ public class RequestIdFilter extends OncePerRequestFilter {
         cachingResponse.setHeader(HEADER_NAME, requestId);
 
         MDC.put("request_id", requestId);
-        MDC.put("method", request.getMethod());
         try {
             if (!resolution.valid()) {
                 ApiExceptionHandler.writeError(
@@ -138,7 +137,18 @@ public class RequestIdFilter extends OncePerRequestFilter {
                         HandlerMapping.BEST_MATCHING_PATTERN_ATTRIBUTE);
                 MDC.put("route", route == null ? "unmatched" : route.toString());
                 MDC.put("status", Integer.toString(cachingResponse.getStatus()));
-                MDC.put("response_size", Integer.toString(cachingResponse.getContentSize()));
+                putMdcAttribute(
+                        request,
+                        JobDescriptionCreateController.REPLAY_ATTRIBUTE,
+                        "idempotency_replayed");
+                putMdcAttribute(
+                        request,
+                        JobDescriptionCreateController.OUTCOME_ATTRIBUTE,
+                        "idempotency_outcome");
+                putMdcAttribute(
+                        request,
+                        JobDescriptionCreateController.CREATED_ID_ATTRIBUTE,
+                        "created_resource_id");
                 long durationMillis = (System.nanoTime() - started) / 1_000_000;
                 MDC.put("duration_ms", Long.toString(durationMillis));
                 LOGGER.info("http_request_completed");
@@ -160,6 +170,16 @@ public class RequestIdFilter extends OncePerRequestFilter {
             return new HeaderResolution(UUID.randomUUID().toString(), false);
         }
         return new HeaderResolution(values.getFirst(), true);
+    }
+
+    private static void putMdcAttribute(
+            HttpServletRequest request,
+            String attributeName,
+            String mdcName) {
+        Object value = request.getAttribute(attributeName);
+        if (value instanceof String text) {
+            MDC.put(mdcName, text);
+        }
     }
 
     private void sanitizeHealthResponse(
