@@ -2,8 +2,8 @@
 
 The JD Normalization Service is a small, independent Java 21 portfolio
 service. It deterministically normalizes bounded Job Description text and owns
-a dedicated PostgreSQL database for idempotent creation and an immutable read
-model.
+a dedicated PostgreSQL database for idempotent creation, conditional updates,
+and immutable version history.
 
 The honest repository architecture remains one existing FastAPI modular
 monolith plus this one bounded Java service. The Java service does not connect
@@ -26,14 +26,20 @@ GET /api/v1/job-descriptions
 GET /api/v1/job-descriptions/{id}/versions
 ```
 
-Phase 2B adds exactly one persistence endpoint:
+Phase 2B create remains:
 
 ```text
 POST /api/v1/job-descriptions
 ```
 
-There is no `PUT`, `PATCH`, `DELETE`, version-2 creation, update transaction,
-seed endpoint, Dockerfile, Compose service, FastAPI integration, Redis cache,
+Phase 3A adds exactly one conditional replacement endpoint:
+
+```text
+PUT /api/v1/job-descriptions/{id}
+```
+
+There is no `PATCH`, `DELETE`, bulk update, restore, version deletion, seed
+endpoint, Dockerfile, Compose service, FastAPI integration, Redis cache,
 DeepSeek/LLM call, image publication, release, or deployment.
 This service is not approved for public or production exposure.
 
@@ -91,6 +97,12 @@ Flyway migrations are append-only after merge. Hibernate uses
 `ddl-auto=validate`; it does not generate the schema. Timestamps use UTC,
 open-in-view is disabled, Flyway clean and baseline are disabled, and SQL
 logging is off by default.
+
+Phase 3A requires no migration. V1 already permits updates to the aggregate
+pointer and version numbers greater than one, its deferred constraints verify
+the exact current immutable version at commit, and its trigger permits INSERT
+while rejecting version UPDATE/DELETE. V2 is limited to create idempotency.
+Flyway head therefore remains V2; no empty V3 was created.
 
 ## Safe local startup
 
@@ -245,6 +257,86 @@ Idempotency uniqueness is scoped to operation plus key hash. The service has
 one internal caller security scope; this is not user-level multi-tenancy and
 the ledger is not an authorization mechanism.
 
+## Conditional full replacement
+
+`PUT /api/v1/job-descriptions/{id}` accepts the same bounded body as normalize
+and create, but it represents the complete replacement state. Optional metadata
+omitted from the request becomes `null`; PUT is not a partial patch.
+
+PUT requires exactly one strong `If-Match` value in canonical quoted
+nonnegative-decimal form:
+
+```text
+If-Match: "0"
+```
+
+`"0"`, `"1"`, and `"42"` are examples. Missing If-Match returns
+`428 PRECONDITION_REQUIRED`. Weak, wildcard, unquoted, negative, non-decimal,
+overflowing, comma-separated, excessive-length, or multiple values return
+`400 INVALID_IF_MATCH`. A well-formed stale value returns
+`412 PRECONDITION_FAILED` without disclosing the current ETag; an authenticated
+GET can retrieve current state.
+
+Example:
+
+```bash
+curl --fail-with-body \
+  -X PUT \
+  -H "Authorization: Bearer ${JD_NORMALIZATION_API_KEY}" \
+  -H 'If-Match: "0"' \
+  -H "Content-Type: application/json" \
+  -H "X-Request-ID: local-update-1" \
+  --data '{"raw_text":"Required:\n- Java 21\n- PostgreSQL","metadata":{"title":"Platform Engineer"}}' \
+  -D - \
+  http://127.0.0.1:8091/api/v1/job-descriptions/00000000-0000-4000-8000-000000000001
+```
+
+The update path authenticates and normalizes the full replacement, locks the
+root row, then loads its exact current immutable version using a fresh
+READ COMMITTED statement. It rejects a stale aggregate version before no-op
+detection. For a change, one transaction:
+
+1. generates one UUIDv4 and assigns the next contiguous version number;
+2. conditionally updates the root with
+   `WHERE id = ? AND optimistic_lock_version = ?`;
+3. increments the same column mapped by JPA `@Version`;
+4. changes canonical URL, current version, fingerprint, and `updated_at`;
+5. inserts exactly one immutable successor;
+6. reads back the exact current identity before deferred constraints commit.
+
+Two processes using the same ETag cannot both commit. A root update or version
+insert failure rolls the entire transaction back, so no orphan history row or
+partially advanced pointer remains. There is no network or provider call in
+the transaction.
+
+A changed update returns `200 OK`, the incremented strong ETag,
+`Cache-Control: no-store`, and the same current-resource representation as GET.
+The first update changes ETag `"0"` to `"1"` and creates version 2; later
+changed updates create contiguous immutable versions. Previous versions remain
+byte-for-byte unchanged and readable through history.
+
+If the normalized replacement and root state are already identical, PUT still
+requires a current If-Match but returns the existing 200 body and ETag without
+inserting a version, incrementing the lock, changing `updated_at`, or issuing a
+database write. Stale If-Match is never accepted as a no-op.
+
+Canonical URL and current-deduplication uniqueness remain PostgreSQL
+correctness boundaries. A conflict returns
+`409 JOB_DESCRIPTION_ALREADY_EXISTS` with only the authenticated existing ID
+and `canonical_url` or `deduplication_fingerprint` category. The target root,
+history, and ETag remain unchanged.
+
+POST and PUT solve different retry problems:
+
+- POST requires `Idempotency-Key` to suppress duplicate aggregate creation;
+- PUT requires `If-Match` to prevent lost replacement updates and does not use
+  the create ledger.
+
+Updating an aggregate never rewrites its completed create record. Replaying
+the original POST after later updates intentionally returns the historical
+stored creation response, Location, and ETag `"0"`, not the latest current
+state.
+
 ## Current resource and ETag
 
 ```bash
@@ -346,10 +438,12 @@ Read-specific codes are `JOB_DESCRIPTION_NOT_FOUND`, `INVALID_CURSOR`, and
 `DATABASE_UNAVAILABLE`. Create adds `IDEMPOTENCY_KEY_REQUIRED`,
 `IDEMPOTENCY_KEY_INVALID`, `IDEMPOTENCY_KEY_REUSED`,
 `IDEMPOTENCY_REQUEST_IN_PROGRESS`, `IDEMPOTENCY_PERSISTENCE_FAILED`, and
-`JOB_DESCRIPTION_ALREADY_EXISTS`. Errors and logs omit SQL, constraint names, JDBC URLs,
-database users/hosts, exception text, JD content, metadata values, canonical
-URLs, hashes, API keys, authorization headers, request/response bodies,
-filesystem paths, and stack traces.
+`JOB_DESCRIPTION_ALREADY_EXISTS`. Conditional update adds
+`PRECONDITION_REQUIRED`, `INVALID_IF_MATCH`, and `PRECONDITION_FAILED`.
+Errors and logs omit SQL, constraint names, JDBC URLs, database users/hosts,
+exception text, JD content, metadata values, canonical URLs, hashes, API keys,
+authorization headers, request/response bodies, filesystem paths, and stack
+traces.
 
 ## Health and OpenAPI
 
@@ -366,10 +460,11 @@ temporary database outage. Readiness requires PostgreSQL plus the migrated V2
 schema. No other Actuator endpoint is exposed.
 
 OpenAPI JSON is `GET /v3/api-docs`, protected by the internal key outside
-`dev`. It documents only normalize, idempotent create, and the three approved
-read endpoints, including key grammar, replay/conflict behavior, response
-headers, Bearer authentication, `X-Request-ID`, conditional ETag behavior, and
-shared errors. Swagger UI is not included and CORS remains disabled.
+`dev`. It documents only normalize, idempotent create, conditional full
+replacement, and the three approved read endpoints, including Idempotency-Key
+and If-Match grammar, replay/conflict behavior, response headers, Bearer
+authentication, `X-Request-ID`, conditional ETag behavior, and shared errors.
+Swagger UI is not included and CORS remains disabled.
 
 ## Tests
 
@@ -390,17 +485,21 @@ through Maven Failsafe:
 Target only integration tests:
 
 ```bash
-./mvnw -B -ntp -DskipTests -Dit.test='*IT' failsafe:integration-test failsafe:verify
+./mvnw -B -ntp test-compile \
+  -Dit.test='*IT' \
+  failsafe:integration-test failsafe:verify
 ```
 
 The integration suite performs fresh V1+V2 migration, isolated V1-to-V2
-upgrade, Flyway validation/no-op migration, V1 checksum locking, Hibernate
+upgrade, Flyway validation/no-op migration, V1/V2 checksum locking, Hibernate
 schema validation, ledger constraints/indexes, create/replay/duplicate API
-behavior, separate-session concurrency, lease takeover, stale-token rejection,
-bounded cleanup, rollback checks, all prior reads, ETag/304, filters,
-pagination, and `EXPLAIN (FORMAT JSON)` index evidence. It uses PostgreSQL
-16.14 with deterministic synthetic rows and never connects to production. No
-H2, Redis, DeepSeek, or arbitrary external network service is used.
+behavior, If-Match parsing, changed/no-op replacement, immutable version 2 and
+3 history, separate-session create/update concurrency, lease takeover,
+stale-token rejection, duplicate update races, bounded cleanup, transaction
+rollback, all prior reads, ETag/304, filters, pagination, and
+`EXPLAIN (FORMAT JSON)` index evidence. It uses PostgreSQL 16.14 with
+deterministic synthetic rows and never connects to production. No H2, Redis,
+DeepSeek, or arbitrary external network service is used.
 
 ## Logging
 

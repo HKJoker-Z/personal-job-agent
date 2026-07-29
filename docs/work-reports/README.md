@@ -6,6 +6,7 @@ reviewable in Git history.
 
 | Date | Report |
 |---|---|
+| 2026-07-29 | [Java JD Normalization Service Phase 3A Conditional Update](2026-07-29-java-jd-normalization-service-phase-3a-conditional-update-work-report.md) |
 | 2026-07-29 | [Java JD Normalization Service Phase 2B Idempotent Create](2026-07-29-java-jd-normalization-service-phase-2b-idempotent-create-work-report.md) |
 | 2026-07-29 | [Java JD Normalization Service Phase 2A PostgreSQL Read Model](2026-07-29-java-jd-normalization-service-phase-2a-postgresql-read-model-work-report.md) |
 | 2026-07-28 | [Java JD Normalization Service Phase 1](2026-07-28-java-jd-normalization-service-phase-1-work-report.md) |
