@@ -962,21 +962,33 @@ No other file is allowed in the audit PR.
 
 ## 43. Commit SHA
 
-The initial documentation commit SHA will be recorded here in a metadata-only
-correction after the pull request is created. The correction commit cannot
-self-embed its own SHA; the authoritative audit head remains visible in the
-pull request and final delivery record.
+The initial documentation commit is:
+
+`654e6cc3eee2db243b971a60053408b4d11e7d1b`
+
+This report metadata is completed by a second documentation-only correction.
+That correction cannot self-embed its own SHA; its authoritative value remains
+visible as the pull-request head and in the final delivery record.
 
 ## 44. Audit PR URL
 
-The audit PR URL will be recorded here in the metadata-only correction after
-the documentation branch is pushed and the pull request is created.
+<https://github.com/HKJoker-Z/personal-job-agent/pull/31>
 
 ## 45. GitHub CI
 
-The initial documentation head and final metadata-correction head will be
-waited to completion. Final authoritative check status will be recorded in the
-pull request and delivery record. The audit PR will not be merged.
+The initial documentation head passed all 12 checks:
+
+- repository CI run `30456243643`: backend tests, frontend build,
+  backend/PostgreSQL, Docker build, PostgreSQL 16 backup/restore, Compose
+  validation, production-runtime regression, script validation,
+  repository-safety, and Mock-LLM Docker smoke all passed; and
+- Java CI run `30456243736`: Maven/PostgreSQL verify and container smoke both
+  passed.
+
+The metadata-only correction triggers fresh checks. Its final authoritative
+status is recorded in the pull request and final delivery record after those
+checks complete. The audit PR remains open and will not be merged in this
+audit.
 
 ## 46. Confirmation that runtime code was unchanged
 
