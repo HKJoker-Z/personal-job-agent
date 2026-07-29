@@ -7,6 +7,7 @@ on:
       - ".github/workflows/jd-normalization-service-ci.yml"
       - "docs/work-reports/2026-07-28-java-jd-normalization-service-phase-1-work-report.md"
       - "docs/work-reports/2026-07-29-java-jd-normalization-service-phase-2a-postgresql-read-model-work-report.md"
+      - "docs/work-reports/2026-07-29-java-jd-normalization-service-phase-2b-idempotent-create-work-report.md"
       - "docs/work-reports/README.md"
   push:
     branches: [main]
@@ -81,13 +82,31 @@ jobs:
       - name: Verify Java service including PostgreSQL integration tests
         run: ./mvnw -B -ntp verify
 
+      - name: Inspect runtime dependency tree
+        run: |
+          ./mvnw -B -ntp dependency:tree \
+            -Dscope=runtime \
+            -DoutputFile=target/runtime-dependency-tree.txt
+          if grep -E '(^|:)h2:' target/runtime-dependency-tree.txt; then
+            echo "H2 is not permitted."
+            exit 1
+          fi
+
       - name: Reject skipped PostgreSQL integration tests
         run: |
           report_count="$(find target/failsafe-reports -name 'TEST-*.xml' -type f | wc -l)"
-          if [[ "${report_count}" -lt 3 ]]; then
+          if [[ "${report_count}" -lt 5 ]]; then
             echo "Expected all PostgreSQL integration test reports."
             exit 1
           fi
+          for report in \
+            FlywaySchemaIT \
+            PostgreSqlCreateApiIT \
+            PostgreSqlIdempotencyConcurrencyIT \
+            PostgreSqlReadApiIT \
+            QueryPlanIT; do
+            test -f "target/failsafe-reports/TEST-io.github.hkjokerz.jobagent.jdnormalization.integration.${report}.xml"
+          done
           if grep -E 'skipped=\"[1-9][0-9]*\"' target/failsafe-reports/TEST-*.xml; then
             echo "PostgreSQL integration tests must not be skipped in CI."
             exit 1

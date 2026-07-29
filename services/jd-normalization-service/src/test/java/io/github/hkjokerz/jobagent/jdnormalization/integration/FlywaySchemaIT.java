@@ -8,17 +8,22 @@ import io.github.hkjokerz.jobagent.jdnormalization.JdNormalizationServiceApplica
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.UUID;
 import javax.sql.DataSource;
 import org.flywaydb.core.Flyway;
+import org.flywaydb.core.api.MigrationVersion;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.runner.WebApplicationContextRunner;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.core.io.ClassPathResource;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -53,13 +58,63 @@ class FlywaySchemaIT extends PostgreSqlIntegrationSupport {
 
     @Test
     void freshMigrationValidatesAndSecondMigrateIsNoOp() {
-        assertThat(flyway.info().current().getVersion().getVersion()).isEqualTo("1");
+        assertThat(flyway.info().current().getVersion().getVersion()).isEqualTo("2");
         assertThat(flyway.validateWithResult().validationSuccessful).isTrue();
         assertThat(flyway.migrate().migrationsExecuted).isZero();
         assertThat(jdbcTemplate.queryForObject(
                 "SELECT count(*) FROM flyway_schema_history WHERE success",
-                Integer.class)).isEqualTo(1);
+                Integer.class)).isEqualTo(2);
         assertThat(entityManagerFactory.isOpen()).isTrue();
+    }
+
+    @Test
+    void upgradesAnIsolatedV1SchemaToV2AndPreservesV1Checksum() throws Exception {
+        String schema = "flyway_upgrade_v1_v2";
+        jdbcTemplate.execute("DROP SCHEMA IF EXISTS " + schema + " CASCADE");
+        jdbcTemplate.execute("CREATE SCHEMA " + schema);
+        try {
+            Flyway v1 = Flyway.configure()
+                    .dataSource(
+                            POSTGRES.getJdbcUrl(),
+                            POSTGRES.getUsername(),
+                            POSTGRES.getPassword())
+                    .schemas(schema)
+                    .defaultSchema(schema)
+                    .target(MigrationVersion.fromVersion("1"))
+                    .load();
+            assertThat(v1.migrate().migrationsExecuted).isEqualTo(1);
+            assertThat(v1.info().current().getVersion().getVersion()).isEqualTo("1");
+            Integer v1Checksum = v1.info().current().getChecksum();
+
+            Flyway latest = Flyway.configure()
+                    .dataSource(
+                            POSTGRES.getJdbcUrl(),
+                            POSTGRES.getUsername(),
+                            POSTGRES.getPassword())
+                    .schemas(schema)
+                    .defaultSchema(schema)
+                    .load();
+            assertThat(latest.migrate().migrationsExecuted).isEqualTo(1);
+            assertThat(latest.info().current().getVersion().getVersion()).isEqualTo("2");
+            assertThat(latest.validateWithResult().validationSuccessful).isTrue();
+            assertThat(latest.migrate().migrationsExecuted).isZero();
+            assertThat(jdbcTemplate.queryForObject(
+                    """
+                    SELECT checksum
+                    FROM %s.flyway_schema_history
+                    WHERE version = '1'
+                    """.formatted(schema),
+                    Integer.class)).isEqualTo(v1Checksum);
+
+            byte[] v1Bytes = new ClassPathResource(
+                    "db/migration/V1__create_job_description_schema.sql")
+                    .getInputStream()
+                    .readAllBytes();
+            assertThat(sha256(v1Bytes)).isEqualTo(
+                    "b73ecefbb610b06059a8e3c067f2fc874aab4e586e397739aad378aa78abcb40");
+        } finally {
+            jdbcTemplate.execute("DROP SCHEMA IF EXISTS " + schema + " CASCADE");
+        }
     }
 
     @Test
@@ -89,12 +144,16 @@ class FlywaySchemaIT extends PostgreSqlIntegrationSupport {
     }
 
     @Test
-    void createsEveryApprovedTableConstraintTriggerAndReadIndex() {
+    void createsEveryApprovedTableConstraintTriggerAndIndex() {
         assertThat(jdbcTemplate.queryForList("""
                 SELECT indexname
                 FROM pg_indexes
                 WHERE schemaname = current_schema()
-                  AND tablename IN ('job_descriptions', 'job_description_versions')
+                  AND tablename IN (
+                      'job_descriptions',
+                      'job_description_versions',
+                      'request_idempotency'
+                  )
                 """, String.class)).contains(
                         "uq_job_descriptions_canonical_url",
                         "idx_job_descriptions_created_at_id",
@@ -102,7 +161,10 @@ class FlywaySchemaIT extends PostgreSqlIntegrationSupport {
                         "idx_job_description_versions_content_hash",
                         "idx_job_description_versions_title_ci",
                         "idx_job_description_versions_company_ci",
-                        "idx_job_description_versions_location_ci");
+                        "idx_job_description_versions_location_ci",
+                        "uq_request_idempotency_operation_key_hash",
+                        "idx_request_idempotency_completed_expiry",
+                        "idx_request_idempotency_processing_lease");
 
         assertThat(jdbcTemplate.queryForObject("""
                 SELECT count(*)
@@ -116,14 +178,167 @@ class FlywaySchemaIT extends PostgreSqlIntegrationSupport {
                 FROM pg_constraint
                 WHERE conrelid IN (
                     'job_descriptions'::regclass,
-                    'job_description_versions'::regclass
+                    'job_description_versions'::regclass,
+                    'request_idempotency'::regclass
                 )
                 """, String.class)).contains(
                         "fk_job_descriptions_current_version",
                         "fk_job_description_versions_owner",
                         "uq_job_description_versions_number",
                         "uq_job_description_versions_current_identity",
-                        "uq_job_descriptions_current_fingerprint");
+                        "uq_job_descriptions_current_fingerprint",
+                        "uq_request_idempotency_operation_key_hash",
+                        "ck_request_idempotency_key_hash_length",
+                        "ck_request_idempotency_request_fingerprint_length",
+                        "ck_request_idempotency_status",
+                        "ck_request_idempotency_processing_state",
+                        "ck_request_idempotency_completed_state",
+                        "ck_request_idempotency_response_body",
+                        "ck_request_idempotency_timestamps",
+                        "fk_request_idempotency_job_description");
+
+        assertThat(jdbcTemplate.queryForObject("""
+                SELECT confdeltype::text
+                FROM pg_constraint
+                WHERE conname = 'fk_request_idempotency_job_description'
+                """, String.class)).isEqualTo("r");
+    }
+
+    @Test
+    void enforcesRequestIdempotencyConstraints() {
+        byte[] keyHash = PostgreSqlFixture.digest("schema-key");
+        byte[] requestFingerprint = PostgreSqlFixture.digest("schema-request");
+        UUID firstId = UUID.fromString("05000000-0000-4000-8000-000000000001");
+        jdbcTemplate.update("""
+                INSERT INTO request_idempotency (
+                    id, operation, idempotency_key_hash, request_fingerprint,
+                    status, attempt_token, lease_expires_at,
+                    created_at, updated_at, expires_at
+                ) VALUES (
+                    ?, 'create-job-description', ?, ?,
+                    'processing', ?, CURRENT_TIMESTAMP + INTERVAL '1 minute',
+                    CURRENT_TIMESTAMP, CURRENT_TIMESTAMP,
+                    CURRENT_TIMESTAMP + INTERVAL '1 day'
+                )
+                """,
+                firstId,
+                keyHash,
+                requestFingerprint,
+                UUID.randomUUID());
+
+        assertSqlState("23505", () -> jdbcTemplate.update("""
+                INSERT INTO request_idempotency (
+                    id, operation, idempotency_key_hash, request_fingerprint,
+                    status, attempt_token, lease_expires_at,
+                    created_at, updated_at, expires_at
+                ) VALUES (
+                    ?, 'create-job-description', ?, ?,
+                    'processing', ?, CURRENT_TIMESTAMP + INTERVAL '1 minute',
+                    CURRENT_TIMESTAMP, CURRENT_TIMESTAMP,
+                    CURRENT_TIMESTAMP + INTERVAL '1 day'
+                )
+                """,
+                UUID.randomUUID(),
+                keyHash,
+                PostgreSqlFixture.digest("other-request"),
+                UUID.randomUUID()));
+
+        assertInvalidLedger(new byte[31], requestFingerprint, "'processing'", "NULL", "NULL");
+        assertInvalidLedger(
+                PostgreSqlFixture.digest("valid-key-2"),
+                new byte[31],
+                "'processing'",
+                "NULL",
+                "NULL");
+        assertInvalidLedger(
+                PostgreSqlFixture.digest("valid-key-3"),
+                requestFingerprint,
+                "'unknown'",
+                "NULL",
+                "NULL");
+        assertInvalidLedger(
+                PostgreSqlFixture.digest("valid-key-4"),
+                requestFingerprint,
+                "'processing'",
+                "201",
+                "'{}'::jsonb");
+        assertInvalidLedger(
+                PostgreSqlFixture.digest("valid-key-5"),
+                requestFingerprint,
+                "'completed'",
+                "409",
+                "'[]'::jsonb");
+        assertInvalidLedger(
+                PostgreSqlFixture.digest("valid-key-6"),
+                requestFingerprint,
+                "'completed'",
+                "NULL",
+                "'{}'::jsonb");
+        assertSqlState("23514", () -> jdbcTemplate.update("""
+                INSERT INTO request_idempotency (
+                    id, operation, idempotency_key_hash, request_fingerprint,
+                    status, attempt_token, lease_expires_at,
+                    created_at, updated_at, expires_at
+                ) VALUES (
+                    ?, '', ?, ?,
+                    'processing', ?, CURRENT_TIMESTAMP + INTERVAL '1 minute',
+                    CURRENT_TIMESTAMP, CURRENT_TIMESTAMP,
+                    CURRENT_TIMESTAMP + INTERVAL '1 day'
+                )
+                """,
+                UUID.randomUUID(),
+                PostgreSqlFixture.digest("invalid-operation-key"),
+                requestFingerprint,
+                UUID.randomUUID()));
+        assertSqlState("23514", () -> jdbcTemplate.update("""
+                INSERT INTO request_idempotency (
+                    id, operation, idempotency_key_hash, request_fingerprint,
+                    status, attempt_token, lease_expires_at,
+                    response_status, response_body, completed_at,
+                    created_at, updated_at, expires_at
+                ) VALUES (
+                    ?, 'create-job-description', ?, ?,
+                    'completed', ?, CURRENT_TIMESTAMP + INTERVAL '1 minute',
+                    99, '{}'::jsonb, CURRENT_TIMESTAMP,
+                    CURRENT_TIMESTAMP, CURRENT_TIMESTAMP,
+                    CURRENT_TIMESTAMP + INTERVAL '1 day'
+                )
+                """,
+                UUID.randomUUID(),
+                PostgreSqlFixture.digest("invalid-http-status-key"),
+                requestFingerprint,
+                UUID.randomUUID()));
+        assertSqlState("23514", () -> jdbcTemplate.update("""
+                INSERT INTO request_idempotency (
+                    id, operation, idempotency_key_hash, request_fingerprint,
+                    status, attempt_token, lease_expires_at,
+                    created_at, updated_at, expires_at
+                ) VALUES (
+                    ?, 'create-job-description', ?, ?,
+                    'processing', ?, CURRENT_TIMESTAMP,
+                    CURRENT_TIMESTAMP, CURRENT_TIMESTAMP,
+                    CURRENT_TIMESTAMP + INTERVAL '1 day'
+                )
+                """,
+                UUID.randomUUID(),
+                PostgreSqlFixture.digest("invalid-lease-key"),
+                requestFingerprint,
+                UUID.randomUUID()));
+        assertSqlState("23514", () -> jdbcTemplate.update("""
+                INSERT INTO request_idempotency (
+                    id, operation, idempotency_key_hash, request_fingerprint,
+                    status, attempt_token, lease_expires_at,
+                    created_at, updated_at, expires_at
+                ) VALUES (
+                    ?, 'create-job-description', ?, ?,
+                    'processing', ?, CURRENT_TIMESTAMP + INTERVAL '1 minute',
+                    CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+                )
+                """,
+                UUID.randomUUID(),
+                PostgreSqlFixture.digest("invalid-expiry-key"),
+                requestFingerprint,
+                UUID.randomUUID()));
     }
 
     @Test
@@ -374,5 +589,37 @@ class FlywaySchemaIT extends PostgreSqlIntegrationSupport {
                 .rootCause()
                 .extracting(exception -> ((SQLException) exception).getSQLState())
                 .isEqualTo(expectedState);
+    }
+
+    private void assertInvalidLedger(
+            byte[] keyHash,
+            byte[] requestFingerprint,
+            String status,
+            String responseStatus,
+            String responseBody) {
+        assertSqlState("23514", () -> jdbcTemplate.update("""
+                INSERT INTO request_idempotency (
+                    id, operation, idempotency_key_hash, request_fingerprint,
+                    status, attempt_token, lease_expires_at,
+                    response_status, response_body, completed_at,
+                    created_at, updated_at, expires_at
+                ) VALUES (
+                    ?, 'create-job-description', ?, ?,
+                    %s, ?, CURRENT_TIMESTAMP + INTERVAL '1 minute',
+                    %s, %s,
+                    CASE WHEN %s = 'completed' THEN CURRENT_TIMESTAMP ELSE NULL END,
+                    CURRENT_TIMESTAMP, CURRENT_TIMESTAMP,
+                    CURRENT_TIMESTAMP + INTERVAL '1 day'
+                )
+                """.formatted(status, responseStatus, responseBody, status),
+                UUID.randomUUID(),
+                keyHash,
+                requestFingerprint,
+                UUID.randomUUID()));
+    }
+
+    private static String sha256(byte[] value) throws NoSuchAlgorithmException {
+        return HexFormat.of().formatHex(
+                MessageDigest.getInstance("SHA-256").digest(value));
     }
 }

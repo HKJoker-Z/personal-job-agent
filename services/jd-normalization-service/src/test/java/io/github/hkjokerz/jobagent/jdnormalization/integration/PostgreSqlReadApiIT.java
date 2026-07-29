@@ -331,7 +331,7 @@ class PostgreSqlReadApiIT extends PostgreSqlIntegrationSupport {
     }
 
     @Test
-    void healthIsStatusOnlyAndOpenApiContainsReadSchemasWithoutWriteApi()
+    void healthIsStatusOnlyAndOpenApiContainsApprovedReadAndCreateSchemas()
             throws Exception {
         mockMvc.perform(get("/actuator/health/liveness"))
                 .andExpect(status().isOk())
@@ -345,7 +345,11 @@ class PostgreSqlReadApiIT extends PostgreSqlIntegrationSupport {
                 .andExpect(jsonPath("$.paths['/api/v1/job-descriptions'].get")
                         .exists())
                 .andExpect(jsonPath("$.paths['/api/v1/job-descriptions'].post")
-                        .doesNotExist())
+                        .exists())
+                .andExpect(jsonPath(
+                                "$.paths['/api/v1/job-descriptions'].post.parameters"
+                                        + "[?(@.name == 'Idempotency-Key')].required")
+                        .value(true))
                 .andExpect(jsonPath(
                                 "$.paths['/api/v1/job-descriptions/{id}/versions'].get")
                         .exists());

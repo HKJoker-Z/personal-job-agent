@@ -2,6 +2,7 @@ package io.github.hkjokerz.jobagent.jdnormalization.web;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.hkjokerz.jobagent.jdnormalization.normalization.NormalizationPolicy;
+import io.github.hkjokerz.jobagent.jdnormalization.persistence.create.CreateApiException;
 import io.github.hkjokerz.jobagent.jdnormalization.persistence.read.ReadApiException;
 import io.github.hkjokerz.jobagent.jdnormalization.web.dto.ApiErrorResponse;
 import jakarta.servlet.http.HttpServletRequest;
@@ -32,6 +33,44 @@ import org.springframework.transaction.CannotCreateTransactionException;
 public class ApiExceptionHandler {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(ApiExceptionHandler.class);
+
+    @ExceptionHandler(CreateApiException.class)
+    ResponseEntity<ApiErrorResponse> handleCreateApiException(
+            CreateApiException exception,
+            HttpServletRequest request) {
+        HttpStatus status = switch (exception.code()) {
+            case "IDEMPOTENCY_KEY_REQUIRED", "IDEMPOTENCY_KEY_INVALID" ->
+                    HttpStatus.BAD_REQUEST;
+            case "IDEMPOTENCY_KEY_REUSED", "IDEMPOTENCY_REQUEST_IN_PROGRESS" ->
+                    HttpStatus.CONFLICT;
+            default -> HttpStatus.INTERNAL_SERVER_ERROR;
+        };
+        String message = switch (exception.code()) {
+            case "IDEMPOTENCY_KEY_REQUIRED" ->
+                    "An Idempotency-Key header is required.";
+            case "IDEMPOTENCY_KEY_INVALID" ->
+                    "The Idempotency-Key header is invalid.";
+            case "IDEMPOTENCY_KEY_REUSED" ->
+                    "The Idempotency-Key was already used for a different request.";
+            case "IDEMPOTENCY_REQUEST_IN_PROGRESS" ->
+                    "A request using this Idempotency-Key is still processing.";
+            default -> "The idempotent result could not be persisted.";
+        };
+        String requestId = trustedRequestId(request);
+        ResponseEntity.BodyBuilder builder = ResponseEntity.status(status)
+                .header(RequestIdFilter.HEADER_NAME, requestId)
+                .header("Cache-Control", "no-store");
+        if (exception.retryAfterSeconds() != null) {
+            builder.header(
+                    "Retry-After",
+                    Integer.toString(exception.retryAfterSeconds()));
+        }
+        return builder.body(ApiErrorResponse.of(
+                exception.code(),
+                message,
+                requestId,
+                exception.details()));
+    }
 
     @ExceptionHandler(ReadApiException.class)
     ResponseEntity<ApiErrorResponse> handleReadApiException(
