@@ -67,21 +67,19 @@ class FlywaySchemaIT extends PostgreSqlIntegrationSupport {
         jdbcTemplate.execute("CREATE SCHEMA startup_invalid_schema");
         SpringApplication application =
                 new SpringApplication(JdNormalizationServiceApplication.class);
-        application.setDefaultProperties(java.util.Map.ofEntries(
-                java.util.Map.entry("spring.datasource.url",
-                        POSTGRES.getJdbcUrl() + "?currentSchema=startup_invalid_schema"),
-                java.util.Map.entry("spring.datasource.username", POSTGRES.getUsername()),
-                java.util.Map.entry("spring.datasource.password", POSTGRES.getPassword()),
-                java.util.Map.entry("spring.flyway.enabled", "false"),
-                java.util.Map.entry("spring.jpa.hibernate.ddl-auto", "validate"),
-                java.util.Map.entry("jd-normalization.security.api-key", API_KEY),
-                java.util.Map.entry("server.address", "127.0.0.1"),
-                java.util.Map.entry("server.port", "0"),
-                java.util.Map.entry(
-                        "management.endpoint.health.group.readiness.include",
-                        "readinessState,db")));
-
-        assertThatThrownBy(application::run)
+        assertThatThrownBy(() -> application.run(
+                        "--spring.datasource.url=" + POSTGRES.getJdbcUrl()
+                                + "?currentSchema=startup_invalid_schema",
+                        "--spring.datasource.username=" + POSTGRES.getUsername(),
+                        "--spring.datasource.password=" + POSTGRES.getPassword(),
+                        "--spring.datasource.driver-class-name=org.postgresql.Driver",
+                        "--spring.flyway.enabled=false",
+                        "--spring.jpa.hibernate.ddl-auto=validate",
+                        "--spring.jpa.database-platform=org.hibernate.dialect.PostgreSQLDialect",
+                        "--jd-normalization.security.api-key=" + API_KEY,
+                        "--server.address=127.0.0.1",
+                        "--server.port=0",
+                        "--management.endpoint.health.group.readiness.include=readinessState,db"))
                 .hasRootCauseInstanceOf(SchemaManagementException.class);
     }
 
@@ -132,16 +130,28 @@ class FlywaySchemaIT extends PostgreSqlIntegrationSupport {
                 owner,
                 "https://schema.example.test/owner",
                 Instant.parse("2026-07-29T01:00:00Z"),
-                List.of(PostgreSqlFixture.version(
-                        ownerVersion,
-                        1,
-                        "Owner",
-                        "Example",
-                        "Hong Kong",
-                        "Java",
-                        "schema-owner-content",
-                        "schema-owner-fingerprint",
-                        Instant.parse("2026-07-29T01:00:00Z"))));
+                List.of(
+                        PostgreSqlFixture.version(
+                                ownerVersion,
+                                1,
+                                "Owner",
+                                "Example",
+                                "Hong Kong",
+                                "Java",
+                                "schema-owner-content",
+                                "schema-owner-fingerprint",
+                                Instant.parse("2026-07-29T01:00:00Z")),
+                        PostgreSqlFixture.version(
+                                UUID.fromString(
+                                        "10000000-0000-4000-8000-000000000004"),
+                                2,
+                                "Current Owner",
+                                "Example",
+                                "Hong Kong",
+                                "Java 21",
+                                "schema-owner-current-content",
+                                "schema-owner-current-fingerprint",
+                                Instant.parse("2026-07-29T01:01:00Z"))));
 
         UUID wrongOwner = UUID.fromString("10000000-0000-4000-8000-000000000003");
         try (Connection connection = dataSource.getConnection()) {

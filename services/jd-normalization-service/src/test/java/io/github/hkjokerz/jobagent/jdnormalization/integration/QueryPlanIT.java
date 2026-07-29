@@ -7,9 +7,8 @@ import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.List;
 import java.util.UUID;
-import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.TestInstance;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -28,7 +27,6 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 @ActiveProfiles("integration")
 @Testcontainers(disabledWithoutDocker = true)
 @DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
-@TestInstance(TestInstance.Lifecycle.PER_CLASS)
 class QueryPlanIT extends PostgreSqlIntegrationSupport {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(QueryPlanIT.class);
@@ -41,8 +39,14 @@ class QueryPlanIT extends PostgreSqlIntegrationSupport {
     @Autowired
     private PlatformTransactionManager transactionManager;
 
-    @BeforeAll
+    @BeforeEach
     void seedBoundedDataset() {
+        Integer existing = jdbcTemplate.queryForObject(
+                "SELECT count(*) FROM job_descriptions",
+                Integer.class);
+        if (existing != null && existing > 0) {
+            return;
+        }
         PostgreSqlFixture fixture = new PostgreSqlFixture(
                 jdbcTemplate,
                 new TransactionTemplate(transactionManager));
