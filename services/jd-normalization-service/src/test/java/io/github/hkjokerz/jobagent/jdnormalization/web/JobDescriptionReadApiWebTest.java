@@ -19,6 +19,8 @@ import io.github.hkjokerz.jobagent.jdnormalization.persistence.read.CursorCodec;
 import io.github.hkjokerz.jobagent.jdnormalization.persistence.read.JobDescriptionReadService;
 import io.github.hkjokerz.jobagent.jdnormalization.persistence.read.ReadApiException;
 import io.github.hkjokerz.jobagent.jdnormalization.persistence.read.ReadModels;
+import io.github.hkjokerz.jobagent.jdnormalization.persistence.update.ConditionalUpdateRepository;
+import io.github.hkjokerz.jobagent.jdnormalization.persistence.update.JobDescriptionUpdateService;
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
@@ -51,6 +53,12 @@ class JobDescriptionReadApiWebTest {
 
     @MockitoBean
     private IdempotencyLedgerRepository idempotencyLedgerRepository;
+
+    @MockitoBean
+    private JobDescriptionUpdateService updateService;
+
+    @MockitoBean
+    private ConditionalUpdateRepository updateRepository;
 
     @Test
     void returnsCurrentResourceStrongEtagAndConditional304() throws Exception {
@@ -224,6 +232,8 @@ class JobDescriptionReadApiWebTest {
                                         + "[?(@.name == 'Idempotency-Key')].required")
                         .value(true))
                 .andExpect(jsonPath("$.paths['/api/v1/job-descriptions/{id}'].get")
+                        .exists())
+                .andExpect(jsonPath("$.paths['/api/v1/job-descriptions/{id}'].put")
                         .exists())
                 .andExpect(jsonPath(
                                 "$.paths['/api/v1/job-descriptions/{id}/versions'].get")

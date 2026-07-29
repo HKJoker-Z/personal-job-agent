@@ -68,7 +68,8 @@ class FlywaySchemaIT extends PostgreSqlIntegrationSupport {
     }
 
     @Test
-    void upgradesAnIsolatedV1SchemaToV2AndPreservesV1Checksum() throws Exception {
+    void upgradesAnIsolatedV1SchemaToV2AndPreservesMigrationChecksums()
+            throws Exception {
         String schema = "flyway_upgrade_v1_v2";
         jdbcTemplate.execute("DROP SCHEMA IF EXISTS " + schema + " CASCADE");
         jdbcTemplate.execute("CREATE SCHEMA " + schema);
@@ -112,6 +113,12 @@ class FlywaySchemaIT extends PostgreSqlIntegrationSupport {
                     .readAllBytes();
             assertThat(sha256(v1Bytes)).isEqualTo(
                     "b73ecefbb610b06059a8e3c067f2fc874aab4e586e397739aad378aa78abcb40");
+            byte[] v2Bytes = new ClassPathResource(
+                    "db/migration/V2__create_request_idempotency.sql")
+                    .getInputStream()
+                    .readAllBytes();
+            assertThat(sha256(v2Bytes)).isEqualTo(
+                    "30bf80257a4fedfd4c125ef08adca94a840a018bba8f1d78cb1843fed55f8f7f");
         } finally {
             jdbcTemplate.execute("DROP SCHEMA IF EXISTS " + schema + " CASCADE");
         }
