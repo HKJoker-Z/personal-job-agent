@@ -9,6 +9,7 @@ on:
       - "docs/work-reports/2026-07-29-java-jd-normalization-service-phase-2a-postgresql-read-model-work-report.md"
       - "docs/work-reports/2026-07-29-java-jd-normalization-service-phase-2b-idempotent-create-work-report.md"
       - "docs/work-reports/2026-07-29-java-jd-normalization-service-phase-3a-conditional-update-work-report.md"
+      - "docs/work-reports/2026-07-29-java-jd-normalization-service-phase-3b-containerization-work-report.md"
       - "docs/work-reports/README.md"
   push:
     branches: [main]
@@ -125,3 +126,30 @@ jobs:
             services/jd-normalization-service/target/failsafe-reports/
           if-no-files-found: ignore
           retention-days: 7
+
+  container:
+    name: container-smoke
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        shell: bash
+        working-directory: services/jd-normalization-service
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          fetch-depth: 0
+
+      - name: Validate container definitions
+        run: |
+          bash -n scripts/container-smoke.sh
+          bash -n scripts/generate-compose-env.sh
+          sh -n docker/migrate-and-validate.sh
+          sh -n docker/postgres-init.sh
+          ./scripts/generate-compose-env.sh
+          docker compose --env-file .env.compose config --quiet
+
+      - name: Run isolated container smoke
+        run: ./scripts/container-smoke.sh --ephemeral .env.compose
