@@ -16,7 +16,7 @@ import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.SpringApplication;
+import org.springframework.boot.test.context.runner.WebApplicationContextRunner;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
@@ -65,22 +65,25 @@ class FlywaySchemaIT extends PostgreSqlIntegrationSupport {
     @Test
     void applicationStartupFailsWhenFlywayIsDisabledAgainstMissingSchema() {
         jdbcTemplate.execute("CREATE SCHEMA startup_invalid_schema");
-        SpringApplication application =
-                new SpringApplication(JdNormalizationServiceApplication.class);
-        assertThatThrownBy(() -> application.run(
-                        "--spring.datasource.url=" + POSTGRES.getJdbcUrl()
+        new WebApplicationContextRunner()
+                .withUserConfiguration(JdNormalizationServiceApplication.class)
+                .withPropertyValues(
+                        "spring.datasource.url=" + POSTGRES.getJdbcUrl()
                                 + "?currentSchema=startup_invalid_schema",
-                        "--spring.datasource.username=" + POSTGRES.getUsername(),
-                        "--spring.datasource.password=" + POSTGRES.getPassword(),
-                        "--spring.datasource.driver-class-name=org.postgresql.Driver",
-                        "--spring.flyway.enabled=false",
-                        "--spring.jpa.hibernate.ddl-auto=validate",
-                        "--spring.jpa.database-platform=org.hibernate.dialect.PostgreSQLDialect",
-                        "--jd-normalization.security.api-key=" + API_KEY,
-                        "--server.address=127.0.0.1",
-                        "--server.port=0",
-                        "--management.endpoint.health.group.readiness.include=readinessState,db"))
-                .hasRootCauseInstanceOf(SchemaManagementException.class);
+                        "spring.datasource.username=" + POSTGRES.getUsername(),
+                        "spring.datasource.password=" + POSTGRES.getPassword(),
+                        "spring.datasource.driver-class-name=org.postgresql.Driver",
+                        "spring.flyway.enabled=false",
+                        "spring.jpa.hibernate.ddl-auto=validate",
+                        "spring.jpa.database-platform=org.hibernate.dialect.PostgreSQLDialect",
+                        "jd-normalization.security.api-key=" + API_KEY,
+                        "server.address=127.0.0.1",
+                        "management.endpoint.health.group.readiness.include=readinessState,db")
+                .run(context -> {
+                    assertThat(context).hasFailed();
+                    assertThat(context.getStartupFailure())
+                            .hasRootCauseInstanceOf(SchemaManagementException.class);
+                });
     }
 
     @Test
