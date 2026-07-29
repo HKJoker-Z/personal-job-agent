@@ -39,8 +39,9 @@ PUT /api/v1/job-descriptions/{id}
 ```
 
 There is no `PATCH`, `DELETE`, bulk update, restore, version deletion, seed
-endpoint, Dockerfile, Compose service, FastAPI integration, Redis cache,
-DeepSeek/LLM call, image publication, release, or deployment.
+endpoint, FastAPI integration, Redis cache, DeepSeek/LLM call, image
+publication, release, or deployment. Phase 3B adds a local, independently
+scoped container environment without changing any HTTP API.
 This service is not approved for public or production exposure.
 
 ## Requirements
@@ -48,6 +49,7 @@ This service is not approved for public or production exposure.
 - Java 21
 - PostgreSQL 16 for manual runtime use
 - Docker access for the PostgreSQL 16.14 Testcontainers integration suite
+- Docker Engine with Compose v2 for the isolated container environment
 - POSIX shell or Windows PowerShell/Command Prompt
 - Internet access for the Maven Wrapper's first dependency download
 
@@ -134,6 +136,122 @@ JD_NORMALIZATION_BIND_ADDRESS=127.0.0.1 \
 
 The development-only mode is unsafe for public or shared-network exposure.
 CORS is disabled, and browser session cookies are not authentication.
+
+## Independent container environment
+
+The Phase 3B environment lives entirely in this service directory. It does
+not join a Personal Job Agent network, mount a host directory, expose
+PostgreSQL, reuse production credentials, or modify the repository-root
+production Compose project. The application is published only on loopback at
+`127.0.0.1:18082` by default.
+
+The container architecture has three services:
+
+- PostgreSQL 16.14 owns the dedicated `jd_normalization` database in an
+  isolated named volume and is healthy before migration starts.
+- A one-shot Flyway 11.7.2 migration image contains exactly append-only V1 and
+  V2, runs `migrate` followed by `validate`, and must exit successfully.
+- The application image starts only after migration succeeds, disables its
+  embedded Flyway runner, and retains Hibernate `ddl-auto=validate`.
+
+The application and migration targets are built from the same multi-stage
+`Dockerfile` and repository revision. The builder uses Java 21 and the Maven
+Wrapper. The runtime image contains only the executable Spring Boot JAR and a
+Java 21 JRE; it contains no source tree, compiler, Maven repository, test
+reports, Git metadata, or environment file. The migration image contains only
+the compatible Flyway runtime, the two SQL migrations, and its fixed
+`migrate`/`validate` entrypoint. All builder, runtime, migration, and
+PostgreSQL base references are pinned to immutable multi-architecture
+digests.
+
+Generate fresh local-only credentials without printing them:
+
+```bash
+cd services/jd-normalization-service
+./scripts/generate-compose-env.sh
+```
+
+The command creates ignored `.env.compose` mode `0600`. Its application API
+key and three database credentials are generated independently. The tracked
+`.env.compose.example` contains placeholders only. Never copy Personal Job
+Agent or production credentials into this file.
+
+Validate and start the isolated environment:
+
+```bash
+docker compose --env-file .env.compose config --quiet
+docker compose --env-file .env.compose up --build --wait app
+```
+
+Compose orders startup as PostgreSQL health, successful one-shot migration,
+then application readiness; it does not use arbitrary sleeps. The migration
+role can create and alter this dedicated schema. The runtime role receives
+only schema usage and table/sequence data privileges. Rerunning migration is
+a no-op followed by validation:
+
+```bash
+docker compose --env-file .env.compose run --rm migration
+```
+
+Inspect the status-only health endpoints:
+
+```bash
+curl --fail http://127.0.0.1:18082/actuator/health/liveness
+curl --fail http://127.0.0.1:18082/actuator/health/readiness
+```
+
+Readiness includes database availability and schema validation. Liveness
+continues to describe the JVM/application process during a transient database
+outage. No probe returns credentials or database details.
+
+Use the existing normalize/create/read/update examples below by replacing
+port `8091` with `18082`. The same authentication, Idempotency-Key, If-Match,
+ETag, replay, immutable-history, and error contracts apply; containerization
+adds no endpoint or API shortcut.
+
+The application runs as numeric user `10001:10001` with a read-only root
+filesystem, a bounded `/tmp` tmpfs, all Linux capabilities dropped,
+`no-new-privileges`, no host network, no privileged mode, no Docker socket,
+and no host mounts. Compose provides a 768 MiB memory limit, 1 CPU, 256 PID
+limit, and a bounded graceful stop by default. These are local safety
+defaults, not production sizing or a high-availability claim. PostgreSQL
+retains its required writable data volume and has a bounded 512 MiB/256 PID
+configuration.
+
+Run the deterministic end-to-end validation in an explicitly ephemeral,
+uniquely named project:
+
+```bash
+./scripts/container-smoke.sh --ephemeral .env.compose
+```
+
+It builds and inspects both images, starts PostgreSQL, migrates, verifies
+unauthorized and authorized normalize behavior, creates and exactly replays a
+resource, performs a conditional update and stale-write check, verifies
+versions 1 and 2, restarts the application, reruns migration, restarts
+PostgreSQL, confirms persisted data, and inspects health/restart/security
+state. It uses synthetic data only, prints no secret or full response body,
+and removes only its unique ephemeral Compose project and volume.
+
+For ordinary local use, an application restart and normal Compose stop/start
+preserve the named database volume:
+
+```bash
+docker compose --env-file .env.compose restart app
+docker compose --env-file .env.compose stop
+docker compose --env-file .env.compose start
+```
+
+`docker compose --env-file .env.compose down` removes containers and networks
+but preserves data. Delete the named volume only after verifying that it is
+the isolated local project and that its synthetic data is no longer needed.
+Never use broad Docker prune commands, and do not use `down --volumes` against
+any production or unrelated project.
+
+This environment is for local and CI validation. No image is published, no
+registry login is required, there is no reverse proxy/TLS/public DNS,
+Kubernetes, FastAPI integration, production deployment, or claim of public
+Internet readiness.
 
 ## Normalize preview
 
@@ -500,6 +618,13 @@ rollback, all prior reads, ETag/304, filters, pagination, and
 `EXPLAIN (FORMAT JSON)` index evidence. It uses PostgreSQL 16.14 with
 deterministic synthetic rows and never connects to production. No H2, Redis,
 DeepSeek, or arbitrary external network service is used.
+
+CI also validates the Compose model and runs the isolated ephemeral container
+smoke after Maven verification. It builds local application and migration
+images, generates CI-only secrets, proves non-root/read-only execution,
+readiness ordering, migration idempotence, API behavior, restart persistence,
+and targeted cleanup. It performs no registry login, image publication,
+release, or deployment.
 
 ## Logging
 
