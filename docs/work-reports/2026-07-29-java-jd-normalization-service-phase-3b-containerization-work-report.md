@@ -408,7 +408,9 @@ project and volume.
 The workflow has read-only repository permission, concurrency cancellation, a
 25-minute container timeout, immutable third-party action SHAs, no
 `pull_request_target`, no registry login, no publication, no release, no
-deployment, and no production credential. Final documentation-head check
+deployment, and no production credential. The repository-safety allowlist was
+extended narrowly for the mandated tracked `.env.compose.example`; actual
+`.env.compose` remains rejected and ignored. Final documentation-head check
 results are authoritative on the PR and in the delivery response.
 
 ## 38. Changed files
@@ -428,6 +430,7 @@ Container implementation:
 CI and documentation:
 
 - `.github/workflows/jd-normalization-service-ci.yml`;
+- `.github/workflows/ci.yml` (repository-safety template allowlist only);
 - `services/jd-normalization-service/README.md`;
 - `docs/work-reports/README.md`;
 - this report.
@@ -447,7 +450,11 @@ Implementation commits before this report:
 - `308c8e617d99f065daaaaa0510f4e0c5dcaad982` —
   `Extend Java CI with container validation`;
 - `02735bb7a0911b8a9075dc6de4ee48d5b353cc3f` —
-  `Harden container input validation`.
+  `Harden container input validation`;
+- `ad8bc497175dcda6c4a792c5fd82a57b56007dec` —
+  `Document Java Phase 3B containerization`;
+- `8903c7dde8bfbb72e85f71f8ffd04db9b6bf0641` —
+  `Allow service Compose environment template`.
 
 The documentation commit containing this report cannot embed its own Git
 object ID because doing so would change that ID.
@@ -482,7 +489,7 @@ The PR remains open and must not be merged by Phase 3B delivery.
 ## 42. Rollback
 
 Before merge, close PR #30 and delete only the Phase 3B feature branch. After
-a hypothetical merge, revert the five Phase 3B commits. No database downgrade
+a hypothetical merge, revert the seven Phase 3B commits. No database downgrade
 or migration rollback is required because V1/V2 were unchanged and no V3 was
 added.
 
