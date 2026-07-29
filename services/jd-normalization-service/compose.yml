@@ -1,0 +1,125 @@
+name: jd-normalization-local
+
+services:
+  postgres:
+    image: postgres:16.14-bookworm@sha256:92620daddcd947f8d5ab5ba66e848702fe443d87fed30c4cea8e389fd78dfc55
+    environment:
+      POSTGRES_DB: ${JD_COMPOSE_DB_NAME:?JD_COMPOSE_DB_NAME is required}
+      POSTGRES_USER: ${JD_COMPOSE_BOOTSTRAP_DB_USER:?JD_COMPOSE_BOOTSTRAP_DB_USER is required}
+      POSTGRES_PASSWORD: ${JD_COMPOSE_BOOTSTRAP_DB_PASSWORD:?JD_COMPOSE_BOOTSTRAP_DB_PASSWORD is required}
+      POSTGRES_INITDB_ARGS: --encoding=UTF8 --locale=C.UTF-8
+      PGTZ: UTC
+      TZ: UTC
+      JD_COMPOSE_MIGRATION_DB_USER: ${JD_COMPOSE_MIGRATION_DB_USER:?JD_COMPOSE_MIGRATION_DB_USER is required}
+      JD_COMPOSE_MIGRATION_DB_PASSWORD: ${JD_COMPOSE_MIGRATION_DB_PASSWORD:?JD_COMPOSE_MIGRATION_DB_PASSWORD is required}
+      JD_COMPOSE_APP_DB_USER: ${JD_COMPOSE_APP_DB_USER:?JD_COMPOSE_APP_DB_USER is required}
+      JD_COMPOSE_APP_DB_PASSWORD: ${JD_COMPOSE_APP_DB_PASSWORD:?JD_COMPOSE_APP_DB_PASSWORD is required}
+    command:
+      - postgres
+      - -c
+      - timezone=UTC
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready --quiet --username "$${POSTGRES_USER}" --dbname "$${POSTGRES_DB}"
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./docker/postgres-init.sh:/docker-entrypoint-initdb.d/10-create-service-roles.sh:ro
+    networks:
+      - backend
+    shm_size: 128m
+    stop_grace_period: 30s
+    mem_limit: 512m
+    pids_limit: 256
+
+  migration:
+    image: ${JD_COMPOSE_MIGRATION_IMAGE:-jd-normalization-migration:local}
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: migration
+      args:
+        OCI_SOURCE: https://github.com/HKJoker-Z/personal-job-agent
+        OCI_REVISION: ${JD_COMPOSE_OCI_REVISION:-local}
+    environment:
+      FLYWAY_URL: jdbc:postgresql://postgres:5432/${JD_COMPOSE_DB_NAME:?JD_COMPOSE_DB_NAME is required}
+      FLYWAY_USER: ${JD_COMPOSE_MIGRATION_DB_USER:?JD_COMPOSE_MIGRATION_DB_USER is required}
+      FLYWAY_PASSWORD: ${JD_COMPOSE_MIGRATION_DB_PASSWORD:?JD_COMPOSE_MIGRATION_DB_PASSWORD is required}
+      FLYWAY_LOCATIONS: filesystem:/flyway/sql
+      FLYWAY_CONNECT_RETRIES: "20"
+      FLYWAY_CLEAN_DISABLED: "true"
+      FLYWAY_BASELINE_ON_MIGRATE: "false"
+      FLYWAY_VALIDATE_ON_MIGRATE: "true"
+      TZ: UTC
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - backend
+    user: "10002:10002"
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=32m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: "no"
+    stop_grace_period: 10s
+    mem_limit: 384m
+    pids_limit: 128
+
+  app:
+    image: ${JD_COMPOSE_APP_IMAGE:-jd-normalization-service:local}
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: application
+      args:
+        OCI_SOURCE: https://github.com/HKJoker-Z/personal-job-agent
+        OCI_REVISION: ${JD_COMPOSE_OCI_REVISION:-local}
+    environment:
+      JD_NORMALIZATION_API_KEY: ${JD_COMPOSE_API_KEY:?JD_COMPOSE_API_KEY is required}
+      JD_NORMALIZATION_BIND_ADDRESS: 0.0.0.0
+      JD_NORMALIZATION_PORT: "8080"
+      JD_NORMALIZATION_JDBC_URL: jdbc:postgresql://postgres:5432/${JD_COMPOSE_DB_NAME:?JD_COMPOSE_DB_NAME is required}
+      JD_NORMALIZATION_DB_USERNAME: ${JD_COMPOSE_APP_DB_USER:?JD_COMPOSE_APP_DB_USER is required}
+      JD_NORMALIZATION_DB_PASSWORD: ${JD_COMPOSE_APP_DB_PASSWORD:?JD_COMPOSE_APP_DB_PASSWORD is required}
+      SPRING_FLYWAY_ENABLED: "false"
+      SPRING_JPA_HIBERNATE_DDL_AUTO: validate
+      TZ: UTC
+    depends_on:
+      migration:
+        condition: service_completed_successfully
+    ports:
+      - 127.0.0.1:${JD_COMPOSE_HOST_PORT:-18082}:8080
+    networks:
+      - backend
+      - edge
+    user: "10001:10001"
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    init: true
+    restart: "no"
+    stop_grace_period: 20s
+    mem_limit: 768m
+    cpus: 1.0
+    pids_limit: 256
+
+networks:
+  backend:
+    internal: true
+  edge:
+    driver: bridge
+
+volumes:
+  postgres-data:
