@@ -48,6 +48,11 @@ server:
 jd-normalization:
   dictionary-resource: classpath:skills/skills-v1.json
   dictionary-max-entries: 256
+  idempotency:
+    processing-lease: ${JD_NORMALIZATION_IDEMPOTENCY_PROCESSING_LEASE:30s}
+    completed-retention: ${JD_NORMALIZATION_IDEMPOTENCY_COMPLETED_RETENTION:24h}
+    cleanup-batch-size: ${JD_NORMALIZATION_IDEMPOTENCY_CLEANUP_BATCH_SIZE:100}
+    maximum-response-bytes: ${JD_NORMALIZATION_IDEMPOTENCY_MAXIMUM_RESPONSE_BYTES:262144}
   persistence:
     enabled: true
   schema-health:
