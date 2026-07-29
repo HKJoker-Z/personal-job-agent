@@ -31,7 +31,10 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.dao.DataAccessResourceFailureException;
 
-@SpringBootTest(properties = "jd-normalization.persistence.enabled=true")
+@SpringBootTest(properties = {
+    "jd-normalization.persistence.enabled=true",
+    "jd-normalization.schema-health.enabled=false"
+})
 @AutoConfigureMockMvc
 @ActiveProfiles("test")
 class JobDescriptionReadApiWebTest {

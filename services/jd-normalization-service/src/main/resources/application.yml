@@ -50,6 +50,8 @@ jd-normalization:
   dictionary-max-entries: 256
   persistence:
     enabled: true
+  schema-health:
+    enabled: true
   security:
     api-key: ${JD_NORMALIZATION_API_KEY:}
     authentication-disabled: false

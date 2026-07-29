@@ -3,15 +3,16 @@ package io.github.hkjokerz.jobagent.jdnormalization.config;
 import org.springframework.boot.actuate.health.Health;
 import org.springframework.boot.actuate.health.HealthIndicator;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.dao.DataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
 @Component("schemaReadiness")
-@ConditionalOnBean(JdbcTemplate.class)
 @ConditionalOnProperty(
-        name = "jd-normalization.persistence.enabled",
+        name = {
+            "jd-normalization.persistence.enabled",
+            "jd-normalization.schema-health.enabled"
+        },
         havingValue = "true",
         matchIfMissing = true)
 public class SchemaReadinessHealthIndicator implements HealthIndicator {
