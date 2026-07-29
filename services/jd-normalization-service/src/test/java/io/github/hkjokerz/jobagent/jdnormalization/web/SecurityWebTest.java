@@ -18,7 +18,14 @@ import org.springframework.test.web.servlet.MockMvc;
 @SpringBootTest(properties = {
     "jd-normalization.security.authentication-disabled=true",
     "jd-normalization.security.api-key=",
-    "server.address=127.0.0.1"
+    "jd-normalization.persistence.enabled=false",
+    "server.address=127.0.0.1",
+    "management.endpoint.health.group.readiness.include=readinessState",
+    "spring.autoconfigure.exclude="
+            + "org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration,"
+            + "org.springframework.boot.autoconfigure.orm.jpa.HibernateJpaAutoConfiguration,"
+            + "org.springframework.boot.autoconfigure.data.jpa.JpaRepositoriesAutoConfiguration,"
+            + "org.springframework.boot.autoconfigure.flyway.FlywayAutoConfiguration"
 })
 @AutoConfigureMockMvc
 @ActiveProfiles("dev")
@@ -59,6 +66,9 @@ class SecurityWebTest {
                     .withPropertyValues(
                             "spring.profiles.active=default",
                             "server.address=127.0.0.1",
+                            databaseExclusions(),
+                            "jd-normalization.persistence.enabled=false",
+                            "management.endpoint.health.group.readiness.include=readinessState",
                             "jd-normalization.security.authentication-disabled=false",
                             "jd-normalization.security.api-key=" + suppliedKey)
                     .run(context -> {
@@ -74,9 +84,12 @@ class SecurityWebTest {
     void startupRejectsDisabledAuthenticationWithoutExactDevLoopbackMode() {
         new WebApplicationContextRunner()
                 .withUserConfiguration(JdNormalizationServiceApplication.class)
-                .withPropertyValues(
-                        "server.address=127.0.0.1",
-                        "jd-normalization.security.authentication-disabled=true")
+                    .withPropertyValues(
+                            "server.address=127.0.0.1",
+                            databaseExclusions(),
+                            "jd-normalization.persistence.enabled=false",
+                            "management.endpoint.health.group.readiness.include=readinessState",
+                            "jd-normalization.security.authentication-disabled=true")
                 .run(context -> {
                     org.assertj.core.api.Assertions.assertThat(context).hasFailed();
                     org.assertj.core.api.Assertions.assertThat(context.getStartupFailure())
@@ -87,10 +100,13 @@ class SecurityWebTest {
 
         new WebApplicationContextRunner()
                 .withUserConfiguration(JdNormalizationServiceApplication.class)
-                .withPropertyValues(
-                        "spring.profiles.active=dev",
-                        "server.address=0.0.0.0",
-                        "jd-normalization.security.authentication-disabled=true")
+                    .withPropertyValues(
+                            "spring.profiles.active=dev",
+                            "server.address=0.0.0.0",
+                            databaseExclusions(),
+                            "jd-normalization.persistence.enabled=false",
+                            "management.endpoint.health.group.readiness.include=readinessState",
+                            "jd-normalization.security.authentication-disabled=true")
                 .run(context -> {
                     org.assertj.core.api.Assertions.assertThat(context).hasFailed();
                     org.assertj.core.api.Assertions.assertThat(context.getStartupFailure())
@@ -98,5 +114,13 @@ class SecurityWebTest {
                                     "Disabled authentication requires the exact dev profile "
                                             + "and loopback binding");
                 });
+    }
+
+    private static String databaseExclusions() {
+        return "spring.autoconfigure.exclude="
+                + "org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration,"
+                + "org.springframework.boot.autoconfigure.orm.jpa.HibernateJpaAutoConfiguration,"
+                + "org.springframework.boot.autoconfigure.data.jpa.JpaRepositoriesAutoConfiguration,"
+                + "org.springframework.boot.autoconfigure.flyway.FlywayAutoConfiguration";
     }
 }

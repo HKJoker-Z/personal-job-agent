@@ -16,7 +16,8 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
         info = @Info(
                 title = "JD Normalization Service API",
                 version = "v1",
-                description = "Deterministic Job Description normalization; no persistence or AI"))
+                description = "Deterministic normalization and bounded reads from the service-owned "
+                        + "PostgreSQL database; no public persistence write API or AI"))
 @SecurityScheme(
         name = "internalApiKey",
         type = SecuritySchemeType.HTTP,
