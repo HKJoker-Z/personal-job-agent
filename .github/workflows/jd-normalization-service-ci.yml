@@ -1,0 +1,86 @@
+name: JD Normalization Service CI
+
+on:
+  pull_request:
+    paths:
+      - "services/jd-normalization-service/**"
+      - ".github/workflows/jd-normalization-service-ci.yml"
+      - "docs/work-reports/2026-07-28-java-jd-normalization-service-phase-1-work-report.md"
+  push:
+    branches: [main]
+    paths:
+      - "services/jd-normalization-service/**"
+      - ".github/workflows/jd-normalization-service-ci.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: jd-normalization-service-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+        working-directory: services/jd-normalization-service
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          fetch-depth: 0
+
+      - name: Set up Java 21
+        uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95 # v5.6.0
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+          cache-dependency-path: services/jd-normalization-service/pom.xml
+
+      - name: Check patch whitespace
+        working-directory: .
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PUSH_BASE_SHA: ${{ github.event.before }}
+        run: |
+          base_sha="${PR_BASE_SHA:-${PUSH_BASE_SHA}}"
+          if [[ -z "${base_sha}" || "${base_sha}" =~ ^0+$ ]]; then
+            base_sha="$(git rev-list --max-parents=0 HEAD)"
+          fi
+          git diff --check "${base_sha}" "${GITHUB_SHA}"
+
+      - name: Reject tracked build output
+        working-directory: .
+        run: |
+          tracked_target="$(git ls-files 'services/jd-normalization-service/target/**')"
+          if [[ -n "${tracked_target}" ]]; then
+            printf '%s\n' "${tracked_target}"
+            exit 1
+          fi
+
+      - name: Scan Java service for obvious secrets
+        working-directory: .
+        run: |
+          credential_pattern='github_pat_[A-Za-z0-9_]{20,}|ghp_[A-Za-z0-9]{20,}|BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|JD_NORMALIZATION_API_KEY''=.+'
+          if git grep -n -E "${credential_pattern}" -- \
+            'services/jd-normalization-service/' \
+            ':!services/jd-normalization-service/.env.example' \
+            ':!services/jd-normalization-service/README.md'; then
+            exit 1
+          fi
+
+      - name: Verify Java service
+        run: ./mvnw -B -ntp verify
+
+      - name: Upload failed Surefire reports
+        if: failure()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: jd-normalization-surefire-reports
+          path: services/jd-normalization-service/target/surefire-reports/
+          if-no-files-found: ignore
+          retention-days: 7

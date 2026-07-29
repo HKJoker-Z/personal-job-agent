@@ -1,0 +1,17 @@
+{
+  "version": "skills-v1",
+  "skills": [
+    {
+      "id": "first",
+      "name": "First",
+      "aliases": ["same alias"],
+      "match_type": "PHRASE"
+    },
+    {
+      "id": "second",
+      "name": "Second",
+      "aliases": ["SAME   ALIAS"],
+      "match_type": "PHRASE"
+    }
+  ]
+}
