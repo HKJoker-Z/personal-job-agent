@@ -8,6 +8,7 @@ on:
       - "docs/work-reports/2026-07-28-java-jd-normalization-service-phase-1-work-report.md"
       - "docs/work-reports/2026-07-29-java-jd-normalization-service-phase-2a-postgresql-read-model-work-report.md"
       - "docs/work-reports/2026-07-29-java-jd-normalization-service-phase-2b-idempotent-create-work-report.md"
+      - "docs/work-reports/2026-07-29-java-jd-normalization-service-phase-3a-conditional-update-work-report.md"
       - "docs/work-reports/README.md"
   push:
     branches: [main]
@@ -95,7 +96,7 @@ jobs:
       - name: Reject skipped PostgreSQL integration tests
         run: |
           report_count="$(find target/failsafe-reports -name 'TEST-*.xml' -type f | wc -l)"
-          if [[ "${report_count}" -lt 5 ]]; then
+          if [[ "${report_count}" -lt 7 ]]; then
             echo "Expected all PostgreSQL integration test reports."
             exit 1
           fi
@@ -104,6 +105,8 @@ jobs:
             PostgreSqlCreateApiIT \
             PostgreSqlIdempotencyConcurrencyIT \
             PostgreSqlReadApiIT \
+            PostgreSqlUpdateApiIT \
+            PostgreSqlUpdateConcurrencyIT \
             QueryPlanIT; do
             test -f "target/failsafe-reports/TEST-io.github.hkjokerz.jobagent.jdnormalization.integration.${report}.xml"
           done

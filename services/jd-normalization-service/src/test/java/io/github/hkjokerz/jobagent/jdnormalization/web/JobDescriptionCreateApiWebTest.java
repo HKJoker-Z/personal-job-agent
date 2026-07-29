@@ -18,6 +18,8 @@ import io.github.hkjokerz.jobagent.jdnormalization.persistence.create.CreateApiE
 import io.github.hkjokerz.jobagent.jdnormalization.persistence.create.IdempotencyLedgerRepository;
 import io.github.hkjokerz.jobagent.jdnormalization.persistence.create.JobDescriptionCreateService;
 import io.github.hkjokerz.jobagent.jdnormalization.persistence.read.JobDescriptionReadService;
+import io.github.hkjokerz.jobagent.jdnormalization.persistence.update.ConditionalUpdateRepository;
+import io.github.hkjokerz.jobagent.jdnormalization.persistence.update.JobDescriptionUpdateService;
 import io.github.hkjokerz.jobagent.jdnormalization.web.dto.NormalizeJobDescriptionRequest;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
@@ -59,6 +61,12 @@ class JobDescriptionCreateApiWebTest {
 
     @MockitoBean
     private JobDescriptionReadService readService;
+
+    @MockitoBean
+    private JobDescriptionUpdateService updateService;
+
+    @MockitoBean
+    private ConditionalUpdateRepository updateRepository;
 
     @Test
     void requiresOneSyntacticallyValidKeyAfterAuthentication() throws Exception {

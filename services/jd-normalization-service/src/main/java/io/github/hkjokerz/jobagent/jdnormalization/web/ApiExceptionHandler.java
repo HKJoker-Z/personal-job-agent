@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.hkjokerz.jobagent.jdnormalization.normalization.NormalizationPolicy;
 import io.github.hkjokerz.jobagent.jdnormalization.persistence.create.CreateApiException;
 import io.github.hkjokerz.jobagent.jdnormalization.persistence.read.ReadApiException;
+import io.github.hkjokerz.jobagent.jdnormalization.persistence.update.UpdateApiException;
 import io.github.hkjokerz.jobagent.jdnormalization.web.dto.ApiErrorResponse;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -33,6 +34,37 @@ import org.springframework.transaction.CannotCreateTransactionException;
 public class ApiExceptionHandler {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(ApiExceptionHandler.class);
+
+    @ExceptionHandler(UpdateApiException.class)
+    ResponseEntity<ApiErrorResponse> handleUpdateApiException(
+            UpdateApiException exception,
+            HttpServletRequest request) {
+        HttpStatus status = switch (exception.code()) {
+            case "PRECONDITION_REQUIRED" -> HttpStatus.PRECONDITION_REQUIRED;
+            case "INVALID_IF_MATCH" -> HttpStatus.BAD_REQUEST;
+            case "PRECONDITION_FAILED" -> HttpStatus.PRECONDITION_FAILED;
+            case "JOB_DESCRIPTION_NOT_FOUND" -> HttpStatus.NOT_FOUND;
+            case "JOB_DESCRIPTION_ALREADY_EXISTS" -> HttpStatus.CONFLICT;
+            default -> HttpStatus.INTERNAL_SERVER_ERROR;
+        };
+        String message = switch (exception.code()) {
+            case "PRECONDITION_REQUIRED" -> "An If-Match header is required.";
+            case "INVALID_IF_MATCH" -> "The If-Match header is invalid.";
+            case "PRECONDITION_FAILED" ->
+                    "The If-Match value does not match the current resource.";
+            case "JOB_DESCRIPTION_NOT_FOUND" ->
+                    "The Job Description was not found.";
+            case "JOB_DESCRIPTION_ALREADY_EXISTS" ->
+                    "The Job Description already exists.";
+            default -> "The request could not be completed.";
+        };
+        return error(
+                status,
+                exception.code(),
+                message,
+                request,
+                exception.details());
+    }
 
     @ExceptionHandler(CreateApiException.class)
     ResponseEntity<ApiErrorResponse> handleCreateApiException(
