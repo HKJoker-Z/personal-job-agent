@@ -197,20 +197,19 @@ printf '%s\n' \
   'Preferred:' \
   '- Java' >"${RAW_JOB}"
 
-PYTHONPATH="${REPOSITORY_ROOT}/backend" python3 - "${RAW_JOB}" "${LOCAL_JOB}" <<'PY'
+"${COMPOSE[@]}" run --rm --no-deps -T migrate python -c '
 import sys
-from pathlib import Path
 from analysis_fallback import structure_aware_truncate
 from security_utils import scan_and_sanitize_untrusted_text
-raw = Path(sys.argv[1]).read_text(encoding="utf-8").strip()
+raw = sys.stdin.read().strip()
 local_text, truncated = structure_aware_truncate(raw, 120_000)
 assert truncated is False
 sanitized, scan = scan_and_sanitize_untrusted_text(local_text, "job_description")
 assert scan["blocked"] is False
 assert scan["findings"] == []
 assert sanitized == local_text
-Path(sys.argv[2]).write_text(sanitized, encoding="utf-8")
-PY
+sys.stdout.write(sanitized)
+' <"${RAW_JOB}" >"${LOCAL_JOB}"
 
 wait_backend() {
   for attempt in $(seq 1 60); do
