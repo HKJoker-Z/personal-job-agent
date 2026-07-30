@@ -377,15 +377,23 @@ no image was published.
 ## 37. GitHub CI
 
 Implementation head `dc4910e4236554fec26da3edb6e98f690c8b3b67` passed all
-10 repository check contexts in run `30511935784`: backend tests, frontend
-build, backend PostgreSQL, Docker build, PostgreSQL backup/restore, Compose
-validation, production-runtime regression, script validation, repository
-safety, and the Version 2 Docker smoke.
+10 repository check contexts in run `30511935784`.
 
-The documentation/Work Report head triggers a final repository check set and
-the unchanged Java `verify`, full-profile `container-smoke`, and
-`normalization-only-no-database-smoke`. The final authoritative result will be
-recorded by the report-only CI metadata correction and PR check rollup.
+The complete implementation/documentation head
+`175077a39a9ff208921c0a5fc8bafd31b3c760a1` passed all 13 PR check
+contexts:
+
+- repository CI run `30512737156` completed successfully with backend tests,
+  frontend build, backend PostgreSQL, Docker build, PostgreSQL backup/restore,
+  Compose validation, production-runtime regression, script validation,
+  repository safety, and the Version 2 Docker smoke all successful; and
+- Java CI run `30512737140` completed successfully with `verify`,
+  full-profile `container-smoke`, and
+  `normalization-only-no-database-smoke` all successful.
+
+This CI-delivery metadata correction triggers one final check set. The final
+authoritative status remains the PR check rollup on the resulting report-only
+head.
 
 No workflow logs in to a registry, publishes, releases, deploys, uses
 production credentials, or uses `pull_request_target`.
@@ -423,10 +431,12 @@ Documentation:
   Analyze shadow orchestration, safe logging, and integration/replay tests.
 - `dc4910e4236554fec26da3edb6e98f690c8b3b67` — isolate the new
   integration-test application from the shared legacy application.
+- `175077a39a9ff208921c0a5fc8bafd31b3c760a1` — document the completed
+  implementation, validation evidence, risks, limitations, and rollback.
 
-The documentation/report commit and final CI-delivery metadata commit follow
-these commits. A metadata commit cannot self-embed its own SHA; Git history and
-the PR commit list are the authoritative delivery record.
+The final CI-delivery metadata commit follows these commits. It cannot
+self-embed its own SHA; Git history and the PR commit list are the
+authoritative delivery record.
 
 ## 40. PR URL
 
