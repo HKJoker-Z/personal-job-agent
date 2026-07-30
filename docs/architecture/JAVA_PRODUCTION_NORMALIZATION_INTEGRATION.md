@@ -700,6 +700,32 @@ results are never recomputed.
 - add profile container smoke; and
 - produce a focused Work Report.
 
+**Implementation evidence (Phase I, PR
+[#32](https://github.com/HKJoker-Z/personal-job-agent/pull/32)):**
+
+- `application-normalization-only.yml` disables persistence, schema health,
+  Flyway, and database health and excludes the applicable Spring Boot 3.5
+  database/JDBC/JPA/transaction/migration auto-configurations;
+- `NormalizationOnlyProfileIT` proves context startup without database
+  environment variables, safe startup with impossible dummy database values,
+  persistence/database bean absence, normalize/security/Request ID/error/
+  health/OpenAPI behavior, and authenticated persistence-route absence;
+- the focused smoke starts only the existing Java application image under
+  0.50 CPU, 384 MiB, 128 PIDs, `-Xms64m -Xmx256m`, and a 64 MiB `/tmp`, with
+  no database container or credentials; the bounded local observation was
+  198.1 MiB / 384 MiB, healthy, zero restarts, and no OOM;
+- full Maven verification retained 67 unit/MockMvc tests and 37 PostgreSQL
+  integration tests with zero failures/errors/skips, while the nine new
+  profile integration tests also passed; and
+- the unchanged full-profile container smoke retained Flyway V1/V2,
+  persistence, replay, conditional update, history, readiness, restart, and
+  migration no-op validation.
+
+Phase I is implemented for review but is not merged, released, published, or
+deployed. FastAPI integration, shadow mode, Java-authoritative Analyze,
+execution fingerprints, candidate validation, and every production action
+remain later phases.
+
 ### Phase II — FastAPI client and three modes
 
 - add validated configuration and explicit `httpx`;
