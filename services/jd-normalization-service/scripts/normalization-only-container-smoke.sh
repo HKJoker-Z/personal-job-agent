@@ -85,13 +85,15 @@ cleanup() {
       ;;
   esac
   rm -rf "${temporary_directory}"
-  unset api_key
+  unset api_key JD_NORMALIZATION_API_KEY
   exit "${exit_status}"
 }
 trap cleanup EXIT INT TERM
 
 export JD_NORMALIZATION_ONLY_SMOKE_API_KEY="${api_key}"
 export JD_NORMALIZATION_ONLY_RAW_MARKER="${raw_marker}"
+printf -v JD_NORMALIZATION_API_KEY '%s' "${api_key}"
+export JD_NORMALIZATION_API_KEY
 
 DOCKER_BUILDKIT=1 docker build \
   --pull \
@@ -143,7 +145,7 @@ docker run \
   --security-opt no-new-privileges:true \
   --publish 127.0.0.1::8080 \
   --env SPRING_PROFILES_ACTIVE=normalization-only \
-  --env "JD_NORMALIZATION_API_KEY=${api_key}" \
+  --env JD_NORMALIZATION_API_KEY \
   --env "JAVA_TOOL_OPTIONS=-Xms64m -Xmx256m" \
   "${image_name}" >/dev/null
 
@@ -330,11 +332,11 @@ jq -e '
     and (.[0].Config.Env | index("SPRING_PROFILES_ACTIVE=normalization-only") != null)
     and (.[0].Config.Env | index("JAVA_TOOL_OPTIONS=-Xms64m -Xmx256m") != null)
     and (.[0].Config.Env | all(.[];
-      (startswith("JD_NORMALIZATION_JDBC_URL=")
-        or startswith("JD_NORMALIZATION_DB_USERNAME=")
-        or startswith("JD_NORMALIZATION_DB_PASSWORD=")
-        or startswith("JD_NORMALIZATION_FLYWAY_USERNAME=")
-        or startswith("JD_NORMALIZATION_FLYWAY_PASSWORD=")) | not))
+      (startswith("JD_NORMALIZATION_JDBC_URL" + "=")
+        or startswith("JD_NORMALIZATION_DB_USERNAME" + "=")
+        or startswith("JD_NORMALIZATION_DB_PASSWORD" + "=")
+        or startswith("JD_NORMALIZATION_FLYWAY_USERNAME" + "=")
+        or startswith("JD_NORMALIZATION_FLYWAY_PASSWORD" + "=")) | not))
   ' "${temporary_directory}/container-inspect.json" >/dev/null \
   || fail "container security, resources, state, or database isolation is incomplete"
 
