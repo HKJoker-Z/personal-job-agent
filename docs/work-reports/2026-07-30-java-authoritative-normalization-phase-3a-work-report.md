@@ -345,8 +345,20 @@ modified.
 
 ## 40. GitHub CI
 
-To be updated on the final PR head after all required repository and Java
-checks complete. Local equivalents were run before PR creation.
+Implementation/documentation head
+`3ecee5e55fcf5151a715d1962a7a5caeed73a86b` passed all 13 PR check contexts:
+
+- repository CI run `30519346726`: backend tests, frontend build, PostgreSQL
+  integration, backend/frontend Docker build, Version 2 mock-provider smoke,
+  PostgreSQL 16 backup/restore, Compose validation, production-runtime
+  regression, script validation, and repository safety all passed; and
+- Java CI run `30519346762`: Maven verify, existing full-profile container
+  smoke, and existing normalization-only/no-database smoke all passed.
+
+The pull request was `CLEAN` and `MERGEABLE` after this check set. This
+report-only delivery-metadata commit triggers the final authoritative check
+set; its status is the PR #34 check rollup. No workflow publishes, releases, or
+deploys this change.
 
 ## 41. Changed files
 
@@ -395,13 +407,21 @@ Logical implementation commits:
   authoritative scan, fallback, and effective-input propagation.
 - `d7eac946abc8aeca6cb9d918be6da017e73b28b4` — migration, mode,
   idempotency, concurrency, replay, and failure tests.
+- `3ecee5e55fcf5151a715d1962a7a5caeed73a86b` — configuration/API/security/
+  architecture documentation and the mandatory Work Report.
 
-The documentation/report commit and final report-metadata commit are recorded
-by the pull request history because a commit cannot embed its own SHA.
+The final report-metadata commit is recorded by the pull request history
+because a commit cannot embed its own SHA.
 
 ## 43. PR URL
 
-To be updated after the Phase IIIA pull request is created.
+Phase IIIA PR
+[#34](https://github.com/HKJoker-Z/personal-job-agent/pull/34):
+`https://github.com/HKJoker-Z/personal-job-agent/pull/34`
+
+The PR title is
+`Backend: Add Java-authoritative normalization execution contract`. It remains
+open and must not be merged as part of Phase IIIA delivery.
 
 ## 44. Risks and limitations
 
