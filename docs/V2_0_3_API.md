@@ -120,16 +120,16 @@ execution.
 
 ### Internal JD normalization modes
 
-Phase II adds a private FastAPI client boundary without changing the public
-Analyze request or response contract. It has these runtime modes:
+The private FastAPI client and Phase IIIA execution contract do not change the
+public Analyze request or response schema. The supported runtime modes are:
 
-| Mode | Phase II behavior |
+| Mode | Behavior |
 | --- | --- |
-| `local` | Default. Creates no Java client, performs no Java DNS resolution or request, and preserves the existing Analyze path. |
-| `shadow` | Deterministically samples eligible non-replayed Analyze requests and records observation-only comparison evidence. The local JD remains authoritative. |
-| `java` | Reserved configuration value. Startup fails safely until Phase III implements the execution-fingerprint and idempotency compatibility contract. |
+| `local` | Default. Creates no Java client, performs no Java DNS resolution or request, and uses the existing sanitized local JD. |
+| `shadow` | Deterministically samples eligible non-replayed Analyze requests and records observation-only comparison evidence. The local JD and local execution identity remain authoritative. |
+| `java` | Makes one bounded Java request. A validated, authoritatively rescanned response becomes effective; every Java/validation/second-scan failure safely selects the sanitized local JD as `fallback_local`. |
 
-Unknown modes also fail configuration validation. `shadow` requires an
+Unknown modes fail configuration validation. `shadow` and `java` require an
 operator-controlled absolute HTTP/HTTPS service origin and an absolute
 `JD_NORMALIZATION_API_KEY_FILE`; no literal key default is supported. The
 bounded candidate defaults are:
@@ -149,9 +149,10 @@ These are failure-containment settings, not production latency or sizing
 claims. The total deadline includes response reading, JSON parsing, and schema
 validation.
 
-For a sampled request, FastAPI first completes its current Job URL acquisition,
-input bounds, idempotency claim, and first untrusted-input scan. Blocked input
-is never sent. The Java request contains only `raw_text` with the sanitized JD,
+For an eligible remote-mode request, FastAPI first completes Job URL
+acquisition, input bounds, the stable idempotency claim, and the first
+untrusted-input scan. Completed replay returns even earlier. Blocked input is
+never sent. The Java request contains only `raw_text` with the sanitized JD,
 the internal Bearer key, and FastAPI's trusted `X-Request-ID`. It contains no
 Job URL, Resume, metadata, cookies, Origin, CSRF value, or browser
 authorization.
@@ -162,6 +163,24 @@ declared or streamed oversized responses before JSON parsing and strictly
 validates the response shape, normalized-text bound, SHA-256, policy and
 dictionary versions, unique skill-category precedence, bounded metadata, and
 the exact response Request ID.
+
+The stable `analyze-request-fingerprint:v1` is unchanged: it binds the key to
+stable user input and permits an early claim and exact completed replay across
+mode changes. A separate binary `analyze-execution-v1` SHA-256 is bound
+atomically before RAG or provider work for new keyed attempts. It covers the
+stable fingerprint, effective source (`local`, `java`, or `fallback_local`),
+the exact effective JD text hash, local/Java policy identity, and Java
+dictionary identity where applicable. Attempt-token-scoped identical binding
+is idempotent. A different existing binding returns
+`409 IDEMPOTENCY_EXECUTION_CONFLICT`; fingerprints and source internals are not
+returned.
+
+Migration `20260730_07` adds nullable execution metadata to the existing
+ledger without a default or historical backfill. Consequently, legacy
+completed rows remain valid with null metadata and replay their exact stored
+response without Java, provider, fingerprint recomputation, or History
+mutation. Operational rollback sets
+`ANALYSIS_JD_NORMALIZATION_MODE=local`; no schema downgrade is required.
 
 A valid Java result receives an observation-only security scan. Java text,
 hashes, skills, and scan findings do not change RAG, prompts, provider calls,

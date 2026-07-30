@@ -28,17 +28,34 @@ Production requires PostgreSQL, a Secure Session Cookie, explicit trusted Origin
 
 Secrets belong in an ignored environment file or an external secret manager. Do not commit environment files, database dumps, uploaded resumes, runtime files, Smoke logs, Cookies, tokens, or backup directories. Request logging excludes bodies, query strings, authorization values, resumes, job descriptions, and prompts.
 
-The Phase II Java normalization client defaults to `local`. `shadow` requires
-an absolute key-file path and a validated HTTP/HTTPS service origin; the key is
-read from the file, bounded, and never included in configuration errors or
-structured observations. The internal client does not inherit proxy
+The Java normalization client defaults to `local`. Both `shadow` and `java`
+require an absolute key-file path and a validated HTTP/HTTPS service origin;
+the key is read from the file, bounded, and never included in configuration
+errors or structured observations. The internal client does not inherit proxy
 environment variables, follow redirects, retain/forward cookies, or copy
 browser Session, CSRF, Origin, URL, Resume, or metadata fields. Its successful
 and failed observations contain only bounded outcome, timing, version, count,
 and equality fields—not text, hashes, URLs, headers, response bodies, or
-exception messages. The reserved `java` mode fails startup until the Phase III
-execution-fingerprint contract exists.
+exception messages.
+
+The first FastAPI scan always runs before Java; blocked or unsanitized input is
+never sent. In `shadow`, the second scan is observation-only and local text
+remains authoritative. In `java`, a validated Java response must pass the
+authoritative second scan before it can reach retrieval or prompt
+construction. Rejection safely selects the already-sanitized local input.
+Every new keyed attempt atomically binds its exact effective normalization
+before RAG/provider work, protected by the current attempt token. The binding
+contains no Request ID, key, attempt token, timestamp, raw text, or logged
+fingerprint bytes. A different existing binding yields a stable execution
+conflict. Completed legacy and new rows replay before either scan or Java work.
 
 ## Limitations
 
-Phase 1 is a single-instance foundation, not a formal security certification. It does not claim malware scanning, DLP completeness, high availability, external identity federation, distributed rate limiting beyond the shared PostgreSQL table, or a production deployment already completed. HTTPS must be terminated by an intentionally configured production edge before Secure Cookies are used over a public network.
+Phase 1 is a single-instance foundation, not a formal security certification.
+It does not claim malware scanning, DLP completeness, high availability,
+external identity federation, distributed rate limiting beyond the shared
+PostgreSQL table, or a production deployment already completed. HTTPS must be
+terminated by an intentionally configured production edge before Secure
+Cookies are used over a public network. Phase IIIA is implemented for review
+but is not released, deployed, or enabled in production. Candidate Compose and
+production integration remain future work.
