@@ -348,12 +348,26 @@ and is not a stress, concurrency, capacity, or performance-improvement claim.
 
 ## 41. CI result
 
-The PR's final authoritative GitHub check rollup is recorded by the final
-report-metadata commit. It includes repository CI, Java verify/full-profile/
-normalization-only jobs, and the path-scoped `Java Normalization Candidate`
-job. The candidate job builds locally, runs the complete synthetic matrix,
-requires cleanup, uses minimum permissions and immutable checkout pinning, and
-does not publish, release, or deploy.
+The implementation head
+`3765c23ae19f0a4f3a8b03863c5bbf0c0f45d283` passed all 14 GitHub check
+contexts:
+
+- repository CI run `30528259395`: all ten jobs passed, including backend
+  PostgreSQL;
+- Java CI run `30528259444`: Maven verify, full-profile container smoke, and
+  normalization-only smoke passed;
+- candidate run `30528259462`: `isolated-candidate` passed the complete
+  synthetic matrix and cleanup in 5 minutes 36 seconds.
+
+The first candidate CI attempt exposed an undeclared GitHub-host Python
+dependency while deriving the synthetic normalization fixture. Commit
+`3765c23ae19f0a4f3a8b03863c5bbf0c0f45d283` corrected this by deriving the
+fixture inside the already-built backend image, using the merged backend
+implementation. The corrected full candidate run passed with zero required
+case skipped. The path-scoped job builds locally, requires cleanup, uses
+minimum permissions and immutable checkout pinning, and does not publish,
+release, or deploy. The final report-only commit is followed by the same
+authoritative PR check rollup.
 
 ## 42. Changed files
 
@@ -388,13 +402,16 @@ No FastAPI or Java runtime source file changed.
 - `c7d07d6eb940746cbf8edd024d6a6ed5ef7200f2` — path-scoped candidate CI.
 - `319fda4fdba74934c0255fd6dbc021751c103a55` — candidate documentation,
   architecture evidence, and initial Work Report.
-- The final delivery-metadata commit SHA is recorded in the final report update
-  on this same branch.
+- `0f2df5f415f9b465aea31c29c3471aead5509ba6` — committed candidate
+  measurements.
+- `3765c23ae19f0a4f3a8b03863c5bbf0c0f45d283` — CI-portable synthetic fixture
+  derivation using the candidate backend image.
+- The final report-only delivery-metadata commit follows these implementation
+  commits and is visible in the pull request history.
 
 ## 44. PR URL
 
-The candidate pull request URL is recorded in the final delivery-metadata
-update on this same branch.
+<https://github.com/HKJoker-Z/personal-job-agent/pull/35>
 
 ## 45. Go/no-go recommendation
 
