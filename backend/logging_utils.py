@@ -45,6 +45,13 @@ class JsonFormatter(logging.Formatter):
             "duration_ms",
             "error_code",
             "error_stage",
+            "normalization_mode",
+            "sampled",
+            "normalization_outcome",
+            "text_hash_equal",
+            "security_finding_count",
+            "normalization_policy_version",
+            "skill_dictionary_version",
         ):
             value = getattr(record, field, None)
             if value not in (None, ""):

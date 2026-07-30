@@ -3,6 +3,7 @@ import logging
 import os
 import re
 import time
+from contextlib import asynccontextmanager
 from io import BytesIO
 from pathlib import Path
 from typing import Any
@@ -51,6 +52,8 @@ from app.analyze.idempotency import (
     request_fingerprint as analyze_request_fingerprint,
     validate_key as validate_idempotency_key,
 )
+from app.analyze.normalization_client import JavaNormalizationClient
+from app.analyze.normalization_shadow import observe_shadow_normalization
 from app.jobs.acquisition import SafeJobUrlFetcher, UnsafeJobUrl
 from app.materials.grounding import EvidenceSource, validate_claims, validation_summary
 from config import APP_VERSION, load_config
@@ -286,6 +289,21 @@ SKILL_SYNONYM_GROUPS: dict[str, tuple[str, ...]] = {
 configure_logging(settings.log_level)
 logger = logging.getLogger(APP_NAME)
 
+
+@asynccontextmanager
+async def application_lifespan(application: FastAPI):
+    normalization_client: JavaNormalizationClient | None = None
+    if settings.jd_normalization.mode == "shadow":
+        normalization_client = JavaNormalizationClient(settings.jd_normalization)
+        application.state.jd_normalization_client = normalization_client
+    try:
+        yield
+    finally:
+        if normalization_client is not None:
+            await normalization_client.aclose()
+            application.state.jd_normalization_client = None
+
+
 app = FastAPI(
     title="Personal Job Agent API",
     version=APP_VERSION,
@@ -293,6 +311,7 @@ app = FastAPI(
     redoc_url="/redoc" if settings.enable_api_docs else None,
     openapi_url="/openapi.json" if settings.enable_api_docs else None,
     debug=False,
+    lifespan=application_lifespan,
 )
 initialize_project_knowledge(settings)
 init_db()
@@ -2545,6 +2564,7 @@ async def analyze(
         raise idempotency_http_exception(exc) from exc
     idempotency_service: AnalyzeIdempotencyService | None = None
     idempotency_claim = None
+    fingerprint: str | None = None
     workflow = AgentWorkflow()
     context = WorkflowContext(workflow_id=workflow.workflow_id)
     input_warnings: list[str] = []
@@ -2841,6 +2861,44 @@ async def analyze(
             error_code="UNTRUSTED_INPUT_SCAN_FAILED",
             exc=exc,
         )
+
+    if settings.jd_normalization.mode == "shadow":
+        try:
+            if fingerprint is None:
+                current_db = getattr(request.state, "v2_db", None)
+                knowledge_version = project_knowledge_version(
+                    current_db,
+                    context.rag_mode == "project",
+                )
+                fingerprint = analyze_request_fingerprint(
+                    resume_version_id=clean_resume_version_id or None,
+                    resume_text=context.resume_text,
+                    job_text=context.job_text,
+                    job_url=context.job_url,
+                    rag_enabled=context.rag_mode == "project",
+                    rag_top_k=context.rag_top_k,
+                    project_knowledge=knowledge_version,
+                    save_to_history=save_to_history,
+                    model=DEEPSEEK_MODEL,
+                    security_policy_version=SECURITY_POLICY_VERSION,
+                )
+            await observe_shadow_normalization(
+                client=getattr(
+                    request.app.state,
+                    "jd_normalization_client",
+                    None,
+                ),
+                config=settings.jd_normalization,
+                input_fingerprint=fingerprint,
+                sanitized_job_text=context.sanitized_job_text,
+                request_id=request_id_for(request),
+                logger=logger,
+            )
+        except Exception:
+            logger.warning(
+                "JD normalization shadow orchestration unavailable "
+                "error_type=ShadowOrchestrationFailure"
+            )
 
     logger.info(
         "Analyze RAG settings rag_mode=%s use_knowledge_base=%s rag_top_k=%s",

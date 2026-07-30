@@ -102,6 +102,29 @@ call or History row. The API stays synchronous. It does not claim external
 exactly-once execution; a crash beyond the recorded provider boundary becomes
 `indeterminate` and is not automatically retried.
 
+### Java normalization Phase II boundary
+
+The repository now contains a FastAPI internal client for the stateless Java
+`normalization-only` endpoint, but this is not a production integration.
+`ANALYSIS_JD_NORMALIZATION_MODE=local` is the default and preserves the current
+Analyze path without creating a Java client or resolving a Java service.
+
+`shadow` is an explicitly configured, observation-only runtime mode. It
+samples deterministically from the existing Analyze input fingerprint, sends
+only the first security scan's sanitized bounded JD and trusted
+`X-Request-ID`, validates a bounded Java response, performs a second
+observation-only security scan, and records safe structured comparison
+metadata. It makes one attempt with bounded connect, response, total, response
+size, and connection-pool limits; it does not inherit proxies, follow
+redirects, or forward browser credentials.
+
+The local JD remains authoritative in `shadow`. Java output cannot alter the
+fingerprint, RAG, prompt, provider/repair behavior, deterministic fallback,
+History, monitoring persistence, or public response. The reserved `java` mode
+fails startup until Phase III implements the execution-fingerprint and
+idempotency compatibility contract. No candidate or production deployment has
+occurred.
+
 | Result state | Meaning |
 | --- | --- |
 | `complete` | The model returned a directly usable compact result with no degradation warning. |

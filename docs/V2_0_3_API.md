@@ -118,6 +118,62 @@ application call and at most one explicit format-repair call remain possible.
 This prevents duplicate completed work but does not claim external exactly-once
 execution.
 
+### Internal JD normalization modes
+
+Phase II adds a private FastAPI client boundary without changing the public
+Analyze request or response contract. It has these runtime modes:
+
+| Mode | Phase II behavior |
+| --- | --- |
+| `local` | Default. Creates no Java client, performs no Java DNS resolution or request, and preserves the existing Analyze path. |
+| `shadow` | Deterministically samples eligible non-replayed Analyze requests and records observation-only comparison evidence. The local JD remains authoritative. |
+| `java` | Reserved configuration value. Startup fails safely until Phase III implements the execution-fingerprint and idempotency compatibility contract. |
+
+Unknown modes also fail configuration validation. `shadow` requires an
+operator-controlled absolute HTTP/HTTPS service origin and an absolute
+`JD_NORMALIZATION_API_KEY_FILE`; no literal key default is supported. The
+bounded candidate defaults are:
+
+| Setting | Default |
+| --- | ---: |
+| `JD_NORMALIZATION_CONNECT_TIMEOUT_MS` | 200 ms |
+| `JD_NORMALIZATION_RESPONSE_TIMEOUT_MS` | 600 ms |
+| `JD_NORMALIZATION_TOTAL_TIMEOUT_MS` | 800 ms |
+| `JD_NORMALIZATION_MAX_RESPONSE_BYTES` | 262,144 bytes |
+| `JD_NORMALIZATION_SHADOW_SAMPLE_RATE` | 0 |
+| expected normalization policy | `jd-normalization-v1` |
+| expected skill dictionary | `skills-v1` |
+| maximum/keep-alive connections | 10 / 5 |
+
+These are failure-containment settings, not production latency or sizing
+claims. The total deadline includes response reading, JSON parsing, and schema
+validation.
+
+For a sampled request, FastAPI first completes its current Job URL acquisition,
+input bounds, idempotency claim, and first untrusted-input scan. Blocked input
+is never sent. The Java request contains only `raw_text` with the sanitized JD,
+the internal Bearer key, and FastAPI's trusted `X-Request-ID`. It contains no
+Job URL, Resume, metadata, cookies, Origin, CSRF value, or browser
+authorization.
+
+The application-scoped `httpx.AsyncClient` uses `trust_env=False`, redirects
+disabled, no automatic retry, and a bounded connection pool. It rejects
+declared or streamed oversized responses before JSON parsing and strictly
+validates the response shape, normalized-text bound, SHA-256, policy and
+dictionary versions, unique skill-category precedence, bounded metadata, and
+the exact response Request ID.
+
+A valid Java result receives an observation-only security scan. Java text,
+hashes, skills, and scan findings do not change RAG, prompts, provider calls,
+fallback, History, the current Analyze fingerprint, or the public response.
+Timeouts, unavailable service, HTTP failures, malformed/invalid responses, and
+correlation failures produce only bounded internal observation categories;
+they never expose Java details or fail Analyze. A completed idempotency replay
+returns before shadow sampling and does not call Java.
+
+This client has not been enabled in production and does not implement
+Java-authoritative Analyze.
+
 ## Resumes
 
 - `GET /api/resumes` lists active owned Resumes, primary first.

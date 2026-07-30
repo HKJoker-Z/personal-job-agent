@@ -28,6 +28,17 @@ Production requires PostgreSQL, a Secure Session Cookie, explicit trusted Origin
 
 Secrets belong in an ignored environment file or an external secret manager. Do not commit environment files, database dumps, uploaded resumes, runtime files, Smoke logs, Cookies, tokens, or backup directories. Request logging excludes bodies, query strings, authorization values, resumes, job descriptions, and prompts.
 
+The Phase II Java normalization client defaults to `local`. `shadow` requires
+an absolute key-file path and a validated HTTP/HTTPS service origin; the key is
+read from the file, bounded, and never included in configuration errors or
+structured observations. The internal client does not inherit proxy
+environment variables, follow redirects, retain/forward cookies, or copy
+browser Session, CSRF, Origin, URL, Resume, or metadata fields. Its successful
+and failed observations contain only bounded outcome, timing, version, count,
+and equality fields—not text, hashes, URLs, headers, response bodies, or
+exception messages. The reserved `java` mode fails startup until the Phase III
+execution-fingerprint contract exists.
+
 ## Limitations
 
 Phase 1 is a single-instance foundation, not a formal security certification. It does not claim malware scanning, DLP completeness, high availability, external identity federation, distributed rate limiting beyond the shared PostgreSQL table, or a production deployment already completed. HTTPS must be terminated by an intentionally configured production edge before Secure Cookies are used over a public network.

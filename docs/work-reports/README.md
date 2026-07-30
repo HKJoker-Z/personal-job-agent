@@ -6,6 +6,7 @@ reviewable in Git history.
 
 | Date | Report |
 |---|---|
+| 2026-07-30 | [FastAPI Java Normalization Client Phase II](2026-07-30-fastapi-java-normalization-client-phase-2-work-report.md) |
 | 2026-07-29 | [Java Normalization-Only Runtime Phase I](2026-07-29-java-normalization-only-runtime-phase-1-work-report.md) |
 | 2026-07-29 | [Java Production Normalization Integration Design Audit](2026-07-29-java-production-normalization-integration-design-audit-work-report.md) |
 | 2026-07-29 | [Java JD Normalization Service Phase 3B Containerization](2026-07-29-java-jd-normalization-service-phase-3b-containerization-work-report.md) |

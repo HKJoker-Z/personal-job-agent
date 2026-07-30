@@ -1,11 +1,14 @@
+import hashlib
 import os
 import io
 import json
 import tempfile
 import unittest
+from dataclasses import replace
 from datetime import timedelta
 from pathlib import Path
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
 from alembic import command
@@ -24,6 +27,7 @@ from app.analyze.idempotency import (
     request_fingerprint,
     validate_key,
 )
+import legacy_application
 from app.db.engine import build_engine
 from app.db.models import AnalyzeIdempotencyRecord, ApplicationRecord, User, utc_now
 from app.db.session import session_factory
@@ -420,6 +424,53 @@ class AnalyzeEndpointIdempotencyTest(unittest.TestCase):
         self.assertEqual(first.json(), second.json())
         self.assertNotIn("Idempotency-Replayed", first.headers)
         self.assertEqual(second.headers["Idempotency-Replayed"], "true")
+        self.assertEqual(provider.call_count, 1)
+        db = session_factory()()
+        self.assertEqual(db.scalar(select(func.count(ApplicationRecord.id))), 1)
+        db.close()
+
+    def test_completed_shadow_replay_does_not_call_java_or_rewrite_history(self):
+        key = "72345678-1234-4123-8123-123456789abc"
+        normalization = replace(
+            legacy_application.settings.jd_normalization,
+            mode="shadow",
+            base_url="http://java-normalization:8091",
+            api_key="T" * 32,
+            shadow_sample_rate=1,
+        )
+        shadow_settings = replace(
+            legacy_application.settings,
+            jd_normalization=normalization,
+        )
+        java_result = SimpleNamespace(
+            normalized_text="Java observation only",
+            content_hash=hashlib.sha256(b"Java observation only").hexdigest(),
+            normalization_policy_version="jd-normalization-v1",
+            skill_dictionary_version="skills-v1",
+        )
+        java_client = SimpleNamespace(
+            normalize=AsyncMock(return_value=java_result)
+        )
+        self.client.app.state.jd_normalization_client = java_client
+        try:
+            with patch.object(
+                legacy_application,
+                "settings",
+                shadow_settings,
+            ), patch(
+                "legacy_application.call_deepseek_raw",
+                return_value=self.provider_response(),
+            ) as provider:
+                first = self.request(key)
+                replay = self.request(key)
+        finally:
+            self.client.app.state.jd_normalization_client = None
+
+        self.assertEqual(first.status_code, 200, first.text)
+        self.assertEqual(replay.status_code, 200, replay.text)
+        self.assertEqual(replay.headers["Idempotency-Replayed"], "true")
+        self.assertEqual(replay.json(), first.json())
+        self.assertEqual(java_client.normalize.await_count, 1)
         self.assertEqual(provider.call_count, 1)
         db = session_factory()()
         self.assertEqual(db.scalar(select(func.count(ApplicationRecord.id))), 1)
