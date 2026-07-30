@@ -32,7 +32,7 @@ Run `./generate-secrets.sh` only through the runner below. It creates
 `.env.candidate` and `.candidate-secrets/` with cryptographically random,
 candidate-only values and does not print them. Those paths are ignored by Git
 and removed by the runner's scoped cleanup trap. The committed
-`.env.candidate.example` contains placeholders only.
+`.env.compose.example` contains placeholders only.
 
 Do not copy production environment files, credentials, user data, or Docker
 network names into this directory.

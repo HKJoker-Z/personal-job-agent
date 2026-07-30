@@ -46,7 +46,7 @@ jobs:
             ops/candidate/java-normalization/fault_stub.py
           docker compose \
             --file ops/candidate/java-normalization/compose.yaml \
-            --env-file ops/candidate/java-normalization/.env.candidate.example \
+            --env-file ops/candidate/java-normalization/.env.compose.example \
             config --quiet
 
       - name: Run isolated synthetic candidate

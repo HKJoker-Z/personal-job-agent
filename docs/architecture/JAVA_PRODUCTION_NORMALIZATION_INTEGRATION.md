@@ -19,8 +19,10 @@ routes, and database health are inactive. The unchanged default/full Java
 profile still requires its standalone PostgreSQL/Flyway/JPA stack. Merged
 Phase II added the FastAPI `local`/observation-only `shadow` client boundary.
 Phase IIIA now implements the reviewed Java-authoritative execution contract,
-safe local fallback, and legacy-compatible persistence. Candidate deployment
-and every production action remain future Phase IIIB/IV work.
+safe local fallback, and legacy-compatible persistence. Phase IIIB now supplies
+an isolated disposable candidate and synthetic end-to-end evidence. Every
+production topology, rollout, migration, and deployment action remains future
+Phase IV work.
 
 Do not integrate Java-owned create, read, update, or version-history APIs.
 There is no current Personal Job Agent product requirement for a second owner
@@ -34,8 +36,11 @@ PostgreSQL 16, Redis/Dramatiq foundations, and a synchronous Analyze workflow.
 The Java service is an independently containerized portfolio service with its
 own PostgreSQL/Flyway design and a stateless normalization-only profile.
 FastAPI can call that private contract in reviewed source code, but no
-candidate or production topology has been created and Java is not deployed or
-called by the production Personal Job Agent.
+production topology has been created and Java is not deployed or called by the
+production Personal Job Agent. The Phase IIIB candidate topology exists only
+under `ops/candidate/java-normalization/`; it uses a unique Compose project,
+synthetic PostgreSQL data, and the test-only mock provider, then removes its
+own resources.
 
 The public Analyze security middleware runs outside the route:
 
@@ -792,12 +797,51 @@ or deployed, and production configuration was unchanged.
 Phase IIIA adds no candidate Compose, deployment scripts, Java runtime changes,
 production configuration, image publication, release, or production access.
 
+**Implementation evidence (Phase IIIA, PR
+[#34](https://github.com/HKJoker-Z/personal-job-agent/pull/34)):**
+
+- the single forward-only Alembic revision `20260730_07` extends the existing
+  ledger with nullable, constrained execution-binding metadata while preserving
+  legacy rows and completed replay;
+- attempt-token-protected binding persists `analyze-execution-v1` before RAG
+  or provider work and rejects a different bound execution with
+  `IDEMPOTENCY_EXECUTION_CONFLICT`;
+- `local`, `shadow`, `java`, and `fallback_local` preserve the stable request
+  fingerprint and select one effective JD for RAG, prompt, provider, scoring,
+  deterministic fallback, and derived History; and
+- the authoritative post-Java scan, bounded monitoring evidence, provider
+  ambiguity protections, and PostgreSQL 16 tests were retained without Java
+  runtime changes or any production action.
+
+Phase IIIA was merged normally as
+`29c1881a924e909f13a19cb00ce25f0f7a2a4b85`. It was not released, published,
+deployed, or applied to the production database.
+
 ### Phase IIIB — isolated candidate
 
-- create and run one isolated candidate with synthetic data only;
-- validate private topology, resource limits, rollback, and bounded evidence;
-- call no real external LLM; and
-- produce separate candidate documentation and a Work Report.
+- implemented under `ops/candidate/java-normalization/` with a unique project,
+  private internal data network, candidate-only PostgreSQL volume and secrets,
+  loopback-only FastAPI port, and no Java/PostgreSQL/fault-stub host ports;
+- uses the real merged Java image in `normalization-only`, the merged FastAPI
+  source, and the repository's test-only mock provider; it calls no real
+  external LLM;
+- validates fresh/no-op migration to `20260730_07`, local/shadow/java modes,
+  binding before provider work, exact bounded effective-input identity,
+  fallback, security ordering, replay, execution conflict, restart
+  persistence, and configuration-only rollback;
+- completed 20 sequential synthetic Java-mode observations with zero skipped
+  cases: Java duration median/p95 9.383/20.457 ms and candidate Analyze
+  median/p95 208.188/322.831 ms;
+- observed Java at 174.9 MiB of 384 MiB, 0.19% CPU, and 30 of 128 PIDs in one
+  point-in-time snapshot; the four running candidate services totaled about
+  338.91 MiB, with zero OOM state and zero unexpected restart counts; and
+- found no generated secret or synthetic JD marker in bounded logs and cleaned
+  only the uniquely named candidate resources.
+
+These are synthetic single-host candidate observations, not production
+latency, capacity, reliability, or SLA evidence. The Phase IIIB recommendation
+is **GO to controlled production rollout design**; Phase IV has not started and
+production remains unchanged.
 
 ### Phase IV — controlled production rollout
 
@@ -875,9 +919,10 @@ Documentation:
 
 ### Phase IIIB: candidate validation
 
-- `compose.java-candidate.yaml` (new isolated candidate only);
-- `scripts/java-normalization-candidate.sh` (new bounded synthetic validation);
-- `.github/workflows/ci.yml` if candidate validation belongs in CI;
+- `ops/candidate/java-normalization/compose.yaml` (isolated candidate only);
+- `ops/candidate/java-normalization/run-candidate.sh` and focused candidate
+  helpers/assertions;
+- `.github/workflows/java-normalization-candidate.yml`;
 - this architecture document; and
 - one Phase IIIB Work Report plus the index.
 
