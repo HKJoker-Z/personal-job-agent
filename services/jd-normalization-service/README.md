@@ -1,9 +1,11 @@
 # JD Normalization Service
 
 The JD Normalization Service is a small, independent Java 21 portfolio
-service. It deterministically normalizes bounded Job Description text and owns
-a dedicated PostgreSQL database for idempotent creation, conditional updates,
-and immutable version history.
+service. Its default/full profile deterministically normalizes bounded Job
+Description text and owns a dedicated PostgreSQL database for idempotent
+creation, conditional updates, and immutable version history. Its
+`normalization-only` profile runs the same normalize contract as a stateless
+runtime with no PostgreSQL, JDBC, JPA/Hibernate, or Flyway startup.
 
 The honest repository architecture remains one existing FastAPI modular
 monolith plus this one bounded Java service. The Java service does not connect
@@ -38,6 +40,10 @@ Phase 3A adds exactly one conditional replacement endpoint:
 PUT /api/v1/job-descriptions/{id}
 ```
 
+The production-integration plan's Phase I adds the exact
+`normalization-only` Spring profile. In that profile, normalize is the only
+active product route; the persistence routes above are absent.
+
 There is no `PATCH`, `DELETE`, bulk update, restore, version deletion, seed
 endpoint, FastAPI integration, Redis cache, DeepSeek/LLM call, image
 publication, release, or deployment. Phase 3B adds a local, independently
@@ -47,7 +53,7 @@ This service is not approved for public or production exposure.
 ## Requirements
 
 - Java 21
-- PostgreSQL 16 for manual runtime use
+- PostgreSQL 16 for default/full-profile manual runtime use
 - Docker access for the PostgreSQL 16.14 Testcontainers integration suite
 - Docker Engine with Compose v2 for the isolated container environment
 - POSIX shell or Windows PowerShell/Command Prompt
@@ -136,6 +142,88 @@ JD_NORMALIZATION_BIND_ADDRESS=127.0.0.1 \
 
 The development-only mode is unsafe for public or shared-network exposure.
 CORS is disabled, and browser session cookies are not authentication.
+
+## Stateless normalization-only runtime
+
+Activate the exact profile with:
+
+```bash
+export SPRING_PROFILES_ACTIVE=normalization-only
+export JD_NORMALIZATION_API_KEY="$(openssl rand -base64 32)"
+./mvnw -B -ntp spring-boot:run
+```
+
+Do not set `JD_NORMALIZATION_JDBC_URL`, database usernames/passwords, or
+Flyway credentials. The profile sets persistence and schema health off,
+disables Flyway and database health, and excludes the applicable Spring Boot
+3.5 DataSource, JDBC client/template, persistence transaction, JPA/Hibernate,
+JPA repository, Flyway, SQL initialization, and database-health
+auto-configurations. Persistence libraries remain packaged in the same JAR,
+but profile integration tests prove that their beans are inactive.
+
+The active product API is:
+
+```text
+POST /api/v1/job-descriptions/normalize
+```
+
+The following authenticated routes are not mapped and return the existing
+safe `ROUTE_NOT_FOUND` envelope:
+
+```text
+POST /api/v1/job-descriptions
+GET /api/v1/job-descriptions
+GET /api/v1/job-descriptions/{id}
+GET /api/v1/job-descriptions/{id}/versions
+PUT /api/v1/job-descriptions/{id}
+```
+
+JSON OpenAPI at `/v3/api-docs` contains only the active normalize product
+route. It remains Bearer-key protected outside exact `dev`; Swagger UI and
+OpenAPI YAML remain unavailable. Normalize retains the
+`jd-normalization-v1`/`skills-v1` deterministic contract, bounded input,
+Unicode normalization, content hash, skill extraction, metadata behavior,
+stable errors, and `X-Request-ID`. CORS remains disabled, and normalization
+performs no persistence, external network request, or LLM call.
+
+The internal API key is mandatory and must contain at least 32 UTF-8 bytes.
+`normalization-only` is not a development profile and cannot enable the
+development authentication exception. Missing or short keys, or an attempted
+authentication bypass, fail startup. Health endpoints remain unauthenticated
+and status-only:
+
+- liveness describes the JVM/application process;
+- readiness requires successful Spring startup and configuration validation,
+  successful `skills-v1` loading, and normalize capability availability; and
+- neither probe depends on PostgreSQL, Flyway, database schema, JPA, or
+  persistence repositories.
+
+Build the existing application image and run the focused local/CI proof:
+
+```bash
+docker build --target application \
+  --tag jd-normalization-service:normalization-only-local .
+./scripts/normalization-only-container-smoke.sh --ephemeral
+```
+
+The smoke starts only the Java application container, publishes an ephemeral
+loopback port for validation, supplies no database configuration, creates no
+PostgreSQL or migration container, and removes only its isolated container
+and network. It verifies non-root execution, a read-only root filesystem,
+dropped capabilities, `no-new-privileges`, bounded `/tmp`, auth, Request ID,
+health, route/OpenAPI boundaries, restart/OOM state, and secret/database
+attempt absence in logs and image history.
+
+The smoke enforces the audit's provisional candidate ceilings: 0.50 CPU,
+384 MiB memory, 128 PIDs, JVM `-Xms64m -Xmx256m`, and a 64 MiB `/tmp`.
+These are bounded validation values, not production sizing, availability,
+performance, or swap claims.
+
+The default/full profile remains available as the standalone Java portfolio
+service with dedicated PostgreSQL, JPA/Hibernate, Flyway V1/V2, database/schema
+readiness, and every persistence API described below. Phase I has not
+integrated FastAPI, enabled shadow or Java-authoritative Analyze, published an
+image, created a release, or deployed to production.
 
 ## Independent container environment
 
