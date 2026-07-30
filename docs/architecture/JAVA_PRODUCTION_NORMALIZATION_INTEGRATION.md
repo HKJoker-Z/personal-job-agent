@@ -830,11 +830,11 @@ deployed, or applied to the production database.
   fallback, security ordering, replay, execution conflict, restart
   persistence, and configuration-only rollback;
 - completed 20 sequential synthetic Java-mode observations with zero skipped
-  cases: Java duration median/p95 9.383/20.457 ms and candidate Analyze
-  median/p95 208.188/322.831 ms;
-- observed Java at 174.9 MiB of 384 MiB, 0.19% CPU, and 30 of 128 PIDs in one
+  cases: Java duration median/p95 10.555/16.604 ms and candidate Analyze
+  median/p95 210.413/392.733 ms;
+- observed Java at 189.5 MiB of 384 MiB, 0.13% CPU, and 30 of 128 PIDs in one
   point-in-time snapshot; the four running candidate services totaled about
-  338.91 MiB, with zero OOM state and zero unexpected restart counts; and
+  344.19 MiB, with zero OOM state and zero unexpected restart counts; and
 - found no generated secret or synthetic JD marker in bounded logs and cleaned
   only the uniquely named candidate resources.
 

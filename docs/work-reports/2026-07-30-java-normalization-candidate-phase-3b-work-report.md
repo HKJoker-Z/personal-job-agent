@@ -303,13 +303,13 @@ One point-in-time snapshot after 20 sequential Java-mode requests observed:
 | Service | Memory | CPU | PIDs |
 |---|---:|---:|---:|
 | FastAPI | 112.6 MiB / 640 MiB | 0.15% | 3 |
-| Java | 174.9 MiB / 384 MiB | 0.19% | 30 |
-| PostgreSQL | 28.36 MiB / 384 MiB | 6.55% | 9 |
-| Fault stub | 23.05 MiB / 96 MiB | 10.15% | 2 |
+| Java | 189.5 MiB / 384 MiB | 0.13% | 30 |
+| PostgreSQL | 28.44 MiB / 384 MiB | 0.04% | 9 |
+| Fault stub | 13.65 MiB / 96 MiB | 0.01% | 1 |
 
-Total observed memory was approximately 338.91 MiB. Candidate database size
+Total observed memory was approximately 344.19 MiB. Candidate database size
 was 12,205,079 bytes (11.64 MiB). Locally built backend and Java candidate
-images were 106,908,637 and 155,587,899 bytes. Java remained below its 0.50
+images were 106,908,637 and 155,587,886 bytes. Java remained below its 0.50
 CPU/384 MiB/128 PID ceiling; no obvious limit violation was observed.
 
 This is a bounded synthetic snapshot, not production sizing or a load test.
@@ -318,8 +318,8 @@ This is a bounded synthetic snapshot, not production sizing or a load test.
 
 For 20 sequential successful synthetic Java-mode calls:
 
-- median: `9.383 ms`
-- p95: `20.457 ms`
+- median: `10.555 ms`
+- p95: `16.604 ms`
 
 These are FastAPI's candidate Java-normalization duration observations, not
 production latency or an SLA.
@@ -328,8 +328,8 @@ production latency or an SLA.
 
 For the same 20 sequential synthetic requests:
 
-- median: `208.188 ms`
-- p95: `322.831 ms`
+- median: `210.413 ms`
+- p95: `392.733 ms`
 
 The sample had zero fallback and zero failure. It was deliberately sequential
 and is not a stress, concurrency, capacity, or performance-improvement claim.
@@ -386,8 +386,10 @@ No FastAPI or Java runtime source file changed.
 - `a7379d8129d8347a8559d7c02fc6fdcaf3f0f2d5` — mode, fallback, replay,
   rollback, resource, and safety assertions.
 - `c7d07d6eb940746cbf8edd024d6a6ed5ef7200f2` — path-scoped candidate CI.
-- Documentation/report and final delivery-metadata commit SHAs are recorded in
-  the final report update on this same branch.
+- `319fda4fdba74934c0255fd6dbc021751c103a55` — candidate documentation,
+  architecture evidence, and initial Work Report.
+- The final delivery-metadata commit SHA is recorded in the final report update
+  on this same branch.
 
 ## 44. PR URL
 
