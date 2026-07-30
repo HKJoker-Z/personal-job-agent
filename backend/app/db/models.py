@@ -17,6 +17,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    LargeBinary,
     Numeric,
     String,
     Text,
@@ -1182,6 +1183,56 @@ class AnalyzeIdempotencyRecord(TimestampMixin, Base):
             name="analyze_idempotency_status_valid",
         ),
         CheckConstraint("attempt_count >= 1", name="analyze_idempotency_attempt_count_positive"),
+        CheckConstraint(
+            "execution_fingerprint IS NULL OR length(execution_fingerprint) = 32",
+            name="analyze_idempotency_execution_fingerprint_size",
+        ),
+        CheckConstraint(
+            "normalization_source IS NULL OR "
+            "normalization_source IN ('local','java','fallback_local')",
+            name="analyze_idempotency_execution_source_valid",
+        ),
+        CheckConstraint(
+            """
+            (execution_contract_version IS NULL OR length(trim(execution_contract_version)) > 0)
+            AND (normalization_source IS NULL OR length(trim(normalization_source)) > 0)
+            AND (normalization_policy_version IS NULL OR length(trim(normalization_policy_version)) > 0)
+            AND (skill_dictionary_version IS NULL OR length(trim(skill_dictionary_version)) > 0)
+            """,
+            name="analyze_idempotency_execution_values_nonblank",
+        ),
+        CheckConstraint(
+            """
+            (
+                execution_fingerprint IS NULL
+                AND execution_contract_version IS NULL
+                AND normalization_source IS NULL
+                AND normalization_policy_version IS NULL
+                AND skill_dictionary_version IS NULL
+                AND execution_bound_at IS NULL
+            )
+            OR
+            (
+                execution_fingerprint IS NOT NULL
+                AND execution_contract_version IS NOT NULL
+                AND normalization_source IS NOT NULL
+                AND normalization_policy_version IS NOT NULL
+                AND execution_bound_at IS NOT NULL
+                AND (
+                    (
+                        normalization_source = 'java'
+                        AND skill_dictionary_version IS NOT NULL
+                    )
+                    OR
+                    (
+                        normalization_source IN ('local','fallback_local')
+                        AND skill_dictionary_version IS NULL
+                    )
+                )
+            )
+            """,
+            name="analyze_idempotency_execution_metadata_consistent",
+        ),
         Index("ix_analyze_idempotency_expiry_status", "expires_at", "status"),
         Index("ix_analyze_idempotency_processing_lease", "status", "lease_expires_at"),
     )
@@ -1201,6 +1252,12 @@ class AnalyzeIdempotencyRecord(TimestampMixin, Base):
     history_record_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("application_records.id", ondelete="SET NULL")
     )
+    execution_fingerprint: Mapped[bytes | None] = mapped_column(LargeBinary(32))
+    execution_contract_version: Mapped[str | None] = mapped_column(String(64))
+    normalization_source: Mapped[str | None] = mapped_column(String(32))
+    normalization_policy_version: Mapped[str | None] = mapped_column(String(64))
+    skill_dictionary_version: Mapped[str | None] = mapped_column(String(64))
+    execution_bound_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     provider_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     lease_expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     attempt_count: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
