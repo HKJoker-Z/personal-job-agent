@@ -1,0 +1,66 @@
+name: Java Normalization Candidate
+
+on:
+  pull_request:
+    paths:
+      - "ops/candidate/java-normalization/**"
+      - ".github/workflows/java-normalization-candidate.yml"
+      - "backend/**"
+      - "services/jd-normalization-service/**"
+      - "docs/architecture/JAVA_PRODUCTION_NORMALIZATION_INTEGRATION.md"
+      - "docs/work-reports/2026-07-30-java-normalization-candidate-phase-3b-work-report.md"
+      - "docs/work-reports/README.md"
+  push:
+    branches: [main]
+    paths:
+      - "ops/candidate/java-normalization/**"
+      - ".github/workflows/java-normalization-candidate.yml"
+      - "backend/**"
+      - "services/jd-normalization-service/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: java-normalization-candidate-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  isolated-candidate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          fetch-depth: 0
+
+      - name: Validate candidate definitions
+        run: |
+          bash -n ops/candidate/java-normalization/generate-secrets.sh
+          bash -n ops/candidate/java-normalization/run-candidate.sh
+          python3 -m py_compile \
+            ops/candidate/java-normalization/assertions.py \
+            ops/candidate/java-normalization/candidate_runtime.py \
+            ops/candidate/java-normalization/fault_stub.py
+          docker compose \
+            --file ops/candidate/java-normalization/compose.yaml \
+            --env-file ops/candidate/java-normalization/.env.candidate.example \
+            config --quiet
+
+      - name: Run isolated synthetic candidate
+        env:
+          CANDIDATE_CI: "1"
+        run: ops/candidate/java-normalization/run-candidate.sh --ephemeral
+
+      - name: Verify candidate cleanup
+        if: always()
+        run: |
+          if docker ps --all --format '{{.Names}}' \
+            | grep -E '^pja-java-candidate-${{ github.run_id }}-${{ github.run_attempt }}-'; then
+            echo "Candidate cleanup left scoped containers behind."
+            exit 1
+          fi
+          test ! -e ops/candidate/java-normalization/.env.candidate
+          test ! -e ops/candidate/java-normalization/.candidate-secrets
