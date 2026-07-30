@@ -9,9 +9,14 @@ import io.github.hkjokerz.jobagent.jdnormalization.normalization.SkillDictionary
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
 @Component
+@ConditionalOnProperty(
+        name = "jd-normalization.persistence.enabled",
+        havingValue = "true",
+        matchIfMissing = true)
 public class CreateFingerprints {
 
     static final String CREATE_CONTRACT_VERSION = "jd-create-v1";

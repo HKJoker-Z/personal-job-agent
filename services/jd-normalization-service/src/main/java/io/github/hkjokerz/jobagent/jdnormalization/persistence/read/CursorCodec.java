@@ -16,9 +16,14 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
 import java.util.regex.Pattern;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
 @Component
+@ConditionalOnProperty(
+        name = "jd-normalization.persistence.enabled",
+        havingValue = "true",
+        matchIfMissing = true)
 public class CursorCodec {
 
     public static final int LIST_CURSOR_MAX_LENGTH = 1024;
