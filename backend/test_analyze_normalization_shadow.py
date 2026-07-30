@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, patch
 
 from docx import Document
 from fastapi import FastAPI
+from fastapi.exceptions import RequestValidationError
 from fastapi.testclient import TestClient
 
 import legacy_application
@@ -21,7 +22,7 @@ from app.analyze.normalization_shadow import (
     deterministic_shadow_sample,
     observe_shadow_normalization,
 )
-from logging_utils import JsonFormatter
+from logging_utils import JsonFormatter, RequestLoggingMiddleware
 
 
 def docx_bytes(text: str = "Python FastAPI engineer") -> bytes:
@@ -82,15 +83,29 @@ def canonical_public_result(value: dict) -> dict:
 
 class AnalyzeNormalizationShadowIntegrationTest(unittest.TestCase):
     def setUp(self):
-        self.client = TestClient(legacy_application.app)
+        self.app = FastAPI()
+        self.app.post("/api/analyze")(legacy_application.analyze)
+        self.app.add_exception_handler(
+            legacy_application.HTTPException,
+            legacy_application.http_exception_handler,
+        )
+        self.app.add_exception_handler(
+            RequestValidationError,
+            legacy_application.validation_exception_handler,
+        )
+        self.app.add_middleware(
+            RequestLoggingMiddleware,
+            logger=logging.getLogger("personal-job-agent"),
+        )
+        self.client = TestClient(self.app)
         self.fake_client = SimpleNamespace(
             normalize=AsyncMock(return_value=normalized_result())
         )
-        legacy_application.app.state.jd_normalization_client = self.fake_client
+        self.app.state.jd_normalization_client = self.fake_client
 
     def tearDown(self):
         self.client.close()
-        legacy_application.app.state.jd_normalization_client = None
+        self.app.state.jd_normalization_client = None
 
     def request(
         self,
