@@ -5,22 +5,32 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import psycopg
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 from sqlalchemy.exc import IntegrityError
 
 import database
 import monitoring_service
 from app.auth.service import AuthService
+from app.analyze.execution import (
+    LOCAL_NORMALIZATION_CONTRACT_VERSION,
+    execution_fingerprint,
+)
 from app.analyze.idempotency import AnalyzeIdempotencyService, IdempotencyError, hash_key
 from app.core.config import load_v2_settings
 from app.db.engine import build_engine
 from app.db.session import session_factory
-from app.db.models import AnalyzeIdempotencyRecord, Application, ApplicationStageHistory, Job
+from app.db.models import (
+    AnalyzeIdempotencyRecord,
+    Application,
+    ApplicationRecord,
+    ApplicationStageHistory,
+    Job,
+)
 from app.jobs.service import JobService
 from app.applications.service import ApplicationConflict, ApplicationService
 from app.resumes.service import ResumeService
@@ -48,13 +58,16 @@ class V2PostgreSQLIntegrationTest(unittest.TestCase):
             raise RuntimeError("PostgreSQL integration database must be explicitly test-named.")
 
     def setUp(self):
+        self.reset_schema("head")
+
+    def reset_schema(self, revision):
         raw_url = self.database_url.replace("postgresql+psycopg://", "postgresql://", 1)
         with psycopg.connect(raw_url, autocommit=True) as connection:
             connection.execute("DROP SCHEMA IF EXISTS public CASCADE")
             connection.execute("CREATE SCHEMA public")
         build_engine.cache_clear()
         config = Config(str(Path(__file__).parent / "alembic.ini"))
-        command.upgrade(config, "head")
+        command.upgrade(config, revision)
 
     def tearDown(self):
         build_engine.cache_clear()
@@ -147,6 +160,264 @@ class V2PostgreSQLIntegrationTest(unittest.TestCase):
             records = db.scalars(select(AnalyzeIdempotencyRecord)).all()
             self.assertEqual(len(records), 1)
             self.assertEqual(records[0].attempt_count, 1)
+        finally:
+            db.close()
+
+    def test_analyze_execution_migration_preserves_legacy_rows_and_enforces_constraints(self):
+        self.reset_schema("20260724_06")
+        owner = self.create_owner()
+        record_id = uuid4()
+        attempt_token = uuid4()
+        key = "postgres-legacy-execution-12345678"
+        key_hash = hash_key(key)
+        raw_url = self.database_url.replace(
+            "postgresql+psycopg://",
+            "postgresql://",
+            1,
+        )
+        with psycopg.connect(raw_url) as connection:
+            connection.execute(
+                """
+                INSERT INTO analyze_idempotency_records (
+                    id, user_id, operation, idempotency_key_hash,
+                    request_fingerprint, status, request_id, attempt_token,
+                    response_status, response_body, lease_expires_at,
+                    attempt_count, created_at, updated_at, expires_at,
+                    completed_at
+                )
+                VALUES (
+                    %s, %s, 'analyze:v1', %s,
+                    %s, 'completed', 'legacy-completed-request', %s,
+                    200, %s::json, CURRENT_TIMESTAMP,
+                    1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP,
+                    CURRENT_TIMESTAMP + INTERVAL '1 day', CURRENT_TIMESTAMP
+                )
+                """,
+                (
+                    record_id,
+                    owner.id,
+                    key_hash,
+                    "a" * 64,
+                    attempt_token,
+                    '{"legacy":true,"saved_to_history":false,"application_id":null}',
+                ),
+            )
+
+        config = Config(str(Path(__file__).parent / "alembic.ini"))
+        command.upgrade(config, "head")
+        command.upgrade(config, "head")
+        command.check(config)
+
+        with psycopg.connect(raw_url) as connection:
+            row = connection.execute(
+                """
+                SELECT response_body, execution_fingerprint,
+                       execution_contract_version, normalization_source,
+                       normalization_policy_version, skill_dictionary_version,
+                       execution_bound_at
+                FROM analyze_idempotency_records
+                WHERE id = %s
+                """,
+                (record_id,),
+            ).fetchone()
+            self.assertTrue(row[0]["legacy"])
+            self.assertEqual(tuple(row[1:]), (None, None, None, None, None, None))
+            self.assertEqual(
+                connection.execute(
+                    "SELECT version_num FROM alembic_version"
+                ).fetchone()[0],
+                "20260730_07",
+            )
+
+        replay = AnalyzeIdempotencyService().claim(
+            user_id=owner.id,
+            key_hash=key_hash,
+            fingerprint="a" * 64,
+            request_id="legacy-replay-after-upgrade",
+        )
+        self.assertTrue(replay.is_replay)
+        self.assertTrue(replay.replay_body["legacy"])
+
+        invalid_updates = (
+            (
+                """
+                UPDATE analyze_idempotency_records
+                SET execution_fingerprint = %s
+                WHERE id = %s
+                """,
+                (b"x" * 32, record_id),
+            ),
+            (
+                """
+                UPDATE analyze_idempotency_records
+                SET execution_fingerprint = %s,
+                    execution_contract_version = 'analyze-execution-v1',
+                    normalization_source = 'local',
+                    normalization_policy_version = 'fastapi-local-jd-v1',
+                    execution_bound_at = CURRENT_TIMESTAMP
+                WHERE id = %s
+                """,
+                (b"x" * 31, record_id),
+            ),
+            (
+                """
+                UPDATE analyze_idempotency_records
+                SET execution_fingerprint = %s,
+                    execution_contract_version = 'analyze-execution-v1',
+                    normalization_source = 'invalid',
+                    normalization_policy_version = 'fastapi-local-jd-v1',
+                    execution_bound_at = CURRENT_TIMESTAMP
+                WHERE id = %s
+                """,
+                (b"x" * 32, record_id),
+            ),
+            (
+                """
+                UPDATE analyze_idempotency_records
+                SET execution_fingerprint = %s,
+                    execution_contract_version = '   ',
+                    normalization_source = 'local',
+                    normalization_policy_version = 'fastapi-local-jd-v1',
+                    execution_bound_at = CURRENT_TIMESTAMP
+                WHERE id = %s
+                """,
+                (b"x" * 32, record_id),
+            ),
+            (
+                """
+                UPDATE analyze_idempotency_records
+                SET execution_fingerprint = %s,
+                    execution_contract_version = 'analyze-execution-v1',
+                    normalization_source = 'java',
+                    normalization_policy_version = 'jd-normalization-v1',
+                    skill_dictionary_version = NULL,
+                    execution_bound_at = CURRENT_TIMESTAMP
+                WHERE id = %s
+                """,
+                (b"x" * 32, record_id),
+            ),
+        )
+        for sql, parameters in invalid_updates:
+            with self.subTest(sql=sql.split("SET", 1)[1].strip()[:40]):
+                with self.assertRaises(psycopg.errors.CheckViolation):
+                    with psycopg.connect(raw_url) as connection:
+                        connection.execute(sql, parameters)
+
+        with psycopg.connect(raw_url) as connection:
+            connection.execute(
+                """
+                UPDATE analyze_idempotency_records
+                SET execution_fingerprint = %s,
+                    execution_contract_version = 'analyze-execution-v1',
+                    normalization_source = 'local',
+                    normalization_policy_version = 'fastapi-local-jd-v1',
+                    skill_dictionary_version = NULL,
+                    execution_bound_at = CURRENT_TIMESTAMP
+                WHERE id = %s
+                """,
+                (b"l" * 32, record_id),
+            )
+        with psycopg.connect(raw_url) as connection:
+            source, size = connection.execute(
+                """
+                SELECT normalization_source, length(execution_fingerprint)
+                FROM analyze_idempotency_records WHERE id = %s
+                """,
+                (record_id,),
+            ).fetchone()
+            self.assertEqual((source, size), ("local", 32))
+
+    def test_postgres_execution_binding_takeover_conflict_and_atomic_rollback(self):
+        owner = self.create_owner()
+        service = AnalyzeIdempotencyService()
+        stable_fingerprint = "f" * 64
+        claim = service.claim(
+            user_id=owner.id,
+            key_hash=hash_key("postgres-binding-12345678"),
+            fingerprint=stable_fingerprint,
+            request_id="postgres-binding-first",
+        )
+        local = execution_fingerprint(
+            stable_request_fingerprint=stable_fingerprint,
+            effective_normalization_source="local",
+            effective_job_text="Local PostgreSQL binding",
+            normalization_policy_version=LOCAL_NORMALIZATION_CONTRACT_VERSION,
+            skill_dictionary_version=None,
+        )
+        service.bind_execution(claim, local)
+        service.bind_execution(claim, local)
+
+        db = session_factory(self.database_url)()
+        try:
+            record = db.get(AnalyzeIdempotencyRecord, claim.record_id)
+            bound_at = record.execution_bound_at
+            record.lease_expires_at = datetime.now(timezone.utc) - timedelta(
+                seconds=1
+            )
+            db.commit()
+        finally:
+            db.close()
+
+        takeover = service.claim(
+            user_id=owner.id,
+            key_hash=claim.key_hash,
+            fingerprint=stable_fingerprint,
+            request_id="postgres-binding-takeover",
+        )
+        service.bind_execution(takeover, local)
+        db = session_factory(self.database_url)()
+        try:
+            record = db.get(AnalyzeIdempotencyRecord, claim.record_id)
+            self.assertEqual(record.execution_bound_at, bound_at)
+        finally:
+            db.close()
+
+        with self.assertRaises(IdempotencyError) as stale:
+            service.bind_execution(claim, local)
+        self.assertEqual(stale.exception.code, "IDEMPOTENCY_PERSISTENCE_FAILED")
+        java = execution_fingerprint(
+            stable_request_fingerprint=stable_fingerprint,
+            effective_normalization_source="java",
+            effective_job_text="Java PostgreSQL binding",
+            normalization_policy_version="jd-normalization-v1",
+            skill_dictionary_version="skills-v1",
+        )
+        with self.assertRaises(IdempotencyError) as conflict:
+            service.bind_execution(takeover, java)
+        self.assertEqual(
+            conflict.exception.code,
+            "IDEMPOTENCY_EXECUTION_CONFLICT",
+        )
+
+        unbound = service.claim(
+            user_id=owner.id,
+            key_hash=hash_key("postgres-unbound-finalize-12345678"),
+            fingerprint="e" * 64,
+            request_id="postgres-unbound-finalize",
+        )
+        unbound_binding = execution_fingerprint(
+            stable_request_fingerprint="e" * 64,
+            effective_normalization_source="local",
+            effective_job_text="Unbound PostgreSQL execution",
+            normalization_policy_version=LOCAL_NORMALIZATION_CONTRACT_VERSION,
+            skill_dictionary_version=None,
+        )
+        with self.assertRaises(IdempotencyError):
+            service.finalize(
+                unbound,
+                {"company_name": "No partial history"},
+                execution_binding=unbound_binding,
+                save_to_history=True,
+                user_id=owner.id,
+                job_url=None,
+                resume_filename=None,
+            )
+        db = session_factory(self.database_url)()
+        try:
+            self.assertEqual(db.scalar(select(func.count(ApplicationRecord.id))), 0)
+            record = db.get(AnalyzeIdempotencyRecord, unbound.record_id)
+            self.assertEqual(record.status, "processing")
+            self.assertIsNone(record.execution_fingerprint)
         finally:
             db.close()
 
@@ -347,6 +618,7 @@ class V2PostgreSQLIntegrationTest(unittest.TestCase):
             db.close()
 
     def test_version_201_schema_downgrade_and_upgrade_preserves_foundation(self):
+        self.reset_schema("20260724_06")
         owner = self.create_owner()
         config = Config(str(Path(__file__).parent / "alembic.ini"))
         command.downgrade(config, "20260712_01")
@@ -359,6 +631,7 @@ class V2PostgreSQLIntegrationTest(unittest.TestCase):
             self.assertEqual(connection.execute("SELECT to_regclass('public.jobs')").fetchone()[0], "jobs")
 
     def test_alpha2_schema_upgrades_to_matching_and_materials(self):
+        self.reset_schema("20260724_06")
         config = Config(str(Path(__file__).parent / "alembic.ini"))
         command.downgrade(config, "20260713_02")
         raw_url = self.database_url.replace("postgresql+psycopg://", "postgresql://", 1)
@@ -382,6 +655,7 @@ class V2PostgreSQLIntegrationTest(unittest.TestCase):
             )
 
     def test_alpha3_schema_upgrades_to_reliable_agent_workflows_and_round_trips(self):
+        self.reset_schema("20260724_06")
         workflow_tables = (
             "agent_runs", "agent_steps", "agent_run_events", "approval_requests",
             "approval_decisions", "agent_outbox_events", "user_ai_budgets",
@@ -415,6 +689,7 @@ class V2PostgreSQLIntegrationTest(unittest.TestCase):
             )
 
     def test_v203_primary_resume_migration_backfills_and_enforces_one_active_primary(self):
+        self.reset_schema("20260724_06")
         owner = self.create_owner()
         db = session_factory(self.database_url)()
         try:

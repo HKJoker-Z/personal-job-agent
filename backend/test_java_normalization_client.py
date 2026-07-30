@@ -128,6 +128,16 @@ class JavaNormalizationClientTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.required_skills[0].id, "python")
         self.assertEqual(len(requests), 1)
 
+    async def test_java_authoritative_mode_uses_the_same_bounded_client(self):
+        async def handler(request: httpx.Request):
+            return json_response(request)
+
+        result = await self.call_with_handler(
+            handler,
+            config=client_config(mode="java"),
+        )
+        self.assertEqual(result.normalized_text, "Required:\n- Python")
+
     async def test_authorization_is_not_logged(self):
         private_body = "PRIVATE_REMOTE_BODY_" + API_KEY
 

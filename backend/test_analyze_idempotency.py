@@ -27,6 +27,12 @@ from app.analyze.idempotency import (
     request_fingerprint,
     validate_key,
 )
+from app.analyze.execution import (
+    EXECUTION_CONTRACT_VERSION,
+    LOCAL_NORMALIZATION_CONTRACT_VERSION,
+    execution_fingerprint,
+)
+from app.analyze.normalization_client import NormalizationClientError
 import legacy_application
 from app.db.engine import build_engine
 from app.db.models import AnalyzeIdempotencyRecord, ApplicationRecord, User, utc_now
@@ -107,6 +113,39 @@ class AnalyzeIdempotencyTest(unittest.TestCase):
         )
 
     @staticmethod
+    def binding(
+        *,
+        stable_fingerprint: str = "a" * 64,
+        source: str = "local",
+        text: str = "Python backend role",
+        policy_version: str | None = None,
+        dictionary_version: str | None = None,
+    ):
+        return execution_fingerprint(
+            stable_request_fingerprint=stable_fingerprint,
+            effective_normalization_source=source,
+            effective_job_text=text,
+            normalization_policy_version=(
+                policy_version
+                or (
+                    "jd-normalization-v1"
+                    if source == "java"
+                    else LOCAL_NORMALIZATION_CONTRACT_VERSION
+                )
+            ),
+            skill_dictionary_version=(
+                dictionary_version
+                if source == "java"
+                else None
+            ),
+        )
+
+    def bind(self, claim, binding=None):
+        selected = binding or self.binding()
+        self.service.bind_execution(claim, selected)
+        return selected
+
+    @staticmethod
     def response():
         return {
             "company_name": "Example",
@@ -144,11 +183,38 @@ class AnalyzeIdempotencyTest(unittest.TestCase):
         changed = dict(values, job_text="Different role")
         self.assertNotEqual(first, request_fingerprint(**changed))
 
+    def test_execution_fingerprint_is_binary_canonical_and_domain_separated(self):
+        local = self.binding()
+        same = self.binding()
+        java = self.binding(
+            source="java",
+            text="Python backend role",
+            dictionary_version="skills-v1",
+        )
+        fallback = self.binding(source="fallback_local")
+        changed_text = self.binding(text="Different effective role")
+        changed_request = self.binding(stable_fingerprint="b" * 64)
+
+        self.assertEqual(len(local.fingerprint), 32)
+        self.assertEqual(local, same)
+        self.assertEqual(local.contract_version, EXECUTION_CONTRACT_VERSION)
+        self.assertEqual(
+            local.normalization_policy_version,
+            LOCAL_NORMALIZATION_CONTRACT_VERSION,
+        )
+        self.assertIsNone(local.skill_dictionary_version)
+        self.assertNotEqual(local.fingerprint, java.fingerprint)
+        self.assertNotEqual(local.fingerprint, fallback.fingerprint)
+        self.assertNotEqual(local.fingerprint, changed_text.fingerprint)
+        self.assertNotEqual(local.fingerprint, changed_request.fingerprint)
+
     def test_first_completion_replays_identically_without_history(self):
         claim = self.claim()
+        binding = self.bind(claim)
         body, history_id = self.service.finalize(
             claim,
             self.response(),
+            execution_binding=binding,
             save_to_history=False,
             user_id=self.user_id,
             job_url=None,
@@ -161,9 +227,11 @@ class AnalyzeIdempotencyTest(unittest.TestCase):
 
     def test_history_and_completed_response_finalize_together_once(self):
         claim = self.claim()
+        binding = self.bind(claim)
         body, history_id = self.service.finalize(
             claim,
             self.response(),
+            execution_binding=binding,
             save_to_history=True,
             user_id=self.user_id,
             job_url=None,
@@ -208,6 +276,7 @@ class AnalyzeIdempotencyTest(unittest.TestCase):
 
     def test_stale_pre_provider_attempt_is_reclaimed_and_old_token_loses(self):
         old = self.claim()
+        old_binding = self.bind(old)
         db = session_factory()()
         record = db.get(AnalyzeIdempotencyRecord, old.record_id)
         record.lease_expires_at = utc_now() - timedelta(seconds=1)
@@ -219,6 +288,7 @@ class AnalyzeIdempotencyTest(unittest.TestCase):
             self.service.finalize(
                 old,
                 self.response(),
+                execution_binding=old_binding,
                 save_to_history=False,
                 user_id=self.user_id,
                 job_url=None,
@@ -227,7 +297,8 @@ class AnalyzeIdempotencyTest(unittest.TestCase):
 
     def test_stale_post_provider_attempt_becomes_indeterminate(self):
         claim = self.claim()
-        self.service.provider_started(claim)
+        binding = self.bind(claim)
+        self.service.provider_started(claim, binding)
         db = session_factory()()
         record = db.get(AnalyzeIdempotencyRecord, claim.record_id)
         record.lease_expires_at = utc_now() - timedelta(seconds=1)
@@ -239,12 +310,14 @@ class AnalyzeIdempotencyTest(unittest.TestCase):
 
     def test_finalization_rollback_leaves_no_partial_history(self):
         claim = self.claim()
+        binding = self.bind(claim)
         huge = self.response()
         huge["analysis_warnings"] = ["x" * (600 * 1024)]
         with self.assertRaises(IdempotencyError) as raised:
             self.service.finalize(
                 claim,
                 huge,
+                execution_binding=binding,
                 save_to_history=True,
                 user_id=self.user_id,
                 job_url=None,
@@ -259,9 +332,11 @@ class AnalyzeIdempotencyTest(unittest.TestCase):
 
     def test_cleanup_deletes_only_expired_terminal_records(self):
         completed = self.claim()
+        binding = self.bind(completed)
         self.service.finalize(
             completed,
             self.response(),
+            execution_binding=binding,
             save_to_history=False,
             user_id=self.user_id,
             job_url=None,
@@ -277,6 +352,99 @@ class AnalyzeIdempotencyTest(unittest.TestCase):
         db = session_factory()()
         self.assertIsNone(db.get(AnalyzeIdempotencyRecord, completed.record_id))
         self.assertIsNotNone(db.get(AnalyzeIdempotencyRecord, active.record_id))
+        db.close()
+
+    def test_binding_is_attempt_protected_idempotent_and_immutable(self):
+        claim = self.claim()
+        local = self.bind(claim)
+        db = session_factory()()
+        record = db.get(AnalyzeIdempotencyRecord, claim.record_id)
+        first_bound_at = record.execution_bound_at
+        self.assertEqual(record.execution_fingerprint, local.fingerprint)
+        self.assertEqual(record.normalization_source, "local")
+        self.assertEqual(
+            record.normalization_policy_version,
+            LOCAL_NORMALIZATION_CONTRACT_VERSION,
+        )
+        self.assertIsNone(record.skill_dictionary_version)
+        self.assertIsNone(record.provider_started_at)
+        db.close()
+
+        self.service.bind_execution(claim, local)
+        db = session_factory()()
+        record = db.get(AnalyzeIdempotencyRecord, claim.record_id)
+        self.assertEqual(record.execution_bound_at, first_bound_at)
+        record.lease_expires_at = utc_now() - timedelta(seconds=1)
+        db.commit()
+        db.close()
+
+        takeover = self.claim()
+        self.service.bind_execution(takeover, local)
+        with self.assertRaises(IdempotencyError) as stale:
+            self.service.bind_execution(claim, local)
+        self.assertEqual(stale.exception.code, "IDEMPOTENCY_PERSISTENCE_FAILED")
+
+        java = self.binding(
+            source="java",
+            dictionary_version="skills-v1",
+        )
+        with self.assertRaises(IdempotencyError) as conflict:
+            self.service.bind_execution(takeover, java)
+        self.assertEqual(
+            conflict.exception.code,
+            "IDEMPOTENCY_EXECUTION_CONFLICT",
+        )
+        self.assertNotIn(local.fingerprint.hex(), str(conflict.exception))
+        changed_text = self.binding(text="Different local effective role")
+        with self.assertRaises(IdempotencyError) as changed:
+            self.service.bind_execution(takeover, changed_text)
+        self.assertEqual(
+            changed.exception.code,
+            "IDEMPOTENCY_EXECUTION_CONFLICT",
+        )
+
+    def test_provider_and_finalization_require_the_expected_binding(self):
+        claim = self.claim()
+        local = self.binding()
+        with self.assertRaises(IdempotencyError) as provider:
+            self.service.provider_started(claim, local)
+        self.assertEqual(provider.exception.code, "IDEMPOTENCY_PERSISTENCE_FAILED")
+        with self.assertRaises(IdempotencyError) as finalization:
+            self.service.finalize(
+                claim,
+                self.response(),
+                execution_binding=local,
+                save_to_history=False,
+                user_id=self.user_id,
+                job_url=None,
+                resume_filename=None,
+            )
+        self.assertEqual(
+            finalization.exception.code,
+            "IDEMPOTENCY_PERSISTENCE_FAILED",
+        )
+
+    def test_legacy_completed_null_binding_replays_without_mutation(self):
+        claim = self.claim()
+        stored = self.response()
+        stored["application_id"] = None
+        stored["saved_to_history"] = False
+        db = session_factory()()
+        record = db.get(AnalyzeIdempotencyRecord, claim.record_id)
+        record.status = "completed"
+        record.response_status = 200
+        record.response_body = stored
+        record.completed_at = utc_now()
+        db.commit()
+        db.close()
+
+        replay = self.claim()
+        self.assertTrue(replay.is_replay)
+        self.assertEqual(replay.replay_body, stored)
+        db = session_factory()()
+        record = db.get(AnalyzeIdempotencyRecord, claim.record_id)
+        self.assertIsNone(record.execution_fingerprint)
+        self.assertIsNone(record.execution_bound_at)
         db.close()
 
     def test_sdk_transport_retries_are_zero_for_primary_and_repair(self):
@@ -384,6 +552,33 @@ class AnalyzeEndpointIdempotencyTest(unittest.TestCase):
         return ProviderAnalysisResponse(
             content=content,
             metadata={"finish_reason": "stop", "response_length": len(content)},
+        )
+
+    @staticmethod
+    def mode_settings(mode: str):
+        normalization = replace(
+            legacy_application.settings.jd_normalization,
+            mode=mode,
+            base_url=(
+                "http://java-normalization:8091"
+                if mode in {"shadow", "java"}
+                else None
+            ),
+            api_key=("T" * 32 if mode in {"shadow", "java"} else None),
+            shadow_sample_rate=1 if mode == "shadow" else 0,
+        )
+        return replace(
+            legacy_application.settings,
+            jd_normalization=normalization,
+        )
+
+    @staticmethod
+    def java_result(text="JAVA EFFECTIVE Python backend role"):
+        return SimpleNamespace(
+            normalized_text=text,
+            content_hash=hashlib.sha256(text.encode("utf-8")).hexdigest(),
+            normalization_policy_version="jd-normalization-v1",
+            skill_dictionary_version="skills-v1",
         )
 
     def request(self, key=None, *, job_text="Python backend role", save=True, csrf=None):
@@ -550,6 +745,263 @@ class AnalyzeEndpointIdempotencyTest(unittest.TestCase):
         self.assertEqual(replay.headers["Idempotency-Replayed"], "true")
         self.assertEqual(primary.call_count, 1)
         self.assertEqual(repair.call_count, 1)
+
+    def test_completed_local_result_replays_in_java_mode_without_java_or_provider(self):
+        key = "62345678-1234-4123-8123-123456789abc"
+        java_client = SimpleNamespace(
+            normalize=AsyncMock(return_value=self.java_result())
+        )
+        self.client.app.state.jd_normalization_client = java_client
+        try:
+            with patch(
+                "legacy_application.call_deepseek_raw",
+                return_value=self.provider_response(),
+            ) as provider:
+                with patch.object(
+                    legacy_application,
+                    "settings",
+                    self.mode_settings("local"),
+                ):
+                    first = self.request(key)
+                with patch.object(
+                    legacy_application,
+                    "settings",
+                    self.mode_settings("java"),
+                ):
+                    replay = self.request(key)
+        finally:
+            self.client.app.state.jd_normalization_client = None
+
+        self.assertEqual(first.status_code, 200, first.text)
+        self.assertEqual(replay.status_code, 200, replay.text)
+        self.assertEqual(replay.headers["Idempotency-Replayed"], "true")
+        self.assertEqual(replay.json(), first.json())
+        java_client.normalize.assert_not_awaited()
+        self.assertEqual(provider.call_count, 1)
+        db = session_factory()()
+        record = db.scalar(select(AnalyzeIdempotencyRecord))
+        self.assertEqual(record.normalization_source, "local")
+        self.assertEqual(
+            record.normalization_policy_version,
+            LOCAL_NORMALIZATION_CONTRACT_VERSION,
+        )
+        self.assertEqual(len(record.execution_fingerprint), 32)
+        self.assertIsNotNone(record.execution_bound_at)
+        db.close()
+
+    def test_legacy_completed_null_binding_replays_across_mode_change_without_side_effects(self):
+        key = "b2345678-1234-4123-8123-123456789abc"
+        with patch(
+            "legacy_application.call_deepseek_raw",
+            return_value=self.provider_response(),
+        ):
+            first = self.request(key)
+        self.assertEqual(first.status_code, 200, first.text)
+        db = session_factory()()
+        record = db.scalar(select(AnalyzeIdempotencyRecord))
+        record.execution_fingerprint = None
+        record.execution_contract_version = None
+        record.normalization_source = None
+        record.normalization_policy_version = None
+        record.skill_dictionary_version = None
+        record.execution_bound_at = None
+        db.commit()
+        history_count = db.scalar(select(func.count(ApplicationRecord.id)))
+        db.close()
+
+        java_client = SimpleNamespace(
+            normalize=AsyncMock(return_value=self.java_result())
+        )
+        self.client.app.state.jd_normalization_client = java_client
+        try:
+            with patch.object(
+                legacy_application,
+                "settings",
+                self.mode_settings("java"),
+            ), patch(
+                "legacy_application.call_deepseek_raw"
+            ) as provider:
+                replay = self.request(key)
+        finally:
+            self.client.app.state.jd_normalization_client = None
+        self.assertEqual(replay.status_code, 200, replay.text)
+        self.assertEqual(replay.headers["Idempotency-Replayed"], "true")
+        self.assertEqual(replay.json(), first.json())
+        java_client.normalize.assert_not_awaited()
+        provider.assert_not_called()
+        db = session_factory()()
+        self.assertEqual(
+            db.scalar(select(func.count(ApplicationRecord.id))),
+            history_count,
+        )
+        record = db.scalar(select(AnalyzeIdempotencyRecord))
+        self.assertIsNone(record.execution_fingerprint)
+        db.close()
+
+    def test_completed_java_result_replays_in_local_mode_without_provider_or_history_rewrite(self):
+        key = "82345678-1234-4123-8123-123456789abc"
+        java_text = "JAVA HISTORY DERIVATION Python platform role"
+        java_client = SimpleNamespace(
+            normalize=AsyncMock(return_value=self.java_result(java_text))
+        )
+        self.client.app.state.jd_normalization_client = java_client
+        try:
+            with patch(
+                "legacy_application.call_deepseek_raw",
+                return_value=self.provider_response(),
+            ) as provider:
+                with patch.object(
+                    legacy_application,
+                    "settings",
+                    self.mode_settings("java"),
+                ):
+                    first = self.request(key)
+                with patch.object(
+                    legacy_application,
+                    "settings",
+                    self.mode_settings("local"),
+                ):
+                    replay = self.request(key)
+        finally:
+            self.client.app.state.jd_normalization_client = None
+
+        self.assertEqual(first.status_code, 200, first.text)
+        self.assertEqual(replay.status_code, 200, replay.text)
+        self.assertEqual(replay.headers["Idempotency-Replayed"], "true")
+        self.assertEqual(replay.json(), first.json())
+        self.assertEqual(java_client.normalize.await_count, 1)
+        self.assertEqual(provider.call_count, 1)
+        db = session_factory()()
+        record = db.scalar(select(AnalyzeIdempotencyRecord))
+        self.assertEqual(record.normalization_source, "java")
+        self.assertEqual(
+            record.normalization_policy_version,
+            "jd-normalization-v1",
+        )
+        self.assertEqual(record.skill_dictionary_version, "skills-v1")
+        self.assertEqual(db.scalar(select(func.count(ApplicationRecord.id))), 1)
+        history = db.scalar(select(ApplicationRecord))
+        self.assertNotIn(java_text, history.notes or "")
+        db.close()
+
+    def test_java_failure_is_selected_and_bound_before_provider_as_fallback_local(self):
+        key = "92345678-1234-4123-8123-123456789abc"
+        java_client = SimpleNamespace(
+            normalize=AsyncMock(
+                side_effect=NormalizationClientError("response_timeout")
+            )
+        )
+        observed_sources: list[str] = []
+
+        def provider(*args, **kwargs):
+            db = session_factory()()
+            record = db.scalar(select(AnalyzeIdempotencyRecord))
+            observed_sources.append(record.normalization_source)
+            self.assertEqual(len(record.execution_fingerprint), 32)
+            self.assertIsNotNone(record.provider_started_at)
+            db.close()
+            return self.provider_response()
+
+        self.client.app.state.jd_normalization_client = java_client
+        try:
+            with patch.object(
+                legacy_application,
+                "settings",
+                self.mode_settings("java"),
+            ), patch(
+                "legacy_application.call_deepseek_raw",
+                side_effect=provider,
+            ) as provider_call:
+                response = self.request(key, save=False)
+        finally:
+            self.client.app.state.jd_normalization_client = None
+
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(java_client.normalize.await_count, 1)
+        self.assertEqual(provider_call.call_count, 1)
+        self.assertEqual(observed_sources, ["fallback_local"])
+        db = session_factory()()
+        record = db.scalar(select(AnalyzeIdempotencyRecord))
+        self.assertEqual(record.normalization_source, "fallback_local")
+        self.assertEqual(
+            record.normalization_policy_version,
+            LOCAL_NORMALIZATION_CONTRACT_VERSION,
+        )
+        self.assertIsNone(record.skill_dictionary_version)
+        db.close()
+
+    def test_execution_binding_database_failure_prevents_provider(self):
+        key = "a2345678-1234-4123-8123-123456789abc"
+        with patch.object(
+            AnalyzeIdempotencyService,
+            "bind_execution",
+            side_effect=IdempotencyError(
+                "IDEMPOTENCY_PERSISTENCE_FAILED",
+                "The Analyze execution binding could not be persisted.",
+            ),
+        ), patch(
+            "legacy_application.call_deepseek_raw"
+        ) as provider:
+            response = self.request(key, save=False)
+        self.assertEqual(response.status_code, 503, response.text)
+        self.assertEqual(
+            response.json()["error"]["code"],
+            "IDEMPOTENCY_PERSISTENCE_FAILED",
+        )
+        provider.assert_not_called()
+        self.assertNotIn("fingerprint", response.text.lower())
+
+    def test_bound_java_execution_does_not_silently_fallback_on_retry(self):
+        key = "c2345678-1234-4123-8123-123456789abc"
+        java_client = SimpleNamespace(
+            normalize=AsyncMock(return_value=self.java_result())
+        )
+        self.client.app.state.jd_normalization_client = java_client
+        try:
+            with patch.object(
+                legacy_application,
+                "settings",
+                self.mode_settings("java"),
+            ), patch.object(
+                AnalyzeIdempotencyService,
+                "provider_started",
+                side_effect=IdempotencyError(
+                    "IDEMPOTENCY_PERSISTENCE_FAILED",
+                    "The provider boundary could not be persisted.",
+                ),
+            ), patch(
+                "legacy_application.call_deepseek_raw"
+            ) as provider:
+                first = self.request(key, save=False)
+            self.assertEqual(first.status_code, 503, first.text)
+            provider.assert_not_called()
+            db = session_factory()()
+            record = db.scalar(select(AnalyzeIdempotencyRecord))
+            self.assertEqual(record.status, "failed")
+            self.assertEqual(record.normalization_source, "java")
+            db.close()
+
+            java_client.normalize.side_effect = NormalizationClientError(
+                "unavailable"
+            )
+            with patch.object(
+                legacy_application,
+                "settings",
+                self.mode_settings("java"),
+            ), patch(
+                "legacy_application.call_deepseek_raw"
+            ) as provider:
+                retry = self.request(key, save=False)
+        finally:
+            self.client.app.state.jd_normalization_client = None
+        self.assertEqual(retry.status_code, 409, retry.text)
+        self.assertEqual(
+            retry.json()["error"]["code"],
+            "IDEMPOTENCY_EXECUTION_CONFLICT",
+        )
+        provider.assert_not_called()
+        self.assertNotIn("java", retry.text.lower())
+        self.assertNotIn("fingerprint", retry.text.lower())
 
 
 if __name__ == "__main__":

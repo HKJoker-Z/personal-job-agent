@@ -178,14 +178,31 @@ class JavaNormalizationConfigTest(unittest.TestCase):
                         with self.assertRaisesRegex(ConfigError, name):
                             self.load(configured)
 
-    def test_unknown_and_reserved_java_modes_fail_startup_safely(self):
+    def test_unknown_mode_fails_and_valid_java_uses_the_bounded_client_contract(self):
         with self.assertRaisesRegex(ConfigError, "local, shadow, or java"):
             self.load({"ANALYSIS_JD_NORMALIZATION_MODE": "unknown"})
-        with self.assertRaisesRegex(
-            ConfigError,
-            "Phase III execution-fingerprint contract",
-        ):
-            self.load({"ANALYSIS_JD_NORMALIZATION_MODE": "java"})
+        with tempfile.TemporaryDirectory() as directory:
+            values = self.shadow_values(Path(directory))
+            values["ANALYSIS_JD_NORMALIZATION_MODE"] = "java"
+            config = self.load(values).jd_normalization
+        self.assertEqual(config.mode, "java")
+        self.assertEqual(config.base_url, "http://java-normalization:8091")
+        self.assertEqual(len(config.api_key or ""), 32)
+        self.assertEqual(config.expected_policy_version, "jd-normalization-v1")
+        self.assertEqual(config.expected_dictionary_version, "skills-v1")
+
+    def test_java_requires_the_same_origin_key_and_bounds_as_shadow(self):
+        with tempfile.TemporaryDirectory() as directory:
+            values = self.shadow_values(Path(directory))
+            values["ANALYSIS_JD_NORMALIZATION_MODE"] = "java"
+            values.pop("JD_NORMALIZATION_BASE_URL")
+            with self.assertRaisesRegex(ConfigError, "BASE_URL"):
+                self.load(values)
+            values = self.shadow_values(Path(directory))
+            values["ANALYSIS_JD_NORMALIZATION_MODE"] = "java"
+            values.pop("JD_NORMALIZATION_API_KEY_FILE")
+            with self.assertRaisesRegex(ConfigError, "API_KEY_FILE"):
+                self.load(values)
 
     def test_configuration_errors_do_not_expose_key_or_path(self):
         secret = "TEST_ONLY_DO_NOT_EXPOSE_" + "X" * 40

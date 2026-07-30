@@ -27,7 +27,7 @@ class V2DatabaseMigrationTest(unittest.TestCase):
                 engine = build_engine(os.environ["TEST_DATABASE_URL"])
                 with engine.connect() as connection:
                     current = MigrationContext.configure(connection).get_current_revision()
-                self.assertEqual(current, "20260724_06")
+                self.assertEqual(current, "20260730_07")
                 command.check(config)
                 engine.dispose()
                 build_engine.cache_clear()
@@ -59,7 +59,7 @@ class V2DatabaseMigrationTest(unittest.TestCase):
             with patch.dict(os.environ, {"APP_ENV": "test", "TEST_DATABASE_URL": url}):
                 build_engine.cache_clear()
                 config = Config(str(Path(__file__).parent / "alembic.ini"))
-                command.upgrade(config, "head")
+                command.upgrade(config, "20260724_06")
                 engine = build_engine(url)
                 self.assertTrue(workflow_tables.issubset(set(inspect(engine).get_table_names())))
                 engine.dispose()
