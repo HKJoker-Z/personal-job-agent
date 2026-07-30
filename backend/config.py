@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import math
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import urlsplit
 
 
 APP_VERSION = os.getenv("APP_VERSION", "2.0.4").strip() or "2.0.4"
@@ -17,6 +20,10 @@ DEFAULT_PRODUCTION_KNOWLEDGE_PATH = Path("/app/project-knowledge/PROJECT_KNOWLED
 DEFAULT_SEED_PATH = Path("/app/seed/PROJECT_KNOWLEDGE.md")
 ALLOWED_APP_ENVS = ("development", "production", "test")
 ALLOWED_LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
+ALLOWED_JD_NORMALIZATION_MODES = ("local", "shadow", "java")
+VERSION_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$")
+JAVA_API_KEY_MINIMUM_BYTES = 32
+JAVA_API_KEY_MAXIMUM_BYTES = 512
 
 
 class ConfigError(RuntimeError):
@@ -46,6 +53,24 @@ def parse_int(name: str, value: str | None, default: int, minimum: int, maximum:
     return parsed
 
 
+def parse_float(
+    name: str,
+    value: str | None,
+    default: float,
+    minimum: float,
+    maximum: float,
+) -> float:
+    if value is None or not value.strip():
+        return default
+    try:
+        parsed = float(value)
+    except ValueError as exc:
+        raise ConfigError(f"{name} must be a number.") from exc
+    if not math.isfinite(parsed) or not minimum <= parsed <= maximum:
+        raise ConfigError(f"{name} must be between {minimum} and {maximum}.")
+    return parsed
+
+
 def parse_csv(value: str | None) -> tuple[str, ...]:
     if not value:
         return ()
@@ -69,6 +94,22 @@ def resolve_path(value: str | None, default: Path) -> Path:
 
 
 @dataclass(frozen=True)
+class JavaNormalizationConfig:
+    mode: str
+    base_url: str | None
+    api_key: str | None
+    connect_timeout_ms: int
+    response_timeout_ms: int
+    total_timeout_ms: int
+    max_response_bytes: int
+    expected_policy_version: str
+    expected_dictionary_version: str
+    shadow_sample_rate: float
+    pool_max_connections: int = 10
+    pool_max_keepalive_connections: int = 5
+
+
+@dataclass(frozen=True)
 class AppConfig:
     app_env: str
     database_path: Path
@@ -87,10 +128,157 @@ class AppConfig:
     monitoring_admin_token_configured: bool
     monitoring_allow_remote_admin: bool
     mock_provider_enabled: bool
+    jd_normalization: JavaNormalizationConfig
 
     @property
     def max_upload_size_bytes(self) -> int:
         return self.max_upload_size_mb * 1024 * 1024
+
+
+def _normalization_version(name: str, default: str) -> str:
+    supplied = os.getenv(name)
+    if supplied is not None and not supplied.strip():
+        raise ConfigError(f"{name} must be 1-64 safe ASCII characters.")
+    value = (supplied or default).strip()
+    if not VERSION_PATTERN.fullmatch(value):
+        raise ConfigError(f"{name} must be 1-64 safe ASCII characters.")
+    return value
+
+
+def _normalization_base_url() -> str:
+    value = os.getenv("JD_NORMALIZATION_BASE_URL", "").strip()
+    if not value:
+        raise ConfigError("JD_NORMALIZATION_BASE_URL is required in shadow mode.")
+    try:
+        parsed = urlsplit(value)
+        port = parsed.port
+    except ValueError as exc:
+        raise ConfigError("JD_NORMALIZATION_BASE_URL must be a valid HTTP or HTTPS origin.") from exc
+    if (
+        parsed.scheme not in {"http", "https"}
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+        or parsed.path not in {"", "/"}
+    ):
+        raise ConfigError(
+            "JD_NORMALIZATION_BASE_URL must be an absolute HTTP or HTTPS origin "
+            "without userinfo, query, fragment, or endpoint path."
+        )
+    if port is not None and not 1 <= port <= 65535:
+        raise ConfigError("JD_NORMALIZATION_BASE_URL port is invalid.")
+    return value.rstrip("/")
+
+
+def _normalization_api_key() -> str:
+    supplied = os.getenv("JD_NORMALIZATION_API_KEY_FILE", "").strip()
+    if not supplied:
+        raise ConfigError("JD_NORMALIZATION_API_KEY_FILE is required in shadow mode.")
+    path = Path(supplied).expanduser()
+    if not path.is_absolute():
+        raise ConfigError("JD_NORMALIZATION_API_KEY_FILE must be an absolute file path.")
+    try:
+        if not path.is_file():
+            raise ConfigError("JD_NORMALIZATION_API_KEY_FILE must reference a readable file.")
+        if path.stat().st_size > JAVA_API_KEY_MAXIMUM_BYTES + 2:
+            raise ConfigError("JD_NORMALIZATION_API_KEY_FILE exceeds the safe size limit.")
+        key = path.read_text(encoding="utf-8").strip()
+    except ConfigError:
+        raise
+    except (OSError, UnicodeError) as exc:
+        raise ConfigError("JD_NORMALIZATION_API_KEY_FILE could not be read safely.") from exc
+    encoded = key.encode("utf-8")
+    if (
+        len(encoded) < JAVA_API_KEY_MINIMUM_BYTES
+        or len(encoded) > JAVA_API_KEY_MAXIMUM_BYTES
+        or any(character.isspace() for character in key)
+        or "\x00" in key
+    ):
+        raise ConfigError(
+            "JD_NORMALIZATION_API_KEY_FILE must contain a 32-512 byte whitespace-free key."
+        )
+    return key
+
+
+def load_java_normalization_config() -> JavaNormalizationConfig:
+    mode = (
+        os.getenv("ANALYSIS_JD_NORMALIZATION_MODE", "local").strip().lower()
+        or "local"
+    )
+    if mode not in ALLOWED_JD_NORMALIZATION_MODES:
+        raise ConfigError(
+            "ANALYSIS_JD_NORMALIZATION_MODE must be local, shadow, or java."
+        )
+    if mode == "java":
+        raise ConfigError(
+            "ANALYSIS_JD_NORMALIZATION_MODE=java is reserved: authoritative Java "
+            "normalization requires the Phase III execution-fingerprint contract."
+        )
+
+    connect_timeout_ms = parse_int(
+        "JD_NORMALIZATION_CONNECT_TIMEOUT_MS",
+        os.getenv("JD_NORMALIZATION_CONNECT_TIMEOUT_MS"),
+        200,
+        1,
+        5_000,
+    )
+    response_timeout_ms = parse_int(
+        "JD_NORMALIZATION_RESPONSE_TIMEOUT_MS",
+        os.getenv("JD_NORMALIZATION_RESPONSE_TIMEOUT_MS"),
+        600,
+        1,
+        10_000,
+    )
+    total_timeout_ms = parse_int(
+        "JD_NORMALIZATION_TOTAL_TIMEOUT_MS",
+        os.getenv("JD_NORMALIZATION_TOTAL_TIMEOUT_MS"),
+        800,
+        1,
+        15_000,
+    )
+    max_response_bytes = parse_int(
+        "JD_NORMALIZATION_MAX_RESPONSE_BYTES",
+        os.getenv("JD_NORMALIZATION_MAX_RESPONSE_BYTES"),
+        256 * 1024,
+        1_024,
+        1024 * 1024,
+    )
+    sample_rate = parse_float(
+        "JD_NORMALIZATION_SHADOW_SAMPLE_RATE",
+        os.getenv("JD_NORMALIZATION_SHADOW_SAMPLE_RATE"),
+        0.0,
+        0.0,
+        1.0,
+    )
+    policy_version = _normalization_version(
+        "JD_NORMALIZATION_EXPECTED_POLICY_VERSION",
+        "jd-normalization-v1",
+    )
+    dictionary_version = _normalization_version(
+        "JD_NORMALIZATION_EXPECTED_DICTIONARY_VERSION",
+        "skills-v1",
+    )
+
+    base_url = None
+    api_key = None
+    if mode == "shadow":
+        base_url = _normalization_base_url()
+        api_key = _normalization_api_key()
+
+    return JavaNormalizationConfig(
+        mode=mode,
+        base_url=base_url,
+        api_key=api_key,
+        connect_timeout_ms=connect_timeout_ms,
+        response_timeout_ms=response_timeout_ms,
+        total_timeout_ms=total_timeout_ms,
+        max_response_bytes=max_response_bytes,
+        expected_policy_version=policy_version,
+        expected_dictionary_version=dictionary_version,
+        shadow_sample_rate=sample_rate,
+    )
 
 
 def load_config(*, validate_production: bool = True) -> AppConfig:
@@ -158,6 +346,7 @@ def load_config(*, validate_production: bool = True) -> AppConfig:
         mock_provider_enabled=parse_bool(
             "MOCK_PROVIDER_ENABLED", os.getenv("MOCK_PROVIDER_ENABLED"), False
         ),
+        jd_normalization=load_java_normalization_config(),
     )
     if production and validate_production:
         if not config.deepseek_api_key:
@@ -186,4 +375,6 @@ def safe_config_status(config: AppConfig) -> dict[str, object]:
         "analysis_job_description_max_chars": config.analysis_job_description_max_chars,
         "monitoring_admin_configured": config.monitoring_admin_token_configured,
         "monitoring_remote_admin_allowed": config.monitoring_allow_remote_admin,
+        "jd_normalization_mode": config.jd_normalization.mode,
+        "jd_normalization_shadow_sample_rate": config.jd_normalization.shadow_sample_rate,
     }
