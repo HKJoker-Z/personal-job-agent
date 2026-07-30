@@ -13,13 +13,12 @@ idempotency, History, and monitoring responsibility. Java supplies only
 deterministic text normalization, bounded metadata normalization, lexical skill
 extraction, a content hash, and version identifiers.
 
-The current Java application cannot honestly be called stateless at startup:
-its default configuration requires PostgreSQL, JPA, Flyway configuration, and
-database-backed readiness. A future `normalization-only` Spring profile is a
-small, testable change because all persistence controllers and services are
-already conditional on `jd-normalization.persistence.enabled`; the profile
-must additionally exclude database/JPA/Flyway auto-configuration and database
-health.
+The merged Java `normalization-only` profile is stateless at startup and has
+test/container evidence that PostgreSQL, JDBC, JPA, Flyway, persistence
+routes, and database health are inactive. The unchanged default/full Java
+profile still requires its standalone PostgreSQL/Flyway/JPA stack. Phase II
+adds only a FastAPI `local`/observation-only `shadow` client boundary;
+authoritative Java behavior remains rejected until Phase III.
 
 Do not integrate Java-owned create, read, update, or version-history APIs.
 There is no current Personal Job Agent product requirement for a second owner
@@ -721,19 +720,47 @@ results are never recomputed.
   persistence, replay, conditional update, history, readiness, restart, and
   migration no-op validation.
 
-Phase I is implemented for review but is not merged, released, published, or
-deployed. FastAPI integration, shadow mode, Java-authoritative Analyze,
-execution fingerprints, candidate validation, and every production action
-remain later phases.
+Phase I was merged normally as
+`e1daa69e98a583e2667fe9c70635ada1e5a87a7c`. It was not released, published,
+or deployed. The Java-authoritative Analyze path, execution fingerprints,
+candidate validation, and every production action remain later phases.
 
-### Phase II — FastAPI client and three modes
+### Phase II — FastAPI client and safe local/shadow modes
 
 - add validated configuration and explicit `httpx`;
 - application-scoped client and cleanup;
 - one attempt, timeouts, response limit, Request ID validation, safe fallback;
-- local/shadow/java selection and dual security scan;
+- local/shadow selection, reserved-and-rejected `java`, and dual security scan;
 - safe structured observation; and
 - unit/Analyze integration tests with no real provider.
+
+**Implementation evidence (Phase II, PR
+[#33](https://github.com/HKJoker-Z/personal-job-agent/pull/33)):**
+
+- `local` remains the default, creates no Java client, and makes no Java
+  request; `shadow` requires a validated service origin and bounded key file;
+  and `java` fails startup with the Phase III execution-fingerprint
+  prerequisite;
+- the application-scoped `httpx.AsyncClient` is reused and closed at shutdown,
+  has `trust_env=False`, follows no redirects, forwards no browser state,
+  performs one attempt, and uses bounded connect/response/total timeouts,
+  connection limits, and streaming response size enforcement;
+- strict validation covers status/content type, exact bounded JSON structure,
+  text and request bounds, recomputed SHA-256, policy/dictionary versions,
+  skill uniqueness/precedence and bounds, metadata bounds, and exact trusted
+  Request ID agreement;
+- deterministic sampling is domain-separated from the unchanged existing
+  Analyze input fingerprint; completed replay returns before shadow work;
+- sampled Java input is only the first scan's sanitized JD, and the second scan
+  is observation-only; Java results do not change RAG, prompt, provider,
+  fallback, History, monitoring persistence, fingerprint, or public response;
+  and
+- safe structured observations contain only bounded request correlation,
+  outcome, duration, equality, count, and expected version evidence.
+
+Phase II is implemented for review but is not merged, released, published,
+deployed, or enabled in production. Java-authoritative Analyze and the
+execution fingerprint remain Phase III work.
 
 ### Phase III — idempotency contract and candidate
 
@@ -781,24 +808,22 @@ Documentation:
 
 - `backend/requirements.txt`
 - `backend/config.py`
-- `backend/app/application.py`
 - `backend/app/analyze/normalization_client.py` (new)
-- `backend/agent_workflow.py`
+- `backend/app/analyze/normalization_shadow.py` (new)
 - `backend/legacy_application.py`
 - `backend/logging_utils.py`
 
 Tests:
 
-- `backend/test_config.py`
-- `backend/test_jd_normalization_client.py` (new)
-- `backend/test_v203_analysis_resilience.py`
-- `backend/test_v201_rag.py`
-- `backend/test_analyze_request_correlation.py`
+- `backend/test_java_normalization_config.py` (new)
+- `backend/test_java_normalization_client.py` (new)
+- `backend/test_analyze_normalization_shadow.py` (new)
+- `backend/test_analyze_idempotency.py`
 
 Documentation:
 
 - `.env.example` (names/placeholders only);
-- `docs/V2_0_4_API.md` or the then-current API document;
+- `README.md`, `docs/V2_0_3_API.md`, and `docs/V2_SECURITY.md`;
 - this architecture document; and
 - one Phase II Work Report plus the index.
 
