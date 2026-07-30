@@ -431,8 +431,23 @@ The first draft head correctly exposed an over-broad existing source-secret
 pattern matching safe runtime interpolation. Commit `28675ca` changed the
 smoke to export the generated key without a source assignment and kept the
 source scanner effective. The same scanner, shell syntax, ShellCheck, and
-focused smoke pass locally. Fresh GitHub checks run on every pushed head; the
-final authoritative status is the PR check rollup and final delivery record.
+focused smoke pass locally.
+
+The complete implementation/documentation head
+`a90e7bab16e2ee3f71005379c5b7edee4897e9df` passed all 13 PR check contexts:
+
+- repository CI run `30509950681` completed successfully with
+  `backend-tests`, `frontend-build`, `backend-postgres`, `docker-build`,
+  `postgres16-backup-restore`, `compose-validation`,
+  `production-runtime-regression`, `script-validation`,
+  `repository-safety`, and `docker-smoke-v2` all successful; and
+- Java CI run `30509950748` completed successfully with `verify`,
+  `container-smoke`, and `normalization-only-no-database-smoke` all
+  successful.
+
+This CI-delivery metadata correction triggers one final check set. The final
+authoritative status remains the PR check rollup on the resulting report-only
+head.
 
 No workflow uses `pull_request_target`, registry login, publication, release,
 deployment, or production credentials.
@@ -464,11 +479,13 @@ Documentation:
   normalization-only Spring profile and integration tests.
 - `65e512d7640b62dc083904dc99e65f35114d3904` — add the no-database
   container smoke and CI validation.
-- `28675ca` — harden smoke secret injection against source leakage and the
-  repository scanner.
+- `28675caeaec7166319e71e3512f04d80722df03b` — harden smoke secret
+  injection against source leakage and the repository scanner.
+- `a90e7bab16e2ee3f71005379c5b7edee4897e9df` — document the completed
+  implementation, validation evidence, risks, and rollback.
 
-The documentation/Work Report commit follows these implementation commits.
-It cannot self-embed its own SHA; Git history and the PR commit list are the
+The final CI-delivery metadata commit follows these commits. It cannot
+self-embed its own SHA; Git history and the PR commit list are the
 authoritative delivery record.
 
 ## 32. PR URL
