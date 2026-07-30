@@ -57,10 +57,10 @@ def mode_settings(mode: str, sample_rate: float):
         mode=mode,
         base_url=(
             "http://java-normalization:8091"
-            if mode == "shadow"
+            if mode in {"shadow", "java"}
             else None
         ),
-        api_key=("T" * 32 if mode == "shadow" else None),
+        api_key=("T" * 32 if mode in {"shadow", "java"} else None),
         shadow_sample_rate=sample_rate,
     )
     return replace(
@@ -76,8 +76,13 @@ def canonical_public_result(value: dict) -> dict:
     result.pop("workflow_duration_us", None)
     result.pop("application_id", None)
     for step in result.get("workflow_steps", []):
-        step.pop("duration_ms", None)
-        step.pop("duration_us", None)
+        for field in (
+            "started_at",
+            "completed_at",
+            "duration_ms",
+            "duration_us",
+        ):
+            step.pop(field, None)
     return result
 
 
@@ -338,7 +343,7 @@ class AnalyzeNormalizationShadowIntegrationTest(unittest.TestCase):
 
 
 class ShadowNormalizationUnitTest(unittest.IsolatedAsyncioTestCase):
-    async def test_application_lifecycle_creates_only_shadow_client_and_closes_it(self):
+    async def test_application_lifecycle_creates_only_remote_mode_client_and_closes_it(self):
         local_app = FastAPI()
         with patch.object(
             legacy_application,
@@ -371,6 +376,25 @@ class ShadowNormalizationUnitTest(unittest.IsolatedAsyncioTestCase):
             self.assertIsNone(shadow_app.state.jd_normalization_client)
         client_type.assert_called_once()
         client.aclose.assert_awaited_once()
+
+        java_app = FastAPI()
+        java_client = SimpleNamespace(aclose=AsyncMock())
+        with patch.object(
+            legacy_application,
+            "settings",
+            mode_settings("java", 0),
+        ), patch(
+            "legacy_application.JavaNormalizationClient",
+            return_value=java_client,
+        ) as client_type:
+            async with legacy_application.application_lifespan(java_app):
+                self.assertIs(
+                    java_app.state.jd_normalization_client,
+                    java_client,
+                )
+            self.assertIsNone(java_app.state.jd_normalization_client)
+        client_type.assert_called_once()
+        java_client.aclose.assert_awaited_once()
 
     def test_sampling_is_deterministic_and_uses_only_the_fingerprint(self):
         fingerprint = hashlib.sha256(b"stable Analyze input").hexdigest()

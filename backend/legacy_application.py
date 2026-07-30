@@ -53,7 +53,7 @@ from app.analyze.idempotency import (
     validate_key as validate_idempotency_key,
 )
 from app.analyze.normalization_client import JavaNormalizationClient
-from app.analyze.normalization_shadow import observe_shadow_normalization
+from app.analyze.normalization_runtime import select_effective_normalization
 from app.jobs.acquisition import SafeJobUrlFetcher, UnsafeJobUrl
 from app.materials.grounding import EvidenceSource, validate_claims, validation_summary
 from config import APP_VERSION, load_config
@@ -293,7 +293,7 @@ logger = logging.getLogger(APP_NAME)
 @asynccontextmanager
 async def application_lifespan(application: FastAPI):
     normalization_client: JavaNormalizationClient | None = None
-    if settings.jd_normalization.mode == "shadow":
+    if settings.jd_normalization.mode in {"shadow", "java"}:
         normalization_client = JavaNormalizationClient(settings.jd_normalization)
         application.state.jd_normalization_client = normalization_client
     try:
@@ -2565,6 +2565,7 @@ async def analyze(
     idempotency_service: AnalyzeIdempotencyService | None = None
     idempotency_claim = None
     fingerprint: str | None = None
+    execution_binding = None
     workflow = AgentWorkflow()
     context = WorkflowContext(workflow_id=workflow.workflow_id)
     input_warnings: list[str] = []
@@ -2862,43 +2863,72 @@ async def analyze(
             exc=exc,
         )
 
-    if settings.jd_normalization.mode == "shadow":
-        try:
+    if settings.jd_normalization.mode == "shadow" and fingerprint is None:
+        current_db = getattr(request.state, "v2_db", None)
+        knowledge_version = project_knowledge_version(
+            current_db,
+            context.rag_mode == "project",
+        )
+        fingerprint = analyze_request_fingerprint(
+            resume_version_id=clean_resume_version_id or None,
+            resume_text=context.resume_text,
+            job_text=context.job_text,
+            job_url=context.job_url,
+            rag_enabled=context.rag_mode == "project",
+            rag_top_k=context.rag_top_k,
+            project_knowledge=knowledge_version,
+            save_to_history=save_to_history,
+            model=DEEPSEEK_MODEL,
+            security_policy_version=SECURITY_POLICY_VERSION,
+        )
+
+    try:
+        effective_normalization = await select_effective_normalization(
+            client=getattr(
+                request.app.state,
+                "jd_normalization_client",
+                None,
+            ),
+            config=settings.jd_normalization,
+            local_sanitized_job_text=context.sanitized_job_text,
+            request_id=request_id_for(request),
+            logger=logger,
+            stable_request_fingerprint=fingerprint,
+        )
+        context.sanitized_job_text = effective_normalization.text
+        if effective_normalization.accepted_security_scan:
+            context.security_scan = merge_security_scans(
+                context.security_scan,
+                effective_normalization.accepted_security_scan,
+            )
+            if effective_normalization.accepted_security_scan.get(
+                "prompt_injection_detected"
+            ):
+                workflow.add_warning()
+        if idempotency_service is not None and idempotency_claim is not None:
             if fingerprint is None:
-                current_db = getattr(request.state, "v2_db", None)
-                knowledge_version = project_knowledge_version(
-                    current_db,
-                    context.rag_mode == "project",
+                raise IdempotencyError(
+                    "IDEMPOTENCY_PERSISTENCE_FAILED",
+                    "The Analyze execution binding is unavailable.",
                 )
-                fingerprint = analyze_request_fingerprint(
-                    resume_version_id=clean_resume_version_id or None,
-                    resume_text=context.resume_text,
-                    job_text=context.job_text,
-                    job_url=context.job_url,
-                    rag_enabled=context.rag_mode == "project",
-                    rag_top_k=context.rag_top_k,
-                    project_knowledge=knowledge_version,
-                    save_to_history=save_to_history,
-                    model=DEEPSEEK_MODEL,
-                    security_policy_version=SECURITY_POLICY_VERSION,
-                )
-            await observe_shadow_normalization(
-                client=getattr(
-                    request.app.state,
-                    "jd_normalization_client",
-                    None,
-                ),
-                config=settings.jd_normalization,
-                input_fingerprint=fingerprint,
-                sanitized_job_text=context.sanitized_job_text,
-                request_id=request_id_for(request),
-                logger=logger,
+            execution_binding = effective_normalization.execution_binding(
+                fingerprint
             )
-        except Exception:
-            logger.warning(
-                "JD normalization shadow orchestration unavailable "
-                "error_type=ShadowOrchestrationFailure"
+            idempotency_service.bind_execution(
+                idempotency_claim,
+                execution_binding,
             )
+    except IdempotencyError as exc:
+        raise idempotency_http_exception(exc) from exc
+    except Exception as exc:
+        fail_analysis_and_raise(
+            workflow,
+            context,
+            step_key="scan_untrusted_input",
+            message="Job Description normalization failed safely.",
+            error_code="JD_NORMALIZATION_FAILED",
+            exc=exc,
+        )
 
     logger.info(
         "Analyze RAG settings rag_mode=%s use_knowledge_base=%s rag_top_k=%s",
@@ -3033,7 +3063,15 @@ async def analyze(
     provider_available = True
     try:
         if idempotency_service is not None and idempotency_claim is not None:
-            idempotency_service.provider_started(idempotency_claim)
+            if execution_binding is None:
+                raise IdempotencyError(
+                    "IDEMPOTENCY_PERSISTENCE_FAILED",
+                    "The Analyze execution binding is unavailable.",
+                )
+            idempotency_service.provider_started(
+                idempotency_claim,
+                execution_binding,
+            )
         provider_response = call_deepseek_raw(
             context.sanitized_resume_text,
             context.sanitized_job_text,
@@ -3119,7 +3157,15 @@ async def analyze(
             repairer = None
             if idempotency_service is not None and idempotency_claim is not None:
                 def repairer(raw_response: str) -> ProviderAnalysisResponse:
-                    idempotency_service.provider_started(idempotency_claim)
+                    if execution_binding is None:
+                        raise IdempotencyError(
+                            "IDEMPOTENCY_PERSISTENCE_FAILED",
+                            "The Analyze execution binding is unavailable.",
+                        )
+                    idempotency_service.provider_started(
+                        idempotency_claim,
+                        execution_binding,
+                    )
                     return call_deepseek_repair(raw_response)
             result, analysis_status, parsed_warnings = model_response_to_result(
                 context.llm_raw_response,
@@ -3383,9 +3429,15 @@ async def analyze(
     if idempotency_service is not None and idempotency_claim is not None:
         current_user = getattr(request.state, "v2_user", None)
         try:
+            if execution_binding is None:
+                raise IdempotencyError(
+                    "IDEMPOTENCY_PERSISTENCE_FAILED",
+                    "The Analyze execution binding is unavailable.",
+                )
             result, history_id = idempotency_service.finalize(
                 idempotency_claim,
                 result,
+                execution_binding=execution_binding,
                 save_to_history=save_to_history,
                 user_id=current_user.id,
                 job_url=context.job_url,

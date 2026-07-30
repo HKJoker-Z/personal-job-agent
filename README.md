@@ -102,12 +102,13 @@ call or History row. The API stays synchronous. It does not claim external
 exactly-once execution; a crash beyond the recorded provider boundary becomes
 `indeterminate` and is not automatically retried.
 
-### Java normalization Phase II boundary
+### Java normalization Phase IIIA execution contract
 
-The repository now contains a FastAPI internal client for the stateless Java
-`normalization-only` endpoint, but this is not a production integration.
-`ANALYSIS_JD_NORMALIZATION_MODE=local` is the default and preserves the current
-Analyze path without creating a Java client or resolving a Java service.
+The repository contains a FastAPI internal client for the stateless Java
+`normalization-only` endpoint and an authoritative execution contract, but no
+candidate or production deployment. `ANALYSIS_JD_NORMALIZATION_MODE=local`
+remains the default and preserves the existing Analyze path without creating a
+Java client or resolving a Java service.
 
 `shadow` is an explicitly configured, observation-only runtime mode. It
 samples deterministically from the existing Analyze input fingerprint, sends
@@ -118,12 +119,26 @@ metadata. It makes one attempt with bounded connect, response, total, response
 size, and connection-pool limits; it does not inherit proxies, follow
 redirects, or forward browser credentials.
 
-The local JD remains authoritative in `shadow`. Java output cannot alter the
-fingerprint, RAG, prompt, provider/repair behavior, deterministic fallback,
-History, monitoring persistence, or public response. The reserved `java` mode
-fails startup until Phase III implements the execution-fingerprint and
-idempotency compatibility contract. No candidate or production deployment has
-occurred.
+The local JD remains authoritative in `shadow`, whose result is excluded from
+the execution fingerprint. In `java`, FastAPI makes exactly one bounded Java
+attempt. A strictly validated response must pass an authoritative second
+security scan before its text becomes the single effective JD for RAG, prompt
+construction, provider work, deterministic scoring/fallback, and derived
+History results. Any Java boundary or second-scan rejection selects the
+existing sanitized local JD with execution source `fallback_local`; no Java
+error is exposed.
+
+The existing stable request fingerprint is unchanged and still provides the
+early claim and completed replay. New keyed attempts also bind a 32-byte
+`analyze-execution-v1` fingerprint before downstream work. It identifies the
+effective source (`local`, `java`, or `fallback_local`), exact effective JD
+hash, and applicable policy/dictionary versions. A stale takeover may continue
+only with an identical binding; otherwise it returns
+`IDEMPOTENCY_EXECUTION_CONFLICT` and requires a new key. Legacy completed rows
+with null execution metadata still replay exactly, without Java, provider, or
+History work. Operational rollback is configuration-only:
+`ANALYSIS_JD_NORMALIZATION_MODE=local`. No candidate or production deployment
+has occurred.
 
 | Result state | Meaning |
 | --- | --- |

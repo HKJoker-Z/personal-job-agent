@@ -16,9 +16,11 @@ extraction, a content hash, and version identifiers.
 The merged Java `normalization-only` profile is stateless at startup and has
 test/container evidence that PostgreSQL, JDBC, JPA, Flyway, persistence
 routes, and database health are inactive. The unchanged default/full Java
-profile still requires its standalone PostgreSQL/Flyway/JPA stack. Phase II
-adds only a FastAPI `local`/observation-only `shadow` client boundary;
-authoritative Java behavior remains rejected until Phase III.
+profile still requires its standalone PostgreSQL/Flyway/JPA stack. Merged
+Phase II added the FastAPI `local`/observation-only `shadow` client boundary.
+Phase IIIA now implements the reviewed Java-authoritative execution contract,
+safe local fallback, and legacy-compatible persistence. Candidate deployment
+and every production action remain future Phase IIIB/IV work.
 
 Do not integrate Java-owned create, read, update, or version-history APIs.
 There is no current Personal Job Agent product requirement for a second owner
@@ -29,9 +31,11 @@ behavior.
 
 Personal Job Agent 2.0.4 is a FastAPI modular monolith with a React client,
 PostgreSQL 16, Redis/Dramatiq foundations, and a synchronous Analyze workflow.
-The Java service is currently an independently containerized portfolio service
-with its own PostgreSQL/Flyway design. It is not deployed or called by
-Personal Job Agent.
+The Java service is an independently containerized portfolio service with its
+own PostgreSQL/Flyway design and a stateless normalization-only profile.
+FastAPI can call that private contract in reviewed source code, but no
+candidate or production topology has been created and Java is not deployed or
+called by the production Personal Job Agent.
 
 The public Analyze security middleware runs outside the route:
 
@@ -223,7 +227,7 @@ cannot stay within a reviewed resource and latency budget.
 
 ## 6. Analyze sequence
 
-The later integration should use this exact order:
+The Phase IIIA runtime uses this exact order:
 
 1. Request logging establishes the authoritative trusted `X-Request-ID`.
 2. V2 middleware enforces body size, Session authentication, Origin, and CSRF.
@@ -246,12 +250,13 @@ The later integration should use this exact order:
     normalized findings. In `shadow`, the second scan is observation-only and
     cannot change the user-visible result.
 12. Select effective JD and normalization source:
-    `local`, `java`, or `fallback`.
-13. Retrieve and security-scan Project Knowledge with the selected effective
+    `local`, `java`, or `fallback_local`.
+13. Compute `analyze-execution-v1` from the unchanged stable fingerprint and
+    selected effective normalization. Atomically bind it to the current
+    processing attempt token before any RAG, prompt, or provider work.
+14. Retrieve and security-scan Project Knowledge with the selected effective
     JD.
-14. Build the safe prompt.
-15. Compute the execution fingerprint, then atomically claim Analyze
-    idempotency.
+15. Build the safe prompt from the same effective JD.
 16. Execute the existing primary DeepSeek attempt, at most one explicit
     format-only repair, or the existing deterministic fallback.
 17. Reconcile evidence, score, finalize History/idempotency atomically, persist
@@ -273,7 +278,9 @@ before RAG or prompt construction. Findings are merged conservatively.
 
 In `shadow`, current FastAPI behavior remains authoritative. Java output and
 its observation-only scan cannot block, sanitize, change RAG, alter the prompt,
-change History, or change the response.
+change History, change the execution fingerprint, or change the response. In
+`java`, a blocked or unusable second-scan result cannot enter RAG or the prompt;
+FastAPI selects `fallback_local` and binds the explicit local contract instead.
 
 ## 8. Feature-flag modes
 
@@ -390,26 +397,28 @@ Analyze failure.
 
 ## 12. Analyze fingerprint impact
 
-The current single fingerprint cannot simultaneously provide immutable
-completed replay and distinguish a later execution under a different
-normalization source. The implementation should separate:
+One fingerprint cannot simultaneously provide immutable completed replay and
+distinguish a later execution under a different normalization source. Phase
+IIIA therefore maintains:
 
 1. **stable input fingerprint** — retain the current
    `analyze-request-fingerprint:v1` semantics for backward compatibility:
    acquired local JD hash, Resume/version, URL, RAG/top-k, Project Knowledge
    version, History choice, model, analysis contract, and security policy; and
-2. **execution fingerprint** — a new canonical hash containing the stable input
-   fingerprint plus:
-   - effective normalized JD content hash;
-   - normalization source: `local`, `java`, or `fallback`;
-   - Java policy version when Java is authoritative;
-   - Java dictionary version when Java is authoritative;
-   - an integration-contract version; and
-   - the existing Resume/RAG/model/security/scoring inputs through the stable
-     fingerprint.
+2. **execution fingerprint** — the domain-separated, canonical, binary
+   `analyze-execution-v1` SHA-256 containing the stable fingerprint, exact
+   effective JD text hash, source (`local`, `java`, or `fallback_local`),
+   effective normalization policy, and an explicit Java dictionary version or
+   null. Request ID, Idempotency-Key, attempt token, time, database identity,
+   duration, and transient errors are excluded.
 
-Add a nullable execution-fingerprint column to the existing Analyze
-idempotency ledger; do not create another table.
+The existing Analyze ledger has nullable execution fingerprint, contract,
+source, policy, dictionary, and bound-time columns. Database checks require a
+32-byte fingerprint, supported source, nonblank values, and consistent
+all-null/all-present metadata. There is no default, backfill, new table, or
+execution lookup index. Local and `fallback_local` execution use the explicit
+`fastapi-local-jd-v1` identity and a null dictionary; this does not claim that
+local preprocessing implements the Java policy.
 
 Completed-row behavior:
 
@@ -422,9 +431,13 @@ Completed-row behavior:
 Non-completed behavior:
 
 - a source/version/content change produces a different execution fingerprint
-  and the same key is rejected;
-- legacy rows with a null execution fingerprint are treated conservatively as
-  legacy-local for resumption, never silently upgraded to Java.
+  and the same key returns `IDEMPOTENCY_EXECUTION_CONFLICT`;
+- the binding operation requires processing state and the current attempt
+  token, and atomically accepts only all-null or exactly identical metadata;
+- identical rebinding is idempotent; stale attempts cannot bind or overwrite;
+- provider-start and finalization both require the expected binding; and
+- legacy failed and indeterminate rows retain the existing state-machine
+  behavior. Unknown historical execution metadata is never backfilled.
 
 Transitions:
 
@@ -434,8 +447,8 @@ Transitions:
 | `shadow` → `java` | New keys use Java execution fingerprint; matching completed keys replay old results |
 | Policy update | New keys record new version; matching completed keys replay; unfinished same-key mismatch is rejected |
 | Dictionary update | Same as policy update |
-| Java failure | New attempt records `fallback` source and local effective hash |
-| Rollback to `local` | Completed Java/fallback results replay from ledger; new keys use local |
+| Java failure | Select before binding; new attempt records `fallback_local` and the local effective hash/identity |
+| Rollback to `local` | Completed Java/`fallback_local` results replay from ledger; new keys use local |
 
 This prevents a local attempt and a Java attempt with the same non-completed
 key from being incorrectly considered equivalent without invalidating
@@ -603,26 +616,28 @@ Analyze available. Java has no user identity or impersonation mechanism.
 
 In `shadow`, every row records source `local`; Java outcomes never alter the
 user result or execution fingerprint. In `java`, every Java boundary failure
-below records source `fallback` and uses the existing local sanitized JD.
+below records source `fallback_local` and uses the existing local sanitized
+JD. Source is selected before the single binding; fallback never overwrites a
+different bound Java execution.
 
 | Failure | FastAPI action | User result | Safe observation | Idempotency |
 |---|---|---|---|---|
-| DNS failure | Fallback | Normal Analyze path | `dns_failure` | Execution source `fallback` |
-| Connection refused | Fallback | Normal Analyze path | `connection_refused` | `fallback` |
-| Connect timeout | Fallback | Normal Analyze path | `connect_timeout` | `fallback` |
-| Response timeout | Fallback | Normal Analyze path | `response_timeout` | `fallback` |
-| HTTP 400 | Fallback; contract/config alert | No Java error exposed | `http_400` | `fallback` |
-| HTTP 401 | Fallback; high-priority key/config alert; stop rollout | Normal Analyze path | `unauthorized` | `fallback` |
-| HTTP 413 | Fallback; bounds-contract alert | Normal Analyze path | `payload_too_large` | `fallback` |
-| HTTP 422 | Fallback; input-contract alert | Normal Analyze path | `validation_failed` | `fallback` |
-| HTTP 500 | Fallback | Normal Analyze path | `java_internal` | `fallback` |
-| HTTP 503 | Fallback | Normal Analyze path | `java_unavailable` | `fallback` |
-| Malformed JSON | Fallback | Normal Analyze path | `malformed_json` | `fallback` |
-| Oversized response | Stop reading, close response, fallback | Normal Analyze path | `oversized_response` | `fallback` |
-| Unsupported policy | Fallback; stop rollout | Normal Analyze path | `policy_mismatch` | `fallback` |
-| Unsupported dictionary | Fallback; stop rollout | Normal Analyze path | `dictionary_mismatch` | `fallback` |
-| Missing/mismatched/invalid Request ID | Fallback | Normal Analyze path | bounded Request ID outcome | `fallback` |
-| Java restart | Connection failure/timeout fallback | Normal Analyze path | unavailable/restart-correlated count | `fallback` |
+| DNS failure | Fallback | Normal Analyze path | `dns_failure` | Execution source `fallback_local` |
+| Connection refused | Fallback | Normal Analyze path | `connection_refused` | `fallback_local` |
+| Connect timeout | Fallback | Normal Analyze path | `connect_timeout` | `fallback_local` |
+| Response timeout | Fallback | Normal Analyze path | `response_timeout` | `fallback_local` |
+| HTTP 400 | Fallback; contract/config alert | No Java error exposed | `http_400` | `fallback_local` |
+| HTTP 401 | Fallback; high-priority key/config alert; stop rollout | Normal Analyze path | `unauthorized` | `fallback_local` |
+| HTTP 413 | Fallback; bounds-contract alert | Normal Analyze path | `payload_too_large` | `fallback_local` |
+| HTTP 422 | Fallback; input-contract alert | Normal Analyze path | `validation_failed` | `fallback_local` |
+| HTTP 500 | Fallback | Normal Analyze path | `java_internal` | `fallback_local` |
+| HTTP 503 | Fallback | Normal Analyze path | `java_unavailable` | `fallback_local` |
+| Malformed JSON | Fallback | Normal Analyze path | `malformed_json` | `fallback_local` |
+| Oversized response | Stop reading, close response, fallback | Normal Analyze path | `oversized_response` | `fallback_local` |
+| Unsupported policy | Fallback; stop rollout | Normal Analyze path | `policy_mismatch` | `fallback_local` |
+| Unsupported dictionary | Fallback; stop rollout | Normal Analyze path | `dictionary_mismatch` | `fallback_local` |
+| Missing/mismatched/invalid Request ID | Fallback | Normal Analyze path | bounded Request ID outcome | `fallback_local` |
+| Java restart | Connection failure/timeout fallback | Normal Analyze path | unavailable/restart-correlated count | `fallback_local` |
 | Java permanently disabled | Set mode `local`; no call | Exact local behavior | mode `local` | New local execution; completed replay preserved |
 
 Java response error details are validated only enough to classify a bounded
@@ -722,8 +737,9 @@ results are never recomputed.
 
 Phase I was merged normally as
 `e1daa69e98a583e2667fe9c70635ada1e5a87a7c`. It was not released, published,
-or deployed. The Java-authoritative Analyze path, execution fingerprints,
-candidate validation, and every production action remain later phases.
+or deployed. At that point the Java-authoritative Analyze path, execution
+fingerprints, candidate validation, and every production action remained
+later phases.
 
 ### Phase II — FastAPI client and safe local/shadow modes
 
@@ -758,16 +774,30 @@ candidate validation, and every production action remain later phases.
 - safe structured observations contain only bounded request correlation,
   outcome, duration, equality, count, and expected version evidence.
 
-Phase II is implemented for review but is not merged, released, published,
-deployed, or enabled in production. Java-authoritative Analyze and the
-execution fingerprint remain Phase III work.
+Phase II was merged normally as
+`ac17aa567ad664f03dbb978f7fd06c2f76e3ad05`. It was not released, published,
+or deployed, and production configuration was unchanged.
 
-### Phase III — idempotency contract and candidate
+### Phase IIIA — authoritative execution contract
 
-- add the nullable execution fingerprint to the existing ledger;
-- add completed preflight replay and source/version protections;
-- run the one isolated candidate;
-- add deployment/candidate documentation and Work Report.
+- add nullable execution metadata to the existing ledger with legacy-null
+  compatibility;
+- bind `analyze-execution-v1` atomically using the current attempt token;
+- enable local, shadow, Java-authoritative, and safe fallback-local selection;
+- make the post-Java scan authoritative and propagate one effective JD through
+  RAG, prompt, provider, scoring, deterministic fallback, and derived History;
+- retain earliest completed replay and provider-indeterminate protections; and
+- validate with mocked Java/provider paths and PostgreSQL 16.
+
+Phase IIIA adds no candidate Compose, deployment scripts, Java runtime changes,
+production configuration, image publication, release, or production access.
+
+### Phase IIIB — isolated candidate
+
+- create and run one isolated candidate with synthetic data only;
+- validate private topology, resource limits, rollback, and bounded evidence;
+- call no real external LLM; and
+- produce separate candidate documentation and a Work Report.
 
 ### Phase IV — controlled production rollout
 
@@ -827,20 +857,29 @@ Documentation:
 - this architecture document; and
 - one Phase II Work Report plus the index.
 
-### Phase III: fingerprint/candidate/monitoring validation
+### Phase IIIA: fingerprint/authoritative runtime/monitoring validation
 
+- `backend/app/analyze/execution.py`
 - `backend/app/analyze/idempotency.py`
+- `backend/app/analyze/normalization_runtime.py`
+- `backend/legacy_application.py`
+- `backend/config.py`
 - `backend/app/db/models.py`
-- `backend/alembic/versions/<next_revision>_add_analyze_execution_fingerprint.py`
+- `backend/alembic/versions/20260730_07_add_analyze_execution_binding.py`
 - `backend/test_analyze_idempotency.py`
+- `backend/test_java_authoritative_normalization.py`
 - `backend/test_v2_postgres_integration.py`
-- `backend/monitoring_service.py` only if the reviewed structured observation
-  needs formatter support beyond Phase II;
+- `backend/logging_utils.py` for bounded structured formatter support;
+- `.env.example`, API/security documentation, this architecture document, and
+  the Phase IIIA Work Report plus index.
+
+### Phase IIIB: candidate validation
+
 - `compose.java-candidate.yaml` (new isolated candidate only);
 - `scripts/java-normalization-candidate.sh` (new bounded synthetic validation);
 - `.github/workflows/ci.yml` if candidate validation belongs in CI;
 - this architecture document; and
-- one Phase III Work Report plus the index.
+- one Phase IIIB Work Report plus the index.
 
 ### Phase IV: production deployment
 

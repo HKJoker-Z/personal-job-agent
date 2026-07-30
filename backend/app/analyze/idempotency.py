@@ -12,7 +12,7 @@ from datetime import timedelta
 from typing import Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import delete, select, update
+from sqlalchemy import and_, delete, func, or_, select, update
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.requests import Request
@@ -27,6 +27,7 @@ from app.db.models import (
     utc_now,
 )
 from app.db.session import session_factory
+from app.analyze.execution import ExecutionBinding
 from database import (
     clean_text,
     default_ats_analysis,
@@ -57,6 +58,8 @@ class IdempotencyError(RuntimeError):
 @dataclass(frozen=True)
 class Claim:
     record_id: UUID
+    user_id: UUID
+    key_hash: str
     attempt_token: UUID | None
     replay_status: int | None = None
     replay_body: dict[str, Any] | None = None
@@ -64,6 +67,41 @@ class Claim:
     @property
     def is_replay(self) -> bool:
         return self.replay_body is not None
+
+
+def _binding_clauses(binding: ExecutionBinding) -> tuple[Any, ...]:
+    dictionary_clause = (
+        AnalyzeIdempotencyRecord.skill_dictionary_version.is_(None)
+        if binding.skill_dictionary_version is None
+        else AnalyzeIdempotencyRecord.skill_dictionary_version
+        == binding.skill_dictionary_version
+    )
+    return (
+        AnalyzeIdempotencyRecord.execution_fingerprint == binding.fingerprint,
+        AnalyzeIdempotencyRecord.execution_contract_version
+        == binding.contract_version,
+        AnalyzeIdempotencyRecord.normalization_source
+        == binding.normalization_source,
+        AnalyzeIdempotencyRecord.normalization_policy_version
+        == binding.normalization_policy_version,
+        dictionary_clause,
+        AnalyzeIdempotencyRecord.execution_bound_at.is_not(None),
+    )
+
+
+def _record_has_binding(
+    record: AnalyzeIdempotencyRecord,
+    binding: ExecutionBinding,
+) -> bool:
+    return (
+        record.execution_fingerprint == binding.fingerprint
+        and record.execution_contract_version == binding.contract_version
+        and record.normalization_source == binding.normalization_source
+        and record.normalization_policy_version
+        == binding.normalization_policy_version
+        and record.skill_dictionary_version == binding.skill_dictionary_version
+        and record.execution_bound_at is not None
+    )
 
 
 def validate_key(value: str | None) -> str | None:
@@ -244,7 +282,12 @@ class AnalyzeIdempotencyService:
         try:
             db.add(record)
             db.commit()
-            return Claim(record.id, token)
+            return Claim(
+                record_id=record.id,
+                user_id=user_id,
+                key_hash=key_hash,
+                attempt_token=token,
+            )
         except IntegrityError:
             db.rollback()
         except SQLAlchemyError as exc:
@@ -281,7 +324,14 @@ class AnalyzeIdempotencyService:
                         "IDEMPOTENCY_PERSISTENCE_FAILED",
                         "The stored Analyze response is unavailable.",
                     )
-                return Claim(existing.id, None, existing.response_status, body)
+                return Claim(
+                    record_id=existing.id,
+                    user_id=user_id,
+                    key_hash=key_hash,
+                    attempt_token=None,
+                    replay_status=existing.response_status,
+                    replay_body=body,
+                )
             if existing.status == "indeterminate" or (
                 existing.status == "processing"
                 and ensure_utc(existing.lease_expires_at) <= now
@@ -318,7 +368,12 @@ class AnalyzeIdempotencyService:
             existing.completed_at = None
             existing.expires_at = self._expiry()
             db.commit()
-            return Claim(existing.id, token)
+            return Claim(
+                record_id=existing.id,
+                user_id=user_id,
+                key_hash=key_hash,
+                attempt_token=token,
+            )
         except IdempotencyError:
             db.rollback()
             raise
@@ -331,7 +386,100 @@ class AnalyzeIdempotencyService:
         finally:
             db.close()
 
-    def provider_started(self, claim: Claim) -> None:
+    def bind_execution(
+        self,
+        claim: Claim,
+        binding: ExecutionBinding,
+    ) -> None:
+        """Atomically bind one exact effective normalization to the current attempt."""
+
+        if claim.attempt_token is None:
+            raise IdempotencyError(
+                "IDEMPOTENCY_PERSISTENCE_FAILED",
+                "The Analyze attempt is no longer current.",
+            )
+        db = self._factory()
+        try:
+            metadata_absent = and_(
+                AnalyzeIdempotencyRecord.execution_fingerprint.is_(None),
+                AnalyzeIdempotencyRecord.execution_contract_version.is_(None),
+                AnalyzeIdempotencyRecord.normalization_source.is_(None),
+                AnalyzeIdempotencyRecord.normalization_policy_version.is_(None),
+                AnalyzeIdempotencyRecord.skill_dictionary_version.is_(None),
+                AnalyzeIdempotencyRecord.execution_bound_at.is_(None),
+            )
+            metadata_identical = and_(*_binding_clauses(binding))
+            changed = db.execute(
+                update(AnalyzeIdempotencyRecord)
+                .where(
+                    AnalyzeIdempotencyRecord.id == claim.record_id,
+                    AnalyzeIdempotencyRecord.user_id == claim.user_id,
+                    AnalyzeIdempotencyRecord.operation == OPERATION,
+                    AnalyzeIdempotencyRecord.idempotency_key_hash == claim.key_hash,
+                    AnalyzeIdempotencyRecord.status == "processing",
+                    AnalyzeIdempotencyRecord.attempt_token == claim.attempt_token,
+                    or_(metadata_absent, metadata_identical),
+                )
+                .values(
+                    execution_fingerprint=binding.fingerprint,
+                    execution_contract_version=binding.contract_version,
+                    normalization_source=binding.normalization_source,
+                    normalization_policy_version=binding.normalization_policy_version,
+                    skill_dictionary_version=binding.skill_dictionary_version,
+                    execution_bound_at=func.coalesce(
+                        AnalyzeIdempotencyRecord.execution_bound_at,
+                        utc_now(),
+                    ),
+                    lease_expires_at=self._lease(),
+                )
+            ).rowcount
+            if changed != 1:
+                current = db.scalar(
+                    select(AnalyzeIdempotencyRecord).where(
+                        AnalyzeIdempotencyRecord.id == claim.record_id,
+                        AnalyzeIdempotencyRecord.user_id == claim.user_id,
+                        AnalyzeIdempotencyRecord.operation == OPERATION,
+                        AnalyzeIdempotencyRecord.idempotency_key_hash
+                        == claim.key_hash,
+                        AnalyzeIdempotencyRecord.status == "processing",
+                        AnalyzeIdempotencyRecord.attempt_token
+                        == claim.attempt_token,
+                    )
+                )
+                if (
+                    current is not None
+                    and current.execution_fingerprint is not None
+                    and not _record_has_binding(current, binding)
+                ):
+                    raise IdempotencyError(
+                        "IDEMPOTENCY_EXECUTION_CONFLICT",
+                        (
+                            "This Analyze attempt is already bound to a different "
+                            "execution; use a new Idempotency-Key."
+                        ),
+                    )
+                raise IdempotencyError(
+                    "IDEMPOTENCY_PERSISTENCE_FAILED",
+                    "The Analyze attempt is no longer current.",
+                )
+            db.commit()
+        except IdempotencyError:
+            db.rollback()
+            raise
+        except SQLAlchemyError as exc:
+            db.rollback()
+            raise IdempotencyError(
+                "IDEMPOTENCY_PERSISTENCE_FAILED",
+                "The Analyze execution binding could not be persisted.",
+            ) from exc
+        finally:
+            db.close()
+
+    def provider_started(
+        self,
+        claim: Claim,
+        binding: ExecutionBinding,
+    ) -> None:
         if claim.attempt_token is None:
             raise IdempotencyError(
                 "IDEMPOTENCY_PERSISTENCE_FAILED", "The provider attempt is no longer current."
@@ -342,8 +490,12 @@ class AnalyzeIdempotencyService:
                 update(AnalyzeIdempotencyRecord)
                 .where(
                     AnalyzeIdempotencyRecord.id == claim.record_id,
+                    AnalyzeIdempotencyRecord.user_id == claim.user_id,
+                    AnalyzeIdempotencyRecord.operation == OPERATION,
+                    AnalyzeIdempotencyRecord.idempotency_key_hash == claim.key_hash,
                     AnalyzeIdempotencyRecord.status == "processing",
                     AnalyzeIdempotencyRecord.attempt_token == claim.attempt_token,
+                    *_binding_clauses(binding),
                 )
                 .values(provider_started_at=utc_now(), lease_expires_at=self._lease())
             ).rowcount
@@ -398,6 +550,7 @@ class AnalyzeIdempotencyService:
         claim: Claim,
         response: dict[str, Any],
         *,
+        execution_binding: ExecutionBinding,
         save_to_history: bool,
         user_id: UUID,
         job_url: str | None,
@@ -419,6 +572,10 @@ class AnalyzeIdempotencyService:
                 record is None
                 or record.status != "processing"
                 or record.attempt_token != claim.attempt_token
+                or record.user_id != claim.user_id
+                or record.operation != OPERATION
+                or record.idempotency_key_hash != claim.key_hash
+                or not _record_has_binding(record, execution_binding)
             ):
                 raise IdempotencyError(
                     "IDEMPOTENCY_PERSISTENCE_FAILED",
