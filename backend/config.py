@@ -148,7 +148,9 @@ def _normalization_version(name: str, default: str) -> str:
 def _normalization_base_url() -> str:
     value = os.getenv("JD_NORMALIZATION_BASE_URL", "").strip()
     if not value:
-        raise ConfigError("JD_NORMALIZATION_BASE_URL is required in shadow mode.")
+        raise ConfigError(
+            "JD_NORMALIZATION_BASE_URL is required in shadow or java mode."
+        )
     try:
         parsed = urlsplit(value)
         port = parsed.port
@@ -175,7 +177,9 @@ def _normalization_base_url() -> str:
 def _normalization_api_key() -> str:
     supplied = os.getenv("JD_NORMALIZATION_API_KEY_FILE", "").strip()
     if not supplied:
-        raise ConfigError("JD_NORMALIZATION_API_KEY_FILE is required in shadow mode.")
+        raise ConfigError(
+            "JD_NORMALIZATION_API_KEY_FILE is required in shadow or java mode."
+        )
     path = Path(supplied).expanduser()
     if not path.is_absolute():
         raise ConfigError("JD_NORMALIZATION_API_KEY_FILE must be an absolute file path.")
@@ -211,12 +215,6 @@ def load_java_normalization_config() -> JavaNormalizationConfig:
         raise ConfigError(
             "ANALYSIS_JD_NORMALIZATION_MODE must be local, shadow, or java."
         )
-    if mode == "java":
-        raise ConfigError(
-            "ANALYSIS_JD_NORMALIZATION_MODE=java is reserved: authoritative Java "
-            "normalization requires the Phase III execution-fingerprint contract."
-        )
-
     connect_timeout_ms = parse_int(
         "JD_NORMALIZATION_CONNECT_TIMEOUT_MS",
         os.getenv("JD_NORMALIZATION_CONNECT_TIMEOUT_MS"),
@@ -263,7 +261,7 @@ def load_java_normalization_config() -> JavaNormalizationConfig:
 
     base_url = None
     api_key = None
-    if mode == "shadow":
+    if mode in {"shadow", "java"}:
         base_url = _normalization_base_url()
         api_key = _normalization_api_key()
 

@@ -56,9 +56,17 @@ def _emit(
     fields: dict[str, object] = {
         "request_id": request_id,
         "normalization_mode": "shadow",
+        "normalization_source": "local",
+        "java_attempted": True,
         "sampled": observation.sampled,
         "normalization_outcome": observation.outcome,
+        "fallback": False,
         "duration_ms": observation.duration_ms,
+        "authoritative_second_scan_outcome": (
+            "observation_only"
+            if observation.outcome == "success"
+            else "not_authoritative"
+        ),
     }
     optional = {
         "text_hash_equal": observation.text_hash_equal,

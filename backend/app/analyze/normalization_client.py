@@ -1,4 +1,4 @@
-"""Bounded internal client for observation-only Java JD normalization."""
+"""Bounded internal client for shadow or authoritative Java JD normalization."""
 
 from __future__ import annotations
 
@@ -39,7 +39,7 @@ MAX_CANONICAL_URL_ASCII_LENGTH = 2_048
 
 
 class NormalizationClientError(RuntimeError):
-    """A stable shadow outcome that intentionally contains no remote detail."""
+    """A stable normalization outcome that intentionally contains no remote detail."""
 
     def __init__(self, outcome: str):
         super().__init__(outcome)
@@ -203,8 +203,14 @@ class JavaNormalizationClient:
         *,
         transport: httpx.AsyncBaseTransport | None = None,
     ):
-        if config.mode != "shadow" or not config.base_url or not config.api_key:
-            raise ValueError("Java normalization client requires validated shadow configuration.")
+        if (
+            config.mode not in {"shadow", "java"}
+            or not config.base_url
+            or not config.api_key
+        ):
+            raise ValueError(
+                "Java normalization client requires validated shadow or java configuration."
+            )
         self._config = config
         timeout = httpx.Timeout(
             connect=config.connect_timeout_ms / 1000,
