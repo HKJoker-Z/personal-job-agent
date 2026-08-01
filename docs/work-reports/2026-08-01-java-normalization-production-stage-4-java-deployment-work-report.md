@@ -336,10 +336,13 @@ Confirmed:
 ## 22. Delivery metadata
 
 - Branch: `docs/java-normalization-production-stage-4-java-report`
-- Deployment-report PR: to be recorded after creation
-- Report implementation commit: to be recorded after creation
+- Deployment-report PR:
+  <https://github.com/HKJoker-Z/personal-job-agent/pull/46>
+- Report implementation commit:
+  `afae8056fd91d28c6caa77e6f59f24a28877b34e`
 - Required merge method: normal merge commit; no squash, rebase, or admin
   bypass
 
 The documentation PR changes only this deployment report and the Work Report
-index. Java mode remains running while checks and normal merge complete.
+index. Required-check results and the normal merge are completed before final
+handoff. Java mode remains running while checks and normal merge complete.
