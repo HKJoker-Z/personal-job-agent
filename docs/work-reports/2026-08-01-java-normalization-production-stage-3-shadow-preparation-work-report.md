@@ -178,7 +178,19 @@ the complete suite remains a required GitHub check.
 - Initial validation metadata commit:
   `3107e5e57b5f2e2b2b9f71f865de406df9a10f69`
 - PR delivery metadata commit: this follow-up commit
-- Final check result: pending
+- Final operational head:
+  `b99fd785cd7d129caf42972278c84ec346d8a9ff`
+- Final operational-head result: 18 successful contexts, zero failures, and
+  two intentional pull-request publication skips; GitHub reported CLEAN and
+  MERGEABLE
+- Authoritative runs:
+  - repository CI `30691940768`: success;
+  - integrated Backend production `30691940780`: success;
+  - Java service CI `30691940770`: success;
+  - isolated Java candidate `30691940773`: success; and
+  - Java production assets `30691940779`: success, publication skipped as
+    required for a pull request
+- Final report rollup: this report-only commit
 - Required merge method: normal merge commit
 
 ## 13. Preparation boundary confirmations
