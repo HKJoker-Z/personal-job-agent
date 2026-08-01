@@ -1,0 +1,6 @@
+name: personal-job-agent-v2
+
+services:
+  backend:
+    environment:
+      ANALYSIS_JD_NORMALIZATION_MODE: java

@@ -355,3 +355,77 @@ until later user-initiated traffic supplies safe Shadow observations. It does
 not authorize Java-authoritative mode, production test users, generated
 Analyze traffic, an external LLM call, image publication, a version bump, tag,
 or GitHub Release.
+
+## Phase IVD-A: bounded Java-authoritative configuration
+
+Phase IVD-A appends
+`deploy/production/compose.java-normalization-stage-4-java.override.yaml`
+after the established Phase IVB and Phase IVC-A overrides. Its only setting is
+`ANALYSIS_JD_NORMALIZATION_MODE=java` for `backend`. The preceding overrides
+continue to provide the immutable Backend image, private Java origin,
+read-only key file, Backend-only Java network, 200/600/800 ms deadlines,
+262144-byte response ceiling, and expected `jd-normalization-v1` and
+`skills-v1` versions. Worker and Outbox remain explicitly `local`.
+
+In Java mode, a valid successful Java result passes the authoritative second
+security scan and becomes the effective JD with execution source `java`. Any
+bounded Java failure or rejected second scan selects the existing local
+candidate with source `fallback_local`. Selection and the
+`analyze-execution-v1` binding complete before Project Knowledge retrieval,
+prompt construction, provider work, scoring, History derivation, or result
+finalization. The client retains one attempt, no retry, no redirect, bounded
+timeouts and response size, and `trust_env=False`. Completed response replay
+returns before Java, provider, or History side effects.
+
+### Preflight and deployment
+
+Immediately before mutation, require production `2.0.4`, Alembic
+`20260730_07`, exact approved Backend and Java digests, runtime mode `shadow`,
+healthy Backend and Java with restart zero and OOM false, unchanged
+private-network membership and public ports, at least 1.5 GiB available RAM,
+at least 6 GiB available root disk, and no bounded log security or secret
+issue. Record only allowlisted structured metadata; never print environment,
+secret, request, user-content, or Java-body values. Do not prune resources to
+pass a gate.
+
+Install the Stage 4 override root:root mode `0444` under
+`/opt/personal-job-agent-v2`. Retain the exact existing production environment
+files and Compose sequence, append Stage 4 last, render it, and prove the only
+semantic difference from the running Shadow render is Backend mode `java`.
+Then recreate only:
+
+```bash
+docker compose <existing production files and environment files> \
+  -f /opt/personal-job-agent-v2/compose.java-normalization-stage-2.override.yaml \
+  -f /opt/personal-job-agent-v2/compose.java-normalization-stage-3-shadow.override.yaml \
+  -f /opt/personal-job-agent-v2/compose.java-normalization-stage-4-java.override.yaml \
+  up -d --no-deps --wait backend
+```
+
+Do not recreate Worker, Outbox, PostgreSQL, Redis, Frontend, Edge/Nginx, Java,
+or the legacy Backend. Do not invoke `/api/analyze`; Java-authoritative
+evidence must come only from later normal user-initiated requests.
+
+### Validation and emergency rollback
+
+Require Backend mode `java`, healthy/restart zero/OOM false Backend and Java,
+public health `200`, application `2.0.4`, Alembic `20260730_07`, identical image
+digests, unchanged IDs for untouched services, unchanged ports and private
+network membership, sufficient host resources, and no secret or unsafe value
+in bounded logs. Verify the authoritative/fallback, second-scan, execution-
+binding, one-attempt/no-retry, hidden-Java-failure, and completed-replay
+contracts from merged source and tests without generating Analyze traffic.
+
+Render emergency rollback by omitting both Stage 4 and Stage 3 while retaining
+the base stack and Phase IVB override. Confirm Backend mode `local`, sample
+rate `0`, and the same image, networks, and read-only key mount. If any gate
+fails, recreate only Backend from that local render. No image change, database
+downgrade, Java restart/removal, History or idempotency transformation, Redis
+operation, or other service recreation is required. Do not execute rollback
+when all gates pass.
+
+A successful Phase IVD-A is only **CONDITIONAL GO** pending a separately
+requested Phase IVD-B review of 3-5 later user-initiated non-sensitive Analyze
+requests. Phase IVD-A does not authorize generated Analyze traffic, external
+LLM calls by the operator, image publication, migration, release, version
+bump, tag, or automatic progression into Phase IVD-B.
