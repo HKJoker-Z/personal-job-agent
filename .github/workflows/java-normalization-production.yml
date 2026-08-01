@@ -207,9 +207,9 @@ jobs:
           [[ "${DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]]
           docker pull "${IMAGE}@${DIGEST}"
           test "$(docker image inspect --format '{{.Config.User}}' "${IMAGE}@${DIGEST}")" = "10001:10001"
-          test "$(docker image inspect --format '{{index .Config.Labels \"org.opencontainers.image.source\"}}' "${IMAGE}@${DIGEST}")" = \
+          test "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.source"}}' "${IMAGE}@${DIGEST}")" = \
             "https://github.com/HKJoker-Z/personal-job-agent"
-          test "$(docker image inspect --format '{{index .Config.Labels \"org.opencontainers.image.revision\"}}' "${IMAGE}@${DIGEST}")" = \
+          test "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "${IMAGE}@${DIGEST}")" = \
             "${EXPECTED_REVISION}"
           ! docker image inspect "${IMAGE}@${DIGEST}" | grep -Ei \
             'JD_NORMALIZATION_(API_KEY|DB_PASSWORD|FLYWAY_PASSWORD)=[^"[:space:]]+'
