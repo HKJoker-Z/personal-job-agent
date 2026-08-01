@@ -365,7 +365,9 @@ The final PR #37 head passed all required check contexts:
   script, and secret checks passed. The image publisher was correctly skipped
   for a pull-request event, so no second image was published.
 
-Post-merge repository CI run `30685706506` also passed. A subsequent
-documentation-only correction moved this report to the requested deployment
-date path and updated this delivery record; it made no production change,
+Post-merge repository CI run `30685706506` also passed. Documentation-only
+PR #38, <https://github.com/HKJoker-Z/personal-job-agent/pull/38>, moved this
+report to the requested deployment-date path and updated this delivery record.
+Its initial correction commit is
+`0f06693e615e7ed22b9c8161a16c0c6e5f62882c`. It made no production change,
 published no image, and created no tag or GitHub Release.
