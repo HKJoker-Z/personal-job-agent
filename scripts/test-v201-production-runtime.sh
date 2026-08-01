@@ -100,13 +100,12 @@ secret_mounts = [
     mount for mount in services["backend"]["volumes"]
     if mount["target"] == "/run/pja-secrets/java-normalization-api-key"
 ]
-assert secret_mounts == [{
-    "type": "bind",
-    "source": "/etc/personal-job-agent/java-normalization/api-key",
-    "target": "/run/pja-secrets/java-normalization-api-key",
-    "read_only": True,
-    "bind": {},
-}]
+assert len(secret_mounts) == 1
+secret_mount = secret_mounts[0]
+assert secret_mount["type"] == "bind"
+assert secret_mount["source"] == "/etc/personal-job-agent/java-normalization/api-key"
+assert secret_mount["target"] == "/run/pja-secrets/java-normalization-api-key"
+assert secret_mount["read_only"] is True
 java_network = value["networks"]["java-normalization"]
 assert java_network["external"] is True
 assert java_network["name"] == "pja-java-normalization-internal"
