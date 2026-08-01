@@ -155,6 +155,30 @@ synthetic immutable digest and placeholder file, Git whitespace checks,
 workflow/static secret review, and scope review. GitHub validation results are
 recorded in final delivery metadata before merge.
 
+Implementation head `f3d8ef6045464f6b0cde9855105691b0caad2b05` passed all 15
+GitHub check contexts:
+
+- repository CI run `30684144999`: all ten jobs passed, including script,
+  Compose, repository safety, PostgreSQL, production-runtime regression, and
+  the Version 2.0.4 mock-provider smoke;
+- Java CI run `30684144969`: Maven verify, full-profile container smoke, and
+  normalization-only no-database smoke passed, with no required Java test
+  skipped;
+- isolated candidate run `30684144977`: the complete required synthetic matrix
+  and cleanup passed; and
+- production asset run `30684144979`: Maven verify, normalization-only smoke,
+  Compose/static/script/secret validation, and the actual private config-tree
+  startup/authentication probe passed. Publication was correctly skipped on a
+  pull-request event.
+
+The first production asset run exposed a CI-only mode/ownership ordering issue
+after creating its ephemeral key. Commit
+`f3d8ef6045464f6b0cde9855105691b0caad2b05` fixed the runner setup by applying
+mode before ownership. The production helper already runs that operation as
+root. The corrected end-to-end production asset gate passed. The final
+report-only delivery metadata commit is followed by the same authoritative PR
+check rollup.
+
 ## 22. Changed files
 
 - `.github/workflows/java-normalization-production.yml`
@@ -168,12 +192,16 @@ recorded in final delivery metadata before merge.
 
 ## 23. Commit SHAs
 
-Implementation and final report-only delivery metadata commits will be
-recorded after the commits exist and before merge.
+- `72d0842519d27145c8cc319fce704350a18a1a59` — Phase IVA Compose,
+  workflow, helpers, runbook, architecture status, and initial Work Report.
+- `f3d8ef6045464f6b0cde9855105691b0caad2b05` — correct the isolated
+  production config-tree smoke key ownership order.
+- The final report-only delivery metadata commit follows these implementation
+  commits and is visible in the pull request history.
 
 ## 24. Implementation PR URL
 
-The pull request URL will be recorded after creation and before merge.
+<https://github.com/HKJoker-Z/personal-job-agent/pull/36>
 
 ## 25. Risks and limitations
 
