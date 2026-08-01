@@ -346,5 +346,22 @@ for all eight pre-existing containers.
 
 ## 44. Deployment report delivery
 
-The documentation-only pull request URL, report commit, final checks, and merge
-commit are recorded in final delivery metadata before merge.
+The documentation-only pull request is
+<https://github.com/HKJoker-Z/personal-job-agent/pull/37>. Initial report commit
+`c7b69c25cf152696de1024762d5924326d770a1b` changed only this report and the
+Work Report index.
+
+That head passed all 15 required check contexts:
+
+- repository CI run `30685286074`: all ten jobs passed;
+- Java CI run `30685286047`: Maven verify, full-profile container smoke, and
+  normalization-only no-database smoke passed with no required Java skip;
+- isolated candidate run `30685286118`: the full synthetic matrix and cleanup
+  passed; and
+- production asset run `30685286063`: Java/Compose/config-tree/private startup,
+  script, and secret checks passed. The image publisher was correctly skipped
+  for a pull-request event, so no second image was published.
+
+The final report-only delivery metadata commit follows and is visible in the
+pull request history. The final-head authoritative rollup is required before a
+normal merge commit; no tag or GitHub Release is created.
