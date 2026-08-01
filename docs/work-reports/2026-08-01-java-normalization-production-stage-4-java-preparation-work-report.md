@@ -141,13 +141,31 @@ service, public port, schema, or release metadata changed.
 
 ## 11. Validation and delivery metadata
 
-The preparation will record its implementation commit, PR URL, required
-checks, and normal merge commit here before production mutation. Local
-validation covers whitespace/YAML/Bash/ShellCheck checks, Stage 2 local,
-Stage 3 Shadow, and Stage 4 Java Compose renders, an exact normalized diff,
-Backend-only network/secret assertions, Worker/Outbox local assertions,
-targeted authoritative/fallback/security/binding/replay tests, and repository
-safety scans.
+- Preparation PR:
+  <https://github.com/HKJoker-Z/personal-job-agent/pull/45>
+- Implementation commit:
+  `18971f2138bde0a5d895685728018fa77b9c0d23`
+- Required merge method: normal merge commit; no squash, rebase, or admin
+  bypass
+
+Local validation passed:
+
+- `git diff --check`;
+- Bash syntax and ShellCheck for the changed regression script;
+- YAML parsing and Stage 2 local, Stage 3 Shadow, and Stage 4 Java Compose
+  rendering;
+- an exact normalized comparison proving the only Shadow-to-Java document
+  difference is Backend `ANALYSIS_JD_NORMALIZATION_MODE`;
+- Backend-only Java network and read-only key-mount assertions;
+- Worker and Outbox local-mode assertions;
+- unchanged images, ports, services, limits, timeouts, expected versions, and
+  topology assertions;
+- targeted normalization configuration/client, Shadow, Java-authoritative,
+  fallback, second-scan, binding, and completed-replay regression tests; and
+- repository whitespace and tracked-file safety checks.
+
+GitHub required-check results and the normal merge commit will be appended
+after the pull-request checks finish and before any production mutation.
 
 ## 12. Preparation boundary confirmations
 
