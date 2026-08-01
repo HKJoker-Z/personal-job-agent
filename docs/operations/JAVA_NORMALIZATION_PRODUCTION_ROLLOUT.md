@@ -274,3 +274,84 @@ Java, its network, and its key may remain independently for later review.
 Shadow observation and Java-authoritative Analyze remain separately gated.
 Phase IVB does not authorize Phase IVC, `/api/analyze`, DeepSeek, another
 external LLM, a version bump, tag, or GitHub Release.
+
+## Phase IVC-A: bounded production Shadow configuration
+
+Phase IVC-A adds
+`deploy/production/compose.java-normalization-stage-3-shadow.override.yaml`
+after the established Phase IVB override. It changes only the FastAPI Backend
+environment: normalization mode becomes `shadow`, deterministic sampling is
+`1.0`, and the reviewed 200/600/800 ms connect/response/total deadlines,
+262144-byte response ceiling, `jd-normalization-v1` policy, and `skills-v1`
+dictionary are explicit. The private origin, key-file mount, immutable image,
+and Backend-only Java network attachment remain inherited from Phase IVB.
+Worker and Outbox remain explicitly `local`.
+
+The 1.0 rate is bounded rollout configuration, not a Java-authoritative
+decision. Every later user-initiated, non-replayed Analyze is deterministically
+eligible for one observation-only Java attempt. Local sanitized JD remains
+authoritative for the execution fingerprint, RAG, prompt, History, provider
+input, and response. Java failure is contained as a safe observation and never
+fails Analyze. The client has one attempt, no retry, no redirect, no inherited
+proxy, and the reviewed total deadline.
+
+### Preflight and deployment
+
+Immediately before mutation, verify production `2.0.4`, Alembic
+`20260730_07`, exact current Backend/Java digests, runtime mode `local`, all
+existing health/restart/OOM state, Java-private topology and health-only logs,
+at least 1.5 GiB available RAM, and at least 6 GiB available root disk. Record
+container IDs, networks, and published ports without printing environment or
+secret values. Do not prune to pass the gate.
+
+Install the reviewed Shadow override root:root mode `0444` under
+`/opt/personal-job-agent-v2`. Keep the exact existing production environment
+files and Compose file sequence, append the Shadow override last, render the
+configuration, and prove its only semantic difference from the Phase IVB
+render is the bounded Backend environment listed above. Then recreate only:
+
+```bash
+docker compose <existing production files and environment files> \
+  -f /opt/personal-job-agent-v2/compose.java-normalization-stage-2.override.yaml \
+  -f /opt/personal-job-agent-v2/compose.java-normalization-stage-3-shadow.override.yaml \
+  up -d --no-deps --wait backend
+```
+
+Do not recreate Worker, Outbox, PostgreSQL, Redis, Frontend, Edge/Nginx, Java,
+or the legacy Backend. Do not invoke `/api/analyze`; Shadow evidence must come
+only from later user-initiated requests.
+
+### Validation and safe evidence
+
+Require Backend `shadow` and sample rate `1.0`, healthy/restart zero/OOM false,
+Java healthy/private/restart zero/OOM false, public health 200, application
+`2.0.4`, Alembic `20260730_07`, unchanged images/IDs/ports for every untouched
+container, and no secret value in inspection or bounded logs.
+
+Before user traffic, Java logs should contain only periodic
+`/actuator/health/**` readiness events. After user-initiated test traffic, a
+separately requested Phase IVC-B review may inspect only bounded structured
+observation fields: mode/source, sampled/attempted booleans, stable outcome,
+bounded duration, equality boolean, bounded finding count, expected versions,
+and trusted Request ID outcome. Never inspect or record JD, Resume, prompt,
+response, History, hashes, key/Authorization, Java bodies, or arbitrary
+exceptions.
+
+### Rollback to local
+
+Render rollback by omitting the Stage 3 Shadow override while retaining every
+prior production file and the Phase IVB override. Confirm the result is
+Backend `local`, sample rate `0`, the same immutable image, the same networks
+and read-only key mount, and Worker/Outbox `local`. If rollback is needed,
+recreate only Backend with that exact Phase IVB render. No image change,
+database downgrade, Java restart, History transformation, completed-response
+change, or other service recreation is required. A healthy Shadow deployment
+is not rolled back merely to demonstrate the command.
+
+Stop for any health, restart, OOM, secret, topology, port, resource, version,
+schema, configuration, unauthorized/version-mismatch observation, or
+Java-correlated Analyze failure. Phase IVC-A may return only conditional GO
+until later user-initiated traffic supplies safe Shadow observations. It does
+not authorize Java-authoritative mode, production test users, generated
+Analyze traffic, an external LLM call, image publication, a version bump, tag,
+or GitHub Release.
