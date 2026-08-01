@@ -386,8 +386,10 @@ Confirmed:
 ## 28. Evidence-report delivery metadata
 
 - Branch: `docs/java-normalization-production-stage-4-java-evidence`
-- Evidence-report PR: to be recorded after creation
-- Implementation commit: to be recorded after creation
+- Evidence-report PR:
+  <https://github.com/HKJoker-Z/personal-job-agent/pull/47>
+- Implementation commit:
+  `641174433b1b6a41b291cd4cb1f2373798ff1603`
 - Required merge method: normal merge commit; no squash, rebase, or admin
   bypass
 
