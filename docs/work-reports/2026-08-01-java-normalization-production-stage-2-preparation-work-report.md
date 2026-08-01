@@ -182,7 +182,9 @@ Local validation at implementation commit
 - the existing Version 2 production runtime regression.
 
 No full local Backend rerun was duplicated because no Backend runtime source
-changed. The authoritative GitHub validation remains required and includes:
+changed. GitHub validation at corrected operational head
+`ff5c14d2ea8d4f7c4d16aad8a6c1e8271218a5a4` completed with 18 successful
+contexts, zero failures, and two intentional publication skips:
 
 - Bash syntax and ShellCheck through repository CI;
 - production Compose rendering and topology assertions;
@@ -195,13 +197,37 @@ changed. The authoritative GitHub validation remains required and includes:
   required by repository branch protection; and
 - CLEAN/MERGEABLE GitHub state with all required contexts passing.
 
+The authoritative runs were:
+
+- repository CI `30688896436`: all ten jobs passed;
+- integrated Backend production `30688896426`: complete Backend tests,
+  PostgreSQL 16 integration, and local-mode production assets passed; its
+  publish job correctly skipped on a pull request;
+- Java service CI `30688896423`: verify and normalization-only smoke passed;
+  full-profile container smoke passed on one bounded rerun after the initial
+  attempt failed only because Maven Wrapper could not download Maven 3.9.16
+  from Maven Central;
+- isolated candidate `30688896434`: passed; and
+- Java production assets `30688896420`: passed, with publication correctly
+  skipped on a pull request.
+
+The Compose portability defect found by the first GitHub pass was corrected in
+`ff5c14d2ea8d4f7c4d16aad8a6c1e8271218a5a4`: different Compose versions may
+add `create_host_path` inside rendered bind metadata, so the regression now
+checks only the invariant single source, target, bind type, and read-only
+properties. No runtime or production file semantics changed.
+
 ## 12. Delivery metadata
 
 - Preparation PR:
   <https://github.com/HKJoker-Z/personal-job-agent/pull/39>
 - Implementation commit:
   `b9b5e32a13faa586652d4ebc100379022fdd7c1c`
-- Report metadata commit: this commit follows in the PR history
+- Initial report metadata commit:
+  `d7885297e3051a824c470f1ebd9e172610f79110`
+- Compose portability correction:
+  `ff5c14d2ea8d4f7c4d16aad8a6c1e8271218a5a4`
+- Final check-rollup commit: this report-only commit follows in the PR history
 - Merge method: normal merge commit required
 - Merge commit: pending merge
 
