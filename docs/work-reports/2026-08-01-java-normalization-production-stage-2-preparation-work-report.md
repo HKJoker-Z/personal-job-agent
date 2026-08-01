@@ -168,8 +168,21 @@ History, idempotency, Redis, or user-data transformation is part of rollback.
 
 ## 11. Validation before merge
 
-The authoritative final validation record will be added to this report at the
-final pull-request head. Required gates include:
+Local validation at implementation commit
+`b9b5e32a13faa586652d4ebc100379022fdd7c1c` passed:
+
+- `git diff --check`;
+- Bash syntax and ShellCheck for the changed production regression script;
+- YAML parsing for every GitHub workflow;
+- merged production Compose rendering with the tools profile;
+- exact Backend-only Java network and secret-mount assertions;
+- explicit local mode on Backend, Worker, and Outbox;
+- one immutable Backend image across migrate, Backend, Worker, Outbox, and
+  backup; and
+- the existing Version 2 production runtime regression.
+
+No full local Backend rerun was duplicated because no Backend runtime source
+changed. The authoritative GitHub validation remains required and includes:
 
 - Bash syntax and ShellCheck through repository CI;
 - production Compose rendering and topology assertions;
@@ -184,8 +197,11 @@ final pull-request head. Required gates include:
 
 ## 12. Delivery metadata
 
-- Preparation PR: pending creation
-- Preparation commits: pending final metadata commit
+- Preparation PR:
+  <https://github.com/HKJoker-Z/personal-job-agent/pull/39>
+- Implementation commit:
+  `b9b5e32a13faa586652d4ebc100379022fdd7c1c`
+- Report metadata commit: this commit follows in the PR history
 - Merge method: normal merge commit required
 - Merge commit: pending merge
 
