@@ -1,0 +1,77 @@
+name: pja-java-normalization
+
+x-java-normalization-image: &java-normalization-image ${JAVA_NORMALIZATION_IMAGE:?immutable Java normalization image digest is required}
+
+services:
+  java-normalization:
+    image: *java-normalization-image
+    environment:
+      SPRING_PROFILES_ACTIVE: normalization-only
+      SPRING_CONFIG_IMPORT: configtree:/run/secrets/
+      JD_NORMALIZATION_BIND_ADDRESS: 0.0.0.0
+      JD_NORMALIZATION_PORT: "8080"
+      JAVA_TOOL_OPTIONS: -Xms64m -Xmx256m
+      HTTP_PROXY: ""
+      HTTPS_PROXY: ""
+      ALL_PROXY: ""
+      http_proxy: ""
+      https_proxy: ""
+      all_proxy: ""
+      NO_PROXY: localhost,127.0.0.1,java-normalization
+      no_proxy: localhost,127.0.0.1,java-normalization
+      TZ: Asia/Shanghai
+    secrets:
+      - source: java-normalization-api-key
+        target: jd-normalization.security.api-key
+        uid: "10001"
+        gid: "10001"
+        mode: 0400
+    expose:
+      - "8080"
+    networks:
+      java-normalization-internal:
+        aliases:
+          - java-normalization
+    user: "10001:10001"
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m,uid=10001,gid=10001,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    init: true
+    restart: on-failure:3
+    stop_grace_period: 20s
+    mem_limit: 384m
+    memswap_limit: 384m
+    cpus: 0.50
+    pids_limit: 128
+    healthcheck:
+      test:
+        - CMD
+        - curl
+        - --fail
+        - --silent
+        - --show-error
+        - --max-time
+        - "2"
+        - http://127.0.0.1:8080/actuator/health/readiness
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 45s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "5"
+
+networks:
+  java-normalization-internal:
+    external: true
+    name: ${JAVA_NORMALIZATION_NETWORK_NAME:-pja-java-normalization-internal}
+
+secrets:
+  java-normalization-api-key:
+    file: ${JAVA_NORMALIZATION_SECRET_FILE:?root-controlled Java normalization secret file is required}
