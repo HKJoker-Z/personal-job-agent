@@ -6,6 +6,7 @@ reviewable in Git history.
 
 | Date | Report |
 |---|---|
+| 2026-07-30 | [Java Normalization Production Stage 1 Deployment](2026-07-30-java-normalization-production-stage-1-deployment-work-report.md) |
 | 2026-07-30 | [Java Normalization Production Stage 1 Preparation](2026-07-30-java-normalization-production-stage-1-preparation-work-report.md) |
 | 2026-07-30 | [Java Normalization Candidate Phase IIIB](2026-07-30-java-normalization-candidate-phase-3b-work-report.md) |
 | 2026-07-30 | [Java-Authoritative Normalization Phase IIIA](2026-07-30-java-authoritative-normalization-phase-3a-work-report.md) |
