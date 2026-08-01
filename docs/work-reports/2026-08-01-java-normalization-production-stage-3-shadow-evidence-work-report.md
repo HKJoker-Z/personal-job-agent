@@ -312,3 +312,180 @@ Confirmed for this task:
 The next named phase is **Phase IVD — enable bounded Java-authoritative
 production mode**. It was not started and remains blocked pending a later gate
 with at least three confirmed sampled production Shadow requests.
+
+## 21. Phase IVC-B follow-up — 2026-08-01 19:33:30 +08:00
+
+This dated follow-up preserves the verified initial evidence above and
+supersedes only its Phase IVC-B decision. The review remained read-only and
+covered new structured metadata after the previous evidence cutoff.
+
+### 21.1 Follow-up observation window
+
+The incremental bounded window was 2026-08-01 19:05:41 through 19:33:30
+Asia/Shanghai (`+08:00`). The start is the exact end of the initial evidence
+snapshot. The end is the follow-up production and resource snapshot.
+
+Only allowlisted Backend Shadow events, Backend HTTP completion metadata, Java
+HTTP completion metadata, Java normalization-completion metadata, selected
+runtime configuration values, health state, container isolation metadata, and
+host resource counters were aggregated. No user or request content was read.
+
+### 21.2 Incremental and cumulative counts
+
+| Evidence | Incremental | Cumulative |
+|---|---:|---:|
+| New user-initiated Analyze requests | 4 | 5 |
+| Deterministically sampled requests | 4 | 5 |
+| Java attempts | 4 | 5 |
+| Java successes | 4 | 5 |
+| Java failures | 0 | 0 |
+| Timeout outcomes | 0 | 0 |
+| Unavailable outcomes | 0 | 0 |
+| Invalid-response outcomes | 0 | 0 |
+| Local fallback outcomes | 0 | 0 |
+| Duplicate attempts | 0 | 0 |
+| Request ID mismatches | 0 | 0 |
+| Policy mismatches | 0 | 0 |
+| Dictionary mismatches | 0 | 0 |
+| Observation-only second-scan findings | 0 | 0 |
+| Java-caused public Analyze failures | 0 | 0 |
+
+All four incremental Analyze completions were HTTP 200. Backend emitted four
+sampled Shadow observations, and Java independently emitted four normalize
+HTTP 200 events and four normalization-completion events. The counts and
+trusted Request IDs matched one-to-one without exposing any Request ID value.
+
+The incremental outcome set contained only `success`. There were no connect,
+response, or total timeouts; unavailable, authentication, client, server,
+JSON, schema, hash-validation, response-size, Request ID, policy, or dictionary
+failures; and no other failure category.
+
+Every eligible incremental request was sampled at rate 1.0. Each trusted
+Request ID had one Backend attempt and one Java HTTP event, proving at most one
+attempt per request and no retry. No incremental Analyze completion lacked its
+Shadow observation.
+
+### 21.3 Correlation, contract, and second-scan results
+
+Incremental Request ID matches were 4/4 and cumulative matches were 5/5.
+Mismatch count remained zero.
+
+All four new successful observations reported:
+
+- normalization policy `jd-normalization-v1`;
+- skill dictionary `skills-v1`;
+- local authoritative source;
+- fallback false;
+- observation-only second scan; and
+- text-equality boolean true.
+
+Incremental second-scan bounded finding total was zero, making the cumulative
+total zero. No unsafe response-validation outcome occurred.
+
+The deployed event schema still does not include required, preferred, or
+mentioned skill-difference counts. This remains an explicit observability
+limitation. No Java response body was inspected and production was not
+modified to reconstruct those values. The missing fields do not indicate a
+policy, dictionary, validation, or authority mismatch.
+
+### 21.4 Cumulative latency
+
+Incremental Backend end-to-end Java Shadow durations were 8.556, 10.643,
+16.795, and 18.224 ms. Combined with the verified initial 74.609 ms
+observation, the cumulative sorted sample is 8.556, 10.643, 16.795, 18.224,
+and 74.609 ms.
+
+For cumulative `n=5`:
+
+- median: **16.795 ms**; and
+- nearest-rank p95: **74.609 ms**.
+
+Five observations remain a small sample. These percentiles are bounded
+rollout evidence only, not an SLA, load test, performance trend, or claim of
+improvement.
+
+### 21.5 Production state and resources
+
+At 2026-08-01 19:33:30 Asia/Shanghai (`+08:00`):
+
+- application version: exactly `2.0.4`;
+- production Alembic: exactly `20260730_07`;
+- Backend mode: exactly `shadow`;
+- Shadow sample rate: exactly `1.0`;
+- Backend: healthy, restart count 0, OOM false, 0.15% CPU,
+  130.3 MiB / 768 MiB;
+- Java: healthy, restart count 0, OOM false, 0.11% CPU,
+  216.2 MiB / 384 MiB;
+- host available RAM: 1.99 GiB;
+- root disk available: 7.63 GiB, 80% used; and
+- load averages: 0.56, 0.48, and 0.41.
+
+Available RAM remained above 1.5 GiB and root disk remained above 6 GiB.
+Neither Backend nor Java had a host-published port. Java remained attached
+only to `pja-java-normalization-internal`, whose membership remained exactly
+Backend and Java.
+
+### 21.6 Safe-log review
+
+The incremental window contained zero Backend error-level events and zero Java
+error-level events. Backend had two warning-level events in the existing
+provider/fallback path; all four Analyze requests still completed with HTTP
+200, and every Java attempt succeeded, so Java caused neither warning nor
+public failure.
+
+All four Shadow events used exactly the reviewed allowlisted schema. Automated
+bounded scans found zero structured or raw log labels for Authorization,
+Bearer tokens, Cookies, Sessions, raw or normalized text, Resume text, prompt,
+response body, or content hash. No secret value, hash, Request ID, exception
+string, user content, or Java body was printed or recorded. Secret values were
+not read as part of this follow-up.
+
+### 21.7 Authority and rollback
+
+All incremental observations reported `normalization_source=local` and
+`fallback=false`. Merged behavior continues to discard the Java result after
+bounded Shadow comparisons and retains the local sanitized input for the
+execution fingerprint, RAG, prompt, provider input, History, result, and
+public response. Java caused zero public Analyze failures.
+
+The approved rollback remains immediately available. Both installed Stage 2
+and Stage 3 overrides remain root-owned and mode `0444`. Omitting only Stage 3
+and recreating only Backend restores local mode and sample rate zero without a
+database downgrade, Java restart/removal, History or idempotency rewrite,
+Redis operation, or other service recreation. Rollback was not executed
+because no defect exists.
+
+### 21.8 Final Phase IVC-B decision
+
+**GO to Phase IVD.**
+
+Cumulative evidence now contains five confirmed new sampled production Shadow
+requests, exceeding the required minimum of three. All five succeeded with
+one attempt each. There is no correlation, validation, policy, dictionary,
+security, health, resource, leakage, fallback, retry, public-failure, or local-
+authority defect.
+
+There is no remaining Phase IVC-B blocker. The absent skill-difference-count
+fields remain a documented safe-schema observability limitation and were not
+reconstructed from prohibited response content.
+
+This GO names but does not start **Phase IVD — enable bounded
+Java-authoritative production mode**. Production remains in Shadow mode.
+
+### 21.9 Follow-up non-actions
+
+Confirmed for this follow-up:
+
+- no `/api/analyze` request or production user-workflow traffic was generated
+  by this task;
+- no configuration or feature flag changed;
+- no service restarted;
+- no Resume, JD, prompt, History, provider body, Java body, hash, Session,
+  Cookie, Authorization value, secret, user-content table, idempotency payload,
+  or Redis value was inspected;
+- no external LLM was called by this task;
+- Java-authoritative mode was not enabled;
+- no image was built or published;
+- no migration or database downgrade ran;
+- no tag or release was created; and
+- no version bump to `2.0.5` occurred.
