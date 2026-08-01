@@ -6,6 +6,7 @@ reviewable in Git history.
 
 | Date | Report |
 |---|---|
+| 2026-08-01 | [Java Normalization Production Stage 4 Java Preparation](2026-08-01-java-normalization-production-stage-4-java-preparation-work-report.md) |
 | 2026-08-01 | [Java Normalization Production Stage 3 Shadow Evidence and Follow-up](2026-08-01-java-normalization-production-stage-3-shadow-evidence-work-report.md) |
 | 2026-08-01 | [Java Normalization Production Stage 3 Shadow Deployment](2026-08-01-java-normalization-production-stage-3-shadow-deployment-work-report.md) |
 | 2026-08-01 | [Java Normalization Production Stage 3 Shadow Preparation](2026-08-01-java-normalization-production-stage-3-shadow-preparation-work-report.md) |

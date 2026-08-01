@@ -10,6 +10,7 @@ V1_CONTAINER="pja-v201-v1-service-${STAMP}"
 V2_CONTAINER="pja-v201-v2-service-${STAMP}"
 CONFIG_JSON="$(mktemp /tmp/pja-v201-compose.XXXXXX.json)"
 SHADOW_CONFIG_JSON="$(mktemp /tmp/pja-v201-shadow-compose.XXXXXX.json)"
+JAVA_CONFIG_JSON="$(mktemp /tmp/pja-v201-java-compose.XXXXXX.json)"
 SERVER_LOG="$(mktemp /tmp/pja-v201-health.XXXXXX.log)"
 SERVER_PID=""
 
@@ -29,7 +30,7 @@ cleanup() {
   "${DOCKER[@]}" rm --force "$V1_CONTAINER" "$V2_CONTAINER" >/dev/null 2>&1 || true
   "${DOCKER[@]}" network rm "$V1_NETWORK" "$V2_NETWORK" >/dev/null 2>&1 || true
   "${DOCKER[@]}" volume rm "$VOLUME_NAME" >/dev/null 2>&1 || true
-  rm -f "$CONFIG_JSON" "$SHADOW_CONFIG_JSON" "$SERVER_LOG"
+  rm -f "$CONFIG_JSON" "$SHADOW_CONFIG_JSON" "$JAVA_CONFIG_JSON" "$SERVER_LOG"
   exit "$status"
 }
 trap cleanup EXIT
@@ -169,6 +170,60 @@ for document in (normalized_local, normalized_shadow):
     for name in expected_shadow:
         environment.pop(name, None)
 assert normalized_shadow == normalized_local
+PY
+
+if [[ "${DOCKER[0]}" == "sudo" ]]; then
+  # The Compose process needs Docker privileges; the destination is intentionally
+  # the invoking user's private temporary file.
+  # shellcheck disable=SC2024
+  sudo -n env "${COMPOSE_ENV[@]}" docker compose \
+    -f "${ROOT_DIR}/deploy/production/compose.yaml" \
+    -f "${ROOT_DIR}/deploy/production/compose.java-normalization-stage-2.override.yaml" \
+    -f "${ROOT_DIR}/deploy/production/compose.java-normalization-stage-3-shadow.override.yaml" \
+    -f "${ROOT_DIR}/deploy/production/compose.java-normalization-stage-4-java.override.yaml" \
+    --profile tools \
+    config --format json >"$JAVA_CONFIG_JSON"
+else
+  env "${COMPOSE_ENV[@]}" docker compose \
+    -f "${ROOT_DIR}/deploy/production/compose.yaml" \
+    -f "${ROOT_DIR}/deploy/production/compose.java-normalization-stage-2.override.yaml" \
+    -f "${ROOT_DIR}/deploy/production/compose.java-normalization-stage-3-shadow.override.yaml" \
+    -f "${ROOT_DIR}/deploy/production/compose.java-normalization-stage-4-java.override.yaml" \
+    --profile tools \
+    config --format json >"$JAVA_CONFIG_JSON"
+fi
+
+python3 - "$SHADOW_CONFIG_JSON" "$JAVA_CONFIG_JSON" <<'PY'
+import copy
+import json
+import sys
+
+shadow = json.load(open(sys.argv[1], encoding="utf-8"))
+java = json.load(open(sys.argv[2], encoding="utf-8"))
+services = java["services"]
+backend_environment = services["backend"]["environment"]
+
+assert backend_environment["ANALYSIS_JD_NORMALIZATION_MODE"] == "java"
+assert backend_environment["JD_NORMALIZATION_CONNECT_TIMEOUT_MS"] == "200"
+assert backend_environment["JD_NORMALIZATION_RESPONSE_TIMEOUT_MS"] == "600"
+assert backend_environment["JD_NORMALIZATION_TOTAL_TIMEOUT_MS"] == "800"
+assert backend_environment["JD_NORMALIZATION_MAX_RESPONSE_BYTES"] == "262144"
+assert backend_environment["JD_NORMALIZATION_EXPECTED_POLICY_VERSION"] == "jd-normalization-v1"
+assert backend_environment["JD_NORMALIZATION_EXPECTED_DICTIONARY_VERSION"] == "skills-v1"
+assert backend_environment["JD_NORMALIZATION_SHADOW_SAMPLE_RATE"] == "1.0"
+assert backend_environment["JD_NORMALIZATION_BASE_URL"] == "http://java-normalization:8080"
+assert backend_environment["JD_NORMALIZATION_API_KEY_FILE"] == "/run/pja-secrets/java-normalization-api-key"
+assert services["worker"]["environment"]["ANALYSIS_JD_NORMALIZATION_MODE"] == "local"
+assert services["outbox-dispatcher"]["environment"]["ANALYSIS_JD_NORMALIZATION_MODE"] == "local"
+assert set(services["backend"]["networks"]) == {"application", "data", "java-normalization"}
+for name in ("postgres", "redis", "worker", "outbox-dispatcher", "frontend", "edge"):
+    assert "java-normalization" not in services[name].get("networks", {})
+
+normalized_shadow = copy.deepcopy(shadow)
+normalized_java = copy.deepcopy(java)
+for document in (normalized_shadow, normalized_java):
+    document["services"]["backend"]["environment"].pop("ANALYSIS_JD_NORMALIZATION_MODE")
+assert normalized_java == normalized_shadow
 PY
 
 if grep -En 'proxy_pass http://(frontend|backend):' \
