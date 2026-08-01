@@ -1,0 +1,219 @@
+name: Java Normalization Production
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/java-normalization-production.yml"
+      - "compose.java-normalization.yaml"
+      - "scripts/deploy-java-normalization.sh"
+      - "scripts/remove-java-normalization.sh"
+      - "docs/operations/JAVA_NORMALIZATION_PRODUCTION_ROLLOUT.md"
+      - "docs/architecture/JAVA_PRODUCTION_NORMALIZATION_INTEGRATION.md"
+      - "docs/work-reports/2026-07-30-java-normalization-production-stage-1-preparation-work-report.md"
+      - "docs/work-reports/README.md"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: java-normalization-production-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: production-assets-and-java
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          fetch-depth: 0
+
+      - name: Set up Java 21
+        uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95 # v5.6.0
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+          cache-dependency-path: services/jd-normalization-service/pom.xml
+
+      - name: Verify Java application
+        working-directory: services/jd-normalization-service
+        run: ./mvnw -B -ntp verify
+
+      - name: Run normalization-only smoke
+        working-directory: services/jd-normalization-service
+        run: ./scripts/normalization-only-container-smoke.sh --ephemeral
+
+      - name: Validate production Compose and scripts
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PUSH_BASE_SHA: ${{ github.event.before }}
+          JAVA_NORMALIZATION_IMAGE: ghcr.io/hkjoker-z/personal-job-agent-java-normalization@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+          JAVA_NORMALIZATION_SECRET_FILE: ${{ runner.temp }}/java-normalization-api-key
+        run: |
+          install -m 0400 /dev/null "${JAVA_NORMALIZATION_SECRET_FILE}"
+          docker compose --project-name pja-java-normalization \
+            --file compose.java-normalization.yaml config --quiet
+          test "$(docker compose --project-name pja-java-normalization \
+            --file compose.java-normalization.yaml config --services)" = "java-normalization"
+          ! docker compose --project-name pja-java-normalization \
+            --file compose.java-normalization.yaml config | grep -Eq 'published:|host_ip:'
+          bash -n scripts/deploy-java-normalization.sh scripts/remove-java-normalization.sh
+          shellcheck scripts/deploy-java-normalization.sh scripts/remove-java-normalization.sh
+          base_sha="${PR_BASE_SHA:-${PUSH_BASE_SHA}}"
+          if [[ -z "${base_sha}" || "${base_sha}" =~ ^0+$ ]]; then
+            base_sha="$(git rev-parse HEAD^)"
+          fi
+          git diff --check "${base_sha}" HEAD
+
+      - name: Reject production asset secrets and forbidden dependencies
+        run: |
+          ! git grep -n -E 'github_pat_[A-Za-z0-9_]{20,}|ghp_[A-Za-z0-9]{20,}|BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY' -- \
+            compose.java-normalization.yaml \
+            scripts/deploy-java-normalization.sh \
+            scripts/remove-java-normalization.sh \
+            docs/operations/JAVA_NORMALIZATION_PRODUCTION_ROLLOUT.md
+          ! grep -Eq 'JD_NORMALIZATION_(JDBC_URL|DB_USERNAME|DB_PASSWORD|FLYWAY_USERNAME|FLYWAY_PASSWORD)|DATABASE_URL' \
+            compose.java-normalization.yaml
+          ! grep -Eq 'ports:|network_mode:[[:space:]]*host|docker.sock|privileged:[[:space:]]*true' \
+            compose.java-normalization.yaml
+
+      - name: Validate production config-tree startup privately
+        env:
+          JAVA_NORMALIZATION_IMAGE: jd-normalization-service:production-compose-ci
+          JAVA_NORMALIZATION_NETWORK_NAME: pja-java-normalization-internal
+          JAVA_NORMALIZATION_SECRET_FILE: ${{ runner.temp }}/pja-java-normalization-secret/api-key
+        run: |
+          cleanup() {
+            exit_status=$?
+            trap - EXIT INT TERM
+            docker compose --project-name pja-java-normalization \
+              --file compose.java-normalization.yaml stop --timeout 10 java-normalization >/dev/null 2>&1 || true
+            docker compose --project-name pja-java-normalization \
+              --file compose.java-normalization.yaml rm --force java-normalization >/dev/null 2>&1 || true
+            docker network rm "${JAVA_NORMALIZATION_NETWORK_NAME}" >/dev/null 2>&1 || true
+            exit "${exit_status}"
+          }
+          trap cleanup EXIT INT TERM
+          docker build \
+            --target application \
+            --build-arg "OCI_REVISION=${GITHUB_SHA}" \
+            --tag "${JAVA_NORMALIZATION_IMAGE}" \
+            services/jd-normalization-service
+          install -d -m 0700 "$(dirname "${JAVA_NORMALIZATION_SECRET_FILE}")"
+          openssl rand -hex 32 > "${JAVA_NORMALIZATION_SECRET_FILE}"
+          sudo chown 10001:10001 "${JAVA_NORMALIZATION_SECRET_FILE}"
+          chmod 0400 "${JAVA_NORMALIZATION_SECRET_FILE}"
+          docker network create \
+            --internal \
+            --label io.github.hkjokerz.repository=HKJoker-Z/personal-job-agent \
+            --label io.github.hkjokerz.purpose=private-java-normalization \
+            "${JAVA_NORMALIZATION_NETWORK_NAME}" >/dev/null
+          docker compose --project-name pja-java-normalization \
+            --file compose.java-normalization.yaml up --detach --no-deps java-normalization
+          for attempt in $(seq 1 75); do
+            health="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' \
+              pja-java-normalization-java-normalization-1)"
+            if [[ "${health}" == 'healthy' ]]; then
+              break
+            fi
+            [[ "${attempt}" -lt 75 ]]
+            sleep 2
+          done
+          docker run --rm \
+            --network "${JAVA_NORMALIZATION_NETWORK_NAME}" \
+            --read-only \
+            --cap-drop ALL \
+            --security-opt no-new-privileges:true \
+            --entrypoint curl \
+            "${JAVA_NORMALIZATION_IMAGE}" \
+            --fail --silent --show-error --max-time 3 \
+            http://java-normalization:8080/actuator/health/readiness \
+            | jq -e '.status == "UP" and (keys == ["status"])' >/dev/null
+          docker run --rm \
+            --network "${JAVA_NORMALIZATION_NETWORK_NAME}" \
+            --read-only \
+            --tmpfs /tmp:rw,noexec,nosuid,nodev,size=8m \
+            --user 10001:10001 \
+            --cap-drop ALL \
+            --security-opt no-new-privileges:true \
+            --mount "type=bind,source=${JAVA_NORMALIZATION_SECRET_FILE},target=/run/pja-secret/api-key,readonly" \
+            --entrypoint /bin/sh \
+            "${JAVA_NORMALIZATION_IMAGE}" -ec '
+              key="$(cat /run/pja-secret/api-key)"
+              code="$(curl --silent --output /tmp/response.json --write-out "%{http_code}" \
+                --request POST \
+                --header "Authorization: Bearer ${key}" \
+                --header "Content-Type: application/json" \
+                --data-binary "{\"raw_text\":\"Synthetic private config-tree test required Java 21.\"}" \
+                http://java-normalization:8080/api/v1/job-descriptions/normalize)"
+              test "${code}" = 200
+            '
+
+  publish:
+    name: publish-application-image
+    if: github.event_name == 'workflow_dispatch'
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+      image: ghcr.io/hkjoker-z/personal-job-agent-java-normalization
+    steps:
+      - name: Check out reviewed revision
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and publish application target
+        id: build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: services/jd-normalization-service
+          file: services/jd-normalization-service/Dockerfile
+          target: application
+          push: true
+          tags: ghcr.io/hkjoker-z/personal-job-agent-java-normalization:sha-${{ github.sha }}
+          build-args: |
+            OCI_SOURCE=https://github.com/HKJoker-Z/personal-job-agent
+            OCI_REVISION=${{ github.sha }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/HKJoker-Z/personal-job-agent
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.title=Personal Job Agent Java normalization-only service
+          cache-from: type=gha,scope=java-normalization-application
+          cache-to: type=gha,mode=max,scope=java-normalization-application
+
+      - name: Verify immutable publication metadata
+        env:
+          IMAGE: ghcr.io/hkjoker-z/personal-job-agent-java-normalization
+          DIGEST: ${{ steps.build.outputs.digest }}
+          EXPECTED_REVISION: ${{ github.sha }}
+        run: |
+          [[ "${DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]]
+          docker pull "${IMAGE}@${DIGEST}"
+          test "$(docker image inspect --format '{{.Config.User}}' "${IMAGE}@${DIGEST}")" = "10001:10001"
+          test "$(docker image inspect --format '{{index .Config.Labels \"org.opencontainers.image.source\"}}' "${IMAGE}@${DIGEST}")" = \
+            "https://github.com/HKJoker-Z/personal-job-agent"
+          test "$(docker image inspect --format '{{index .Config.Labels \"org.opencontainers.image.revision\"}}' "${IMAGE}@${DIGEST}")" = \
+            "${EXPECTED_REVISION}"
+          ! docker image inspect "${IMAGE}@${DIGEST}" | grep -Ei \
+            'JD_NORMALIZATION_(API_KEY|DB_PASSWORD|FLYWAY_PASSWORD)=[^"[:space:]]+'
+          ! docker history --no-trunc "${IMAGE}@${DIGEST}" | grep -Ei \
+            'JD_NORMALIZATION_(API_KEY|DB_PASSWORD|FLYWAY_PASSWORD)=[^[:space:]]+'
+          printf 'Published `%s@%s` from `%s`.\n' \
+            "${IMAGE}" "${DIGEST}" "${EXPECTED_REVISION}" >> "${GITHUB_STEP_SUMMARY}"

@@ -974,3 +974,24 @@ would be:
 Do not claim a broad microservice migration, Java-owned production Job
 Description persistence, performance improvement, high availability, or
 autonomous job-application behavior.
+
+## 26. Phase IVA infrastructure-only preparation status
+
+Phase IVA is split from FastAPI network attachment and behavior activation.
+The reviewed preparation introduces a separate `pja-java-normalization`
+Compose project containing only the stateless application target, plus the
+stable external internal bridge `pja-java-normalization-internal`. Compose does
+not own that bridge, so a later FastAPI attachment cannot be removed by a
+generic Java project teardown.
+
+The Phase IVA service runs only with `normalization-only`, imports its API key
+from a root-controlled config-tree file, has no database/Redis/proxy values,
+publishes no port, and joins no existing production network. The image is
+published only after Java verify and normalization-only smoke, tagged by full
+commit SHA, labeled with source/revision, and deployed by immutable digest.
+
+This preparation does not attach or recreate FastAPI, change Analyze mode,
+modify Personal Job Agent `2.0.4`, migrate production beyond `20260724_06`, or
+authorize Phase IVB, shadow, or Java-authoritative operation. Production
+deployment evidence and the Phase IVA GO/NO-GO decision belong in the separate
+post-deployment Work Report.
