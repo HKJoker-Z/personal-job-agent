@@ -105,8 +105,8 @@ jobs:
             services/jd-normalization-service
           install -d -m 0700 "$(dirname "${JAVA_NORMALIZATION_SECRET_FILE}")"
           openssl rand -hex 32 > "${JAVA_NORMALIZATION_SECRET_FILE}"
-          sudo chown 10001:10001 "${JAVA_NORMALIZATION_SECRET_FILE}"
           chmod 0400 "${JAVA_NORMALIZATION_SECRET_FILE}"
+          sudo chown 10001:10001 "${JAVA_NORMALIZATION_SECRET_FILE}"
           docker network create \
             --internal \
             --label io.github.hkjokerz.repository=HKJoker-Z/personal-job-agent \
