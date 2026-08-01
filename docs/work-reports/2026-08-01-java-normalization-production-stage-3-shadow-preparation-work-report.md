@@ -171,10 +171,13 @@ the complete suite remains a required GitHub check.
 
 ## 12. Delivery metadata
 
-- Preparation PR: pending creation
+- Preparation PR:
+  <https://github.com/HKJoker-Z/personal-job-agent/pull/41>
 - Implementation commit:
   `0ada5fc1bc374ef95e7ee54bf07da24be27232c7`
-- Report metadata commit: this follow-up commit
+- Initial validation metadata commit:
+  `3107e5e57b5f2e2b2b9f71f865de406df9a10f69`
+- PR delivery metadata commit: this follow-up commit
 - Final check result: pending
 - Required merge method: normal merge commit
 
