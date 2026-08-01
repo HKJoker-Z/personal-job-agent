@@ -144,7 +144,8 @@ command.
 
 ## 11. Validation before merge
 
-Planned and local validation includes:
+Local validation at implementation commit
+`0ada5fc1bc374ef95e7ee54bf07da24be27232c7` passed:
 
 - `git diff --check`;
 - Bash syntax and ShellCheck for the changed regression script;
@@ -155,18 +156,25 @@ Planned and local validation includes:
 - Worker/Outbox local-mode assertions;
 - Backend-only Java network and key-mount assertions;
 - immutable image and unchanged port/service topology assertions;
-- targeted Shadow configuration, client, authority, safe-log, and replay tests;
-  and
+- targeted Shadow configuration, client, authority, safe-log, and replay tests
+  in `test_java_normalization_config.py`,
+  `test_java_normalization_client.py`,
+  `test_analyze_normalization_shadow.py`, and
+  `test_analyze_idempotency.py`; and
 - repository safety and secret scans.
 
-Final local results, GitHub check results, PR state, and commit SHAs are added
-as delivery metadata before merge.
+The production regression rendered both the Phase IVB local stack and the
+Phase IVC-A stack, asserted the exact Shadow values, and normalized those
+fields to prove the complete remaining Compose document was unchanged. No
+full local suite was duplicated because no application runtime source changed;
+the complete suite remains a required GitHub check.
 
 ## 12. Delivery metadata
 
 - Preparation PR: pending creation
-- Implementation commit: pending
-- Report metadata commit: pending
+- Implementation commit:
+  `0ada5fc1bc374ef95e7ee54bf07da24be27232c7`
+- Report metadata commit: this follow-up commit
 - Final check result: pending
 - Required merge method: normal merge commit
 
