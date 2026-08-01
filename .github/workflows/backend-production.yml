@@ -1,0 +1,192 @@
+name: Integrated Backend Production
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/backend-production.yml"
+      - "deploy/production/compose.java-normalization-stage-2.override.yaml"
+      - ".env.production.example"
+      - "scripts/test-v201-production-runtime.sh"
+      - "docs/operations/JAVA_NORMALIZATION_PRODUCTION_ROLLOUT.md"
+      - "docs/work-reports/2026-08-01-java-normalization-production-stage-2-preparation-work-report.md"
+      - "docs/work-reports/README.md"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: integrated-backend-production-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  backend-tests:
+    name: complete-backend-tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      APP_ENV: test
+      APP_DATABASE_PATH: /tmp/personal-job-agent-integrated-backend.db
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install Backend dependencies
+        run: python -m pip install --requirement requirements.txt
+
+      - name: Compile Python
+        run: python -m compileall -q . ../scripts
+
+      - name: Run complete Backend suite
+        run: python -m unittest discover -v
+
+      - name: Confirm default database was not created
+        run: test ! -e data/app.db
+
+  backend-postgres:
+    name: postgres-16-integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16.9-alpine@sha256:7c688148e5e156d0e86df7ba8ae5a05a2386aaec1e2ad8e6d11bdf10504b1fb7
+        env:
+          POSTGRES_DB: personal_job_agent_stage_2_test
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres_test_only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d personal_job_agent_stage_2_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      APP_ENV: test
+      PJA_RUN_POSTGRES_TESTS: "1"
+      TEST_DATABASE_URL: postgresql+psycopg://postgres:postgres_test_only@127.0.0.1:5432/personal_job_agent_stage_2_test
+      DATABASE_URL: postgresql+psycopg://postgres:postgres_test_only@127.0.0.1:5432/personal_job_agent_stage_2_test
+      FILE_STORAGE_ROOT: /tmp/pja-stage-2-postgres-files
+      SESSION_COOKIE_SECURE: "false"
+      AUTH_TRUSTED_ORIGINS: http://testserver
+      AUTH_FINGERPRINT_KEY: TEST_ONLY_STAGE_2_FINGERPRINT_KEY_32_BYTES
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install Backend dependencies
+        run: python -m pip install --requirement requirements.txt
+
+      - name: Run PostgreSQL 16 integration suite
+        run: python -m unittest -v test_v2_postgres_integration.py
+
+  production-assets:
+    name: local-mode-production-assets
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+
+      - name: Validate Compose, scripts, topology, and local mode
+        run: |
+          bash -n scripts/*.sh
+          scripts/test-v201-production-runtime.sh
+
+      - name: Reject secrets and unsafe Stage IVB topology
+        run: |
+          ! git grep -n -E 'github_pat_[A-Za-z0-9_]{20,}|ghp_[A-Za-z0-9]{20,}|BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY' -- \
+            .github/workflows/backend-production.yml \
+            deploy/production/compose.java-normalization-stage-2.override.yaml \
+            docs/operations/JAVA_NORMALIZATION_PRODUCTION_ROLLOUT.md
+          test "$(grep -Ec '^[[:space:]]{2}(backend|worker|outbox-dispatcher|migrate|backup):' \
+            deploy/production/compose.java-normalization-stage-2.override.yaml)" -eq 5
+          ! grep -Eq 'ANALYSIS_JD_NORMALIZATION_MODE:[[:space:]]*(shadow|java)' \
+            deploy/production/compose.java-normalization-stage-2.override.yaml
+          ! grep -Eq 'ports:|network_mode:[[:space:]]*host|docker.sock|privileged:[[:space:]]*true' \
+            deploy/production/compose.java-normalization-stage-2.override.yaml
+
+  publish:
+    name: publish-integrated-backend-image
+    if: github.event_name == 'workflow_dispatch'
+    needs: [backend-tests, backend-postgres, production-assets]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+      image: ghcr.io/hkjoker-z/personal-job-agent-backend
+    steps:
+      - name: Check out reviewed revision
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and publish integrated Backend
+        id: build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: backend/Dockerfile
+          push: true
+          tags: ghcr.io/hkjoker-z/personal-job-agent-backend:sha-${{ github.sha }}
+          build-args: |
+            APP_VERSION=2.0.4
+          labels: |
+            org.opencontainers.image.source=https://github.com/HKJoker-Z/personal-job-agent
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=2.0.4
+            org.opencontainers.image.title=Personal Job Agent integrated Backend
+          cache-from: type=gha,scope=integrated-backend-production
+          cache-to: type=gha,mode=max,scope=integrated-backend-production
+
+      - name: Verify immutable publication metadata
+        env:
+          IMAGE: ghcr.io/hkjoker-z/personal-job-agent-backend
+          DIGEST: ${{ steps.build.outputs.digest }}
+          EXPECTED_REVISION: ${{ github.sha }}
+        run: |
+          [[ "${DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]]
+          docker pull "${IMAGE}@${DIGEST}"
+          test "$(docker image inspect --format '{{.Config.User}}' "${IMAGE}@${DIGEST}")" = "10001:10001"
+          test "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.source"}}' "${IMAGE}@${DIGEST}")" = \
+            "https://github.com/HKJoker-Z/personal-job-agent"
+          test "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "${IMAGE}@${DIGEST}")" = \
+            "${EXPECTED_REVISION}"
+          test "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.version"}}' "${IMAGE}@${DIGEST}")" = "2.0.4"
+          ! docker image inspect "${IMAGE}@${DIGEST}" | grep -Ei \
+            '(DEEPSEEK_API_KEY|JD_NORMALIZATION_API_KEY|POSTGRES_(APP|MIGRATION)_PASSWORD)=[^"[:space:]]+'
+          ! docker history --no-trunc "${IMAGE}@${DIGEST}" | grep -Ei \
+            '(DEEPSEEK_API_KEY|JD_NORMALIZATION_API_KEY|POSTGRES_(APP|MIGRATION)_PASSWORD)=[^[:space:]]+'
+          printf 'Published `%s@%s` from `%s`.\n' \
+            "${IMAGE}" "${DIGEST}" "${EXPECTED_REVISION}" >> "${GITHUB_STEP_SUMMARY}"
