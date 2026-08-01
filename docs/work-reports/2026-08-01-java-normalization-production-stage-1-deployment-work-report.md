@@ -346,22 +346,26 @@ for all eight pre-existing containers.
 
 ## 44. Deployment report delivery
 
-The documentation-only pull request is
-<https://github.com/HKJoker-Z/personal-job-agent/pull/37>. Initial report commit
-`c7b69c25cf152696de1024762d5924326d770a1b` changed only this report and the
-Work Report index.
+The initial documentation-only pull request was
+<https://github.com/HKJoker-Z/personal-job-agent/pull/37>. Report commits
+`c7b69c25cf152696de1024762d5924326d770a1b` and
+`6f8e4a7ccff9d6c58d4c0f8519d5902c70767eaf` changed only this report and the
+Work Report index. PR #37 merged normally as
+`d633245d3f862e579dc66a117560f35a55a1510b` at 2026-08-01 13:22:22
+Asia/Shanghai (`+08:00`).
 
-That head passed all 15 required check contexts:
+The final PR #37 head passed all required check contexts:
 
-- repository CI run `30685286074`: all ten jobs passed;
-- Java CI run `30685286047`: Maven verify, full-profile container smoke, and
+- repository CI run `30685502902`: all ten jobs passed;
+- Java CI run `30685502887`: Maven verify, full-profile container smoke, and
   normalization-only no-database smoke passed with no required Java skip;
-- isolated candidate run `30685286118`: the full synthetic matrix and cleanup
+- isolated candidate run `30685502891`: the full synthetic matrix and cleanup
   passed; and
-- production asset run `30685286063`: Java/Compose/config-tree/private startup,
+- production asset run `30685502904`: Java/Compose/config-tree/private startup,
   script, and secret checks passed. The image publisher was correctly skipped
   for a pull-request event, so no second image was published.
 
-The final report-only delivery metadata commit follows and is visible in the
-pull request history. The final-head authoritative rollup is required before a
-normal merge commit; no tag or GitHub Release is created.
+Post-merge repository CI run `30685706506` also passed. A subsequent
+documentation-only correction moved this report to the requested deployment
+date path and updated this delivery record; it made no production change,
+published no image, and created no tag or GitHub Release.
