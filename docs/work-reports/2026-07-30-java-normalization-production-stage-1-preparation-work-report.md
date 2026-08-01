@@ -155,18 +155,18 @@ synthetic immutable digest and placeholder file, Git whitespace checks,
 workflow/static secret review, and scope review. GitHub validation results are
 recorded in final delivery metadata before merge.
 
-Implementation head `f3d8ef6045464f6b0cde9855105691b0caad2b05` passed all 15
+Implementation head `ec5de457be93e7eb404c9d61c32f4db66f2a9c8b` passed all 15
 GitHub check contexts:
 
-- repository CI run `30684144999`: all ten jobs passed, including script,
+- repository CI run `30684402588`: all ten jobs passed, including script,
   Compose, repository safety, PostgreSQL, production-runtime regression, and
   the Version 2.0.4 mock-provider smoke;
-- Java CI run `30684144969`: Maven verify, full-profile container smoke, and
+- Java CI run `30684402585`: Maven verify, full-profile container smoke, and
   normalization-only no-database smoke passed, with no required Java test
   skipped;
-- isolated candidate run `30684144977`: the complete required synthetic matrix
+- isolated candidate run `30684402590`: the complete required synthetic matrix
   and cleanup passed; and
-- production asset run `30684144979`: Maven verify, normalization-only smoke,
+- production asset run `30684402600`: Maven verify, normalization-only smoke,
   Compose/static/script/secret validation, and the actual private config-tree
   startup/authentication probe passed. Publication was correctly skipped on a
   pull-request event.
@@ -178,6 +178,13 @@ mode before ownership. The production helper already runs that operation as
 root. The corrected end-to-end production asset gate passed. The final
 report-only delivery metadata commit is followed by the same authoritative PR
 check rollup.
+
+Pre-merge review of the dispatch-only publication step then found escaped
+quotes in two Docker label templates that the pull-request path does not
+execute. Commit `ec5de457be93e7eb404c9d61c32f4db66f2a9c8b` corrected those
+templates; the exact source/revision inspection form was validated locally
+against an existing labeled Java image, and the full 15-context rollup passed
+again.
 
 ## 22. Changed files
 
@@ -196,6 +203,8 @@ check rollup.
   workflow, helpers, runbook, architecture status, and initial Work Report.
 - `f3d8ef6045464f6b0cde9855105691b0caad2b05` — correct the isolated
   production config-tree smoke key ownership order.
+- `ec5de457be93e7eb404c9d61c32f4db66f2a9c8b` — correct dispatch-only
+  published-image OCI label inspection.
 - The final report-only delivery metadata commit follows these implementation
   commits and is visible in the pull request history.
 
