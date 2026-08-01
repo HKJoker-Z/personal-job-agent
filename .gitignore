@@ -17,3 +17,8 @@ backups/
 
 .venv/
 backend/.venv/
+
+# Disposable Java-normalization candidate runtime state.
+ops/candidate/java-normalization/.env.candidate
+ops/candidate/java-normalization/.candidate-secrets/
+ops/candidate/java-normalization/.candidate-results/

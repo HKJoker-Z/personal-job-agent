@@ -6,6 +6,7 @@ reviewable in Git history.
 
 | Date | Report |
 |---|---|
+| 2026-07-30 | [Java Normalization Candidate Phase IIIB](2026-07-30-java-normalization-candidate-phase-3b-work-report.md) |
 | 2026-07-30 | [Java-Authoritative Normalization Phase IIIA](2026-07-30-java-authoritative-normalization-phase-3a-work-report.md) |
 | 2026-07-30 | [FastAPI Java Normalization Client Phase II](2026-07-30-fastapi-java-normalization-client-phase-2-work-report.md) |
 | 2026-07-29 | [Java Normalization-Only Runtime Phase I](2026-07-29-java-normalization-only-runtime-phase-1-work-report.md) |
