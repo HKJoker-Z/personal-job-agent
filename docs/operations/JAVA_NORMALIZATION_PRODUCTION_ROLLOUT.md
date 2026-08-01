@@ -156,10 +156,121 @@ images, networks, volumes, PostgreSQL, Redis, routing, and Nginx. It never uses
 `docker compose down`, `down -v`, prune, a database command, a FastAPI restart,
 or a firewall/routing change.
 
-## Later phases are separate
+## Phase IVB: integrated Backend in local mode
 
-Phase IVB may attach FastAPI to the external private network and configure its
-matching secret while keeping mode `local`, but only through a separate
-reviewed task. Shadow observation and Java-authoritative Analyze are later
-gated stages. Do not attach the current FastAPI container manually and do not
-call `/api/analyze`, DeepSeek, or any external LLM during Phase IVA.
+Phase IVB deploys the merged Python execution-fingerprint and Java-client code
+without activating Java behavior. The production override is
+`deploy/production/compose.java-normalization-stage-2.override.yaml`. It pins
+the migration, Backend, Worker, Outbox, and backup services to one immutable
+Backend image; sets `ANALYSIS_JD_NORMALIZATION_MODE=local` explicitly for the
+long-running Python services; and attaches only the FastAPI Backend to
+`pja-java-normalization-internal`.
+
+The Backend receives the private origin and the existing key as a read-only
+file, but local configuration intentionally does not read the key, resolve the
+Java service, create an HTTP client, or make a Java request. Worker, Outbox,
+PostgreSQL, Redis, Frontend, and Edge do not join the Java network. Java keeps
+its Phase IVA image, profile, security controls, limits, project, and lack of a
+host-published port.
+
+Publish the Backend only through `.github/workflows/backend-production.yml`
+at the exact reviewed preparation merge commit. Its manual run repeats the
+complete Backend and PostgreSQL 16 integration suites before publishing only:
+
+`ghcr.io/hkjoker-z/personal-job-agent-backend:sha-<full-commit>`
+
+Production uses the resulting `IMAGE@sha256:<digest>`. The workflow creates no
+mutable production tag, Frontend/Java image, repository tag, or GitHub
+Release.
+
+### Phase IVB preflight and backup
+
+Before the first host mutation, run the Phase IVA helper's read-only preflight
+with the deployed Java digest. Require production `2.0.4`, Alembic
+`20260724_06`, at least 1.5 GiB available RAM, at least 6 GiB available root
+disk, healthy existing containers, zero unexpected restart/OOM state, and the
+unchanged private Java topology. Record exact existing container IDs, image
+references, start times, health, restart/OOM state, networks, and published
+ports without printing environment values.
+
+Use the current production Compose file list recorded on the running Backend;
+do not omit established safety/cutover overrides. Before adding the Phase IVB
+override, use that exact current stack and restricted production environment
+file to run the existing `backup` profile once. Verify the resulting exact
+backup with `scripts/v2_backup_restore.py verify`, and record only its safe
+path, sizes, SHA-256 values, PostgreSQL major, application version, Alembic
+revision, and inventory aggregates.
+
+Restore that exact backup once to a uniquely named PostgreSQL 16 project with
+an internal-only network, a new temporary volume, no host port, and empty
+private-file targets. Use the existing guarded restore command with explicit
+disposable-target identity and only the exact owner/database-name mappings
+reported by the verified manifest. Inspect no restored user row or content.
+On the same restored target:
+
+1. confirm Alembic `20260724_06`;
+2. run the reviewed Backend image's `alembic upgrade head`;
+3. confirm exactly one head at `20260730_07`;
+4. inspect only schema metadata for the six execution-binding columns and the
+   four named constraints;
+5. run `alembic upgrade head` again and prove it is a no-op; and
+6. remove only the uniquely named rehearsal containers, network, volume, and
+   empty restored file targets after evidence is captured.
+
+Stop with NO-GO before production migration for any backup, verification,
+restore, inventory, migration, constraint, or cleanup-target identity failure.
+
+### Phase IVB migration and cutover
+
+Run the existing one-shot `migrate` service with the immutable reviewed
+Backend image and the Phase IVB override. Do not use `stamp`, `--fake`, edit a
+revision, or downgrade. Confirm the only transition is:
+
+`20260724_06 -> 20260730_07`
+
+Inspect only `alembic_version`, `information_schema.columns`, and
+`pg_constraint` metadata. Run the same one-shot migration a second time and
+confirm the revision remains unchanged. Before replacing the Backend, verify
+the previous Backend remains healthy against the additive schema; this is the
+rollback-compatibility proof and avoids a schema downgrade.
+
+Keep the established production base Compose and all existing override files.
+Install the reviewed Phase IVB override as a root-owned read-only file under
+the existing `/opt/personal-job-agent-v2` deployment directory. Store only the
+new immutable `BACKEND_IMAGE` reference in a separate root-owned mode `0600`
+Stage IVB environment file; continue supplying the existing restricted
+production environment file first. Never copy or print its secret values.
+
+Pull the reviewed image, then recreate only Worker and Outbox, wait for their
+health, and recreate only Backend. Do not recreate PostgreSQL, Redis, Frontend,
+Edge/Nginx, or Java. The successful steady state has the same immutable image
+digest on Backend, Worker, and Outbox, while the one-shot migrate service and
+backup profile resolve to that digest for later use.
+
+### Phase IVB validation and rollback
+
+Validate from status, startup, schema, topology, configuration-name, and
+bounded log evidence only. Do not invoke `/api/analyze`. Require:
+
+- public readiness `ready`, version `2.0.4`, and Alembic `20260730_07`;
+- exact runtime mode `local` without printing the rest of the environment;
+- Backend on its existing application/data networks plus only the Java
+  network, and no other Personal Job Agent service newly attached;
+- Java healthy/private with restart zero and OOM false;
+- no new Java normalize request, Request ID, or request-log event across the
+  deployment validation window;
+- healthy Backend, Worker, Outbox, PostgreSQL, Redis, Frontend, and Edge;
+- unchanged public port bindings and unchanged IDs for services not recreated;
+- expected immutable Python digest on Backend, Worker, and Outbox; and
+- no key, environment secret, synthetic marker, database content, or user
+  content in bounded logs, image history, terminal output, or the report.
+
+Record the previous Python digest and configuration before cutover. Rollback
+recreates only Backend, Worker, and Outbox with that previous digest and
+explicit local mode. Keep Alembic `20260730_07`; the migration is additive and
+the previous Backend compatibility check proves no downgrade is required.
+Java, its network, and its key may remain independently for later review.
+
+Shadow observation and Java-authoritative Analyze remain separately gated.
+Phase IVB does not authorize Phase IVC, `/api/analyze`, DeepSeek, another
+external LLM, a version bump, tag, or GitHub Release.

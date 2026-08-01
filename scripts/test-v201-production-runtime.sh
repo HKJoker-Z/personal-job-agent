@@ -54,10 +54,16 @@ if [[ "${DOCKER[0]}" == "sudo" ]]; then
   # the invoking user's private temporary file.
   # shellcheck disable=SC2024
   sudo -n env "${COMPOSE_ENV[@]}" docker compose \
-    -f "${ROOT_DIR}/deploy/production/compose.yaml" config --format json >"$CONFIG_JSON"
+    -f "${ROOT_DIR}/deploy/production/compose.yaml" \
+    -f "${ROOT_DIR}/deploy/production/compose.java-normalization-stage-2.override.yaml" \
+    --profile tools \
+    config --format json >"$CONFIG_JSON"
 else
   env "${COMPOSE_ENV[@]}" docker compose \
-    -f "${ROOT_DIR}/deploy/production/compose.yaml" config --format json >"$CONFIG_JSON"
+    -f "${ROOT_DIR}/deploy/production/compose.yaml" \
+    -f "${ROOT_DIR}/deploy/production/compose.java-normalization-stage-2.override.yaml" \
+    --profile tools \
+    config --format json >"$CONFIG_JSON"
 fi
 
 python3 - "$CONFIG_JSON" <<'PY'
@@ -76,6 +82,34 @@ assert services["backend"]["networks"]["application"]["aliases"] == ["backend-v2
 assert services["frontend"]["networks"]["application"]["aliases"] == ["frontend-v2"]
 assert services["redis-init"]["cap_add"] == ["CHOWN", "FOWNER", "DAC_READ_SEARCH"]
 assert all("@sha256:" in services[name]["image"] for name in ("backend", "worker", "outbox-dispatcher", "frontend", "edge"))
+backend_image = services["backend"]["image"]
+assert all(
+    services[name]["image"] == backend_image
+    for name in ("migrate", "worker", "outbox-dispatcher", "backup")
+)
+assert services["backend"]["environment"]["ANALYSIS_JD_NORMALIZATION_MODE"] == "local"
+assert services["worker"]["environment"]["ANALYSIS_JD_NORMALIZATION_MODE"] == "local"
+assert services["outbox-dispatcher"]["environment"]["ANALYSIS_JD_NORMALIZATION_MODE"] == "local"
+assert services["backend"]["environment"]["JD_NORMALIZATION_BASE_URL"] == "http://java-normalization:8080"
+assert services["backend"]["environment"]["JD_NORMALIZATION_API_KEY_FILE"] == "/run/pja-secrets/java-normalization-api-key"
+assert services["backend"]["environment"]["JD_NORMALIZATION_SHADOW_SAMPLE_RATE"] == "0"
+assert set(services["backend"]["networks"]) == {"application", "data", "java-normalization"}
+for name in ("postgres", "redis", "worker", "outbox-dispatcher", "frontend", "edge"):
+    assert "java-normalization" not in services[name].get("networks", {})
+secret_mounts = [
+    mount for mount in services["backend"]["volumes"]
+    if mount["target"] == "/run/pja-secrets/java-normalization-api-key"
+]
+assert secret_mounts == [{
+    "type": "bind",
+    "source": "/etc/personal-job-agent/java-normalization/api-key",
+    "target": "/run/pja-secrets/java-normalization-api-key",
+    "read_only": True,
+    "bind": {},
+}]
+java_network = value["networks"]["java-normalization"]
+assert java_network["external"] is True
+assert java_network["name"] == "pja-java-normalization-internal"
 PY
 
 if grep -En 'proxy_pass http://(frontend|backend):' \

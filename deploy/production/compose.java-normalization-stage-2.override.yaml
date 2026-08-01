@@ -1,0 +1,37 @@
+name: personal-job-agent-v2
+
+x-stage-2-backend-image: &stage-2-backend-image ${BACKEND_IMAGE:?immutable backend image digest is required}
+
+services:
+  migrate:
+    image: *stage-2-backend-image
+
+  worker:
+    image: *stage-2-backend-image
+    environment:
+      ANALYSIS_JD_NORMALIZATION_MODE: local
+
+  outbox-dispatcher:
+    image: *stage-2-backend-image
+    environment:
+      ANALYSIS_JD_NORMALIZATION_MODE: local
+
+  backend:
+    image: *stage-2-backend-image
+    environment:
+      ANALYSIS_JD_NORMALIZATION_MODE: local
+      JD_NORMALIZATION_BASE_URL: http://java-normalization:8080
+      JD_NORMALIZATION_API_KEY_FILE: /run/pja-secrets/java-normalization-api-key
+      JD_NORMALIZATION_SHADOW_SAMPLE_RATE: "0"
+    volumes:
+      - /etc/personal-job-agent/java-normalization/api-key:/run/pja-secrets/java-normalization-api-key:ro
+    networks:
+      java-normalization: {}
+
+  backup:
+    image: *stage-2-backend-image
+
+networks:
+  java-normalization:
+    external: true
+    name: pja-java-normalization-internal
