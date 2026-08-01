@@ -164,8 +164,20 @@ Local validation passed:
   fallback, second-scan, binding, and completed-replay regression tests; and
 - repository whitespace and tracked-file safety checks.
 
-GitHub required-check results and the normal merge commit will be appended
-after the pull-request checks finish and before any production mutation.
+Validation head `48ab19d4d3b51882ec1f16ec26bb2e243ba37af4` completed
+with 18 successful check contexts, zero failures, and two intentional
+pull-request publication skips. GitHub reported the PR CLEAN and MERGEABLE.
+The five authoritative workflow runs all succeeded:
+
+- repository CI `30699795721`;
+- integrated Backend production `30699795716`;
+- Java service CI `30699795741`;
+- isolated Java candidate `30699795730`; and
+- Java production assets `30699795754`.
+
+This final report-rollup commit must pass the same required checks before the
+normal merge. The resulting merge commit is recorded in the separate Stage 4
+deployment report before production mutation.
 
 ## 12. Preparation boundary confirmations
 
