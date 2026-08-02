@@ -6,7 +6,7 @@ Accepted
 
 ## Context
 
-Personal Job Agent Version 2.0.4 has one FastAPI application that composes the
+Personal Job Agent Version 2.0.5 has one FastAPI application that composes the
 legacy analysis workspace with Version 2 authentication, Profile, Resume,
 Dashboard, and retained Agent Run modules. These modules share application
 configuration, authentication middleware, SQLAlchemy models, PostgreSQL

@@ -1,4 +1,4 @@
-# Version 2.0.4 Demo Script
+# Version 2.0.5 Demo Script
 
 This reproducible walkthrough uses only fictional material:
 
@@ -10,7 +10,7 @@ data, production addresses, or copied application content.
 
 ## Prerequisites
 
-- A running Personal Job Agent Version 2.0.4 environment.
+- A running Personal Job Agent Version 2.0.5 environment.
 - An administrator-created demo account. Keep its credentials outside this
   repository and enter them only on the sign-in page.
 - The reviewed Project Knowledge corpus initialized by the environment.
@@ -21,13 +21,13 @@ checks and scoring rules still apply, and a provider failure may produce a
 
 ## Three-minute English demo
 
-Use this exact three-minute speaking plan in a warmed Version 2.0.4
+Use this exact three-minute speaking plan in a warmed Version 2.0.5
 environment. Provider or network latency may extend the live wait without
 changing the supported workflow or the narration sequence.
 
 | Time | Action | English narration | Expected application state |
 | --- | --- | --- | --- |
-| 0:00–0:20 | Sign in and open **Resumes**. | “Personal Job Agent is a private Version 2.0.4 workspace for evidence-grounded Resume and Job Description comparison.” | The authenticated Resume Library is visible. |
+| 0:00–0:20 | Sign in and open **Resumes**. | “Personal Job Agent is a private Version 2.0.5 workspace for evidence-grounded Resume and Job Description comparison.” | The authenticated Resume Library is visible. |
 | 0:20–0:45 | Upload `fictional-resume.md` and point to its Primary marker. | “This entirely fictional Resume is parsed, saved as a versioned private asset, and selected as the Primary Resume.” | The fictional Resume is listed and marked **Primary Resume**. |
 | 0:45–1:05 | Open **Project Knowledge** and confirm its status. | “Project Knowledge is one reviewed project corpus. When enabled, retrieval supplies bounded evidence rather than invented experience.” | Project Knowledge reports that the reviewed corpus and index are ready. |
 | 1:05–1:35 | Open **Analyze**, confirm the Primary Resume, paste `fictional-job-description.md`, enable Project Knowledge with top-k `5`, and keep **Save to History** enabled. | “The normal workflow compares one selected Resume with one fictional Job Description and optionally retrieves relevant Project Knowledge chunks.” | Analyze shows the saved Resume Version, pasted JD, RAG controls, and History option. |

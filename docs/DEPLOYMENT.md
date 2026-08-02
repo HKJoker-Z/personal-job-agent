@@ -1,56 +1,72 @@
-# Version 2.0.4 deployment and rollback
+# Version 2.0.5 deployment and rollback
 
-Version 2.0.4 promotes the already merged portfolio architecture and Backend
-reliability work from production Version 2.0.3. It preserves HTTPS, Mihomo,
-`pja-br0`, routing preference 8999, and private Backend/PostgreSQL/Redis ports.
+Version 2.0.5 promotes the reviewed application version metadata after the
+Java-authoritative production rollout reached Phase IVD-B GO. It keeps Alembic
+`20260730_07`, normalization mode `java`, the existing private Java service,
+HTTPS, Mihomo, `pja-br0`, routing preference 8999, and the established public
+ports and networks.
 
-## Artifacts and backup
+## Artifacts
 
-Use `deploy/production/compose.yaml` with immutable Backend and Frontend
-`@sha256` references and `RELEASE_VERSION=2.0.4`. Keep `production.env`, TLS
-keys, Redis configuration, Resume files, and runtime Project Knowledge outside
-Git and out of terminal output.
+Publish Backend and Frontend from the exact release source commit with
+`.github/workflows/release-images.yml`. Use only the resulting
+`sha-<full-commit>` images and record immutable registry digests plus OCI source,
+revision, and Version `2.0.5` labels. Do not rebuild the unchanged Java image and
+do not create the release tag before production acceptance.
 
-Before deployment, record the Version 2.0.3 component digests; save its Compose
-and runtime configuration; and create a new PostgreSQL 16 backup with a verified
-checksum and manifest. Preserve the Version 2.0.3 rollback images and config,
-the prior Project Knowledge copy, and existing Version 2.0.2/1.9 assets.
+Record the previous Backend and Frontend digests. Production must use immutable
+`@sha256` references and `RELEASE_VERSION=2.0.5`; a mutable tag is never a
+deployment input.
 
-Restore that exact backup once into an empty isolated PostgreSQL 16 target.
-Upgrade `20260721_05` to `20260724_06` and verify unchanged existing row counts
-and checksums, valid foreign keys and sequences, and an empty
-`analyze_idempotency_records` table. Do not downgrade production.
+## Preflight
 
-## Candidate and Project Knowledge
+Immediately before mutation require:
 
-Start one internal candidate on `127.0.0.1:18091` using the immutable Version
-2.0.4 digests and Mock LLM. Require exact 2.0.4 health/readiness, healthy
-containers with zero restarts, authentication/CSRF, Resume/Primary Resume,
-normal and fallback Analyze, keyed replay/conflict/concurrency behavior,
-History, Architecture, optimized Monitoring, healthy PostgreSQL/Redis/Worker/
-Outbox, and private service ports.
+- public Version exactly `2.0.4` and readiness `ready`;
+- Alembic exactly `20260730_07` and mode exactly `java`;
+- the recorded Backend and Java digests;
+- healthy Backend and Java, restart count zero, and OOM false;
+- at least 1.5 GiB available RAM and 6 GiB available root disk;
+- Java attached only to the private normalization network with no host port;
+- unchanged public Edge port, networks, production containers, and Java key;
+  and
+- the exact existing Compose file order and restricted environment files.
 
-Before replacing runtime Project Knowledge, hash the Git baseline and runtime
-copy, back up the runtime file, and prove it is a known prior Git version. Use
-the authenticated replace/rebuild API, then verify PostgreSQL full-text searches
-for the release concepts. Stop if the runtime copy contains unknown edits.
+Stop with NO-GO before mutation on any mismatch. Do not inspect user content,
+invoke `/api/analyze`, print secrets/environment values, call an external LLM,
+or clean resources to force a capacity gate.
 
 ## Cutover
 
-After all gates pass, use the existing safe Compose cutover to move public 8080
-from Version 2.0.3 to the validated Version 2.0.4 digests. Preserve the external
-application network and all volumes. Require 100 consecutive public HTTPS
-health responses reporting exactly `2.0.4`, then repeat the bounded functional,
-dependency, restart, and private-port checks with synthetic data and precise
-cleanup.
+Update only the immutable application image references and release version.
+Deploy Backend, Worker, and Outbox consistently from the same Python digest,
+then deploy Frontend from its reviewed digest. Keep all established production
+Compose overrides so Backend remains in `java` mode.
 
-Never run `docker compose down -v`, prune Docker resources, expose the candidate
-publicly, or call real DeepSeek during release validation.
+Do not run a migration command or recreate PostgreSQL, Redis, Java, or
+Edge/Nginx. Preserve the Java project, digest, key, private network, policy
+`jd-normalization-v1`, and dictionary `skills-v1`.
+
+## Acceptance
+
+Require public Version `2.0.5`, readiness `ready`, Alembic `20260730_07`, mode
+`java`, and exact reviewed Backend/Worker/Outbox and Frontend digests. Require
+healthy application and Java services, restart zero, OOM false, unchanged public
+ports/networks, no Java host port, no unexpected Java failure/fallback/config
+warning during cutover, and no secret in bounded inspection, logs, or image
+metadata. Perform no business request.
+
+Only after this GO may the annotated `v2.0.5` tag and GitHub Release be created
+on the exact release source commit.
 
 ## Rollback
 
-On failure, restore the saved Version 2.0.3 images and runtime configuration.
-Keep the migrated additive schema unless a diagnosed code incompatibility
-requires the documented downgrade after Analyze traffic is stopped. Never
-delete the idempotency ledger without a verified backup. Preserve all database
-and Redis volumes, private files, backups, and both Project Knowledge copies.
+For an application-image failure, restore the recorded Version 2.0.4 Backend
+digest consistently to Backend, Worker, and Outbox and restore the prior
+Frontend digest. Keep Alembic `20260730_07`, Java, its key/network, all volumes,
+and all data.
+
+For an urgent Java-boundary safety issue, omit the Stage 4 and Stage 3 overrides
+while retaining the base/safety/routing/Stage 2 files, verify the render is
+`local` with sample rate zero, and recreate only Backend. Do not downgrade the
+database or delete Java.

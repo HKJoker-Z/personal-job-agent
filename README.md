@@ -13,20 +13,19 @@ applications, contact employers, or guarantee an Applicant Tracking System
 
 | Item | Current state |
 | --- | --- |
-| Stable release | **2.0.4** — Backend Reliability and Portfolio Architecture |
-| Production schema | Alembic `20260724_06` (`head`) |
+| Stable release | **2.0.5** — Production Java Normalization Integration |
+| Production schema | Alembic `20260730_07` (`head`) |
 | Production database | PostgreSQL 16 |
-| Runtime topology | HTTPS Edge, Frontend, Backend, PostgreSQL, Redis, Worker, and Outbox Dispatcher |
+| Runtime topology | HTTPS Edge, Frontend, Backend, private Java normalization, PostgreSQL, Redis, Worker, and Outbox Dispatcher |
 
-Version 2.0.4 adds the English Architecture page, ADRs, a reproducible
-three-minute demo, PostgreSQL monitoring aggregation optimization, end-to-end
-Request ID correlation, a stable Analyze error envelope, and durable
-PostgreSQL-backed Analyze idempotency. Completed keyed requests replay without
-another provider call or History row; concurrent duplicates have one database
-winner, and ambiguous provider outcomes become explicitly indeterminate. The
-release does not claim external exactly-once execution.
+Version 2.0.5 completes the bounded production integration of a private,
+stateless Java normalization-only service. FastAPI retains the public Analyze,
+security, idempotency, retrieval, provider, scoring, History, and monitoring
+boundaries. The release supports explicit `local`, deterministic-sampled
+`shadow`, and Java-authoritative `java` modes; production uses `java` with safe
+`fallback_local` containment and an authoritative second security scan.
 
-See the [Version 2.0.4 release notes](docs/V2_0_4_RELEASE_NOTES.md) for upgrade
+See the [Version 2.0.5 release notes](docs/V2_0_5_RELEASE_NOTES.md) for upgrade
 and rollback details.
 
 ## Core Features
@@ -102,13 +101,12 @@ call or History row. The API stays synchronous. It does not claim external
 exactly-once execution; a crash beyond the recorded provider boundary becomes
 `indeterminate` and is not automatically retried.
 
-### Java normalization Phase IIIA execution contract
+### Java normalization production execution contract
 
-The repository contains a FastAPI internal client for the stateless Java
-`normalization-only` endpoint and an authoritative execution contract, but no
-candidate or production deployment. `ANALYSIS_JD_NORMALIZATION_MODE=local`
-remains the default and preserves the existing Analyze path without creating a
-Java client or resolving a Java service.
+Production contains a private, stateless Java `normalization-only` service and
+a FastAPI internal client. `ANALYSIS_JD_NORMALIZATION_MODE=local` remains the
+safe application default; the reviewed production configuration explicitly
+uses `java`. Java has no host-published port and owns no application data.
 
 `shadow` is an explicitly configured, observation-only runtime mode. It
 samples deterministically from the existing Analyze input fingerprint, sends
@@ -137,8 +135,8 @@ only with an identical binding; otherwise it returns
 `IDEMPOTENCY_EXECUTION_CONFLICT` and requires a new key. Legacy completed rows
 with null execution metadata still replay exactly, without Java, provider, or
 History work. Operational rollback is configuration-only:
-`ANALYSIS_JD_NORMALIZATION_MODE=local`. No candidate or production deployment
-has occurred.
+`ANALYSIS_JD_NORMALIZATION_MODE=local`. This rollback requires no schema
+downgrade and does not remove or expose Java.
 
 | Result state | Meaning |
 | --- | --- |
@@ -210,7 +208,7 @@ empty.
 Personal Job Agent is a modular monolith with supporting PostgreSQL, Redis,
 worker, frontend, and operational processes. See the
 [architecture overview](docs/ARCHITECTURE.md), [ADR index](docs/adr/README.md),
-and [fictional Version 2.0.4 demo](docs/demo/README.md). The running
+and [fictional Version 2.0.5 demo](docs/demo/README.md). The running
 authenticated application also provides a static, read-only
 [Architecture page](/architecture).
 
@@ -219,6 +217,7 @@ flowchart LR
     Client[Browser client] -->|HTTPS :8080| Edge[Nginx Edge<br/>TLS termination]
     Edge --> Web[Nginx Frontend<br/>React/Vite static files]
     Web -->|/api reverse proxy| API[FastAPI Backend]
+    API -->|private deterministic normalization| Java[Java normalization-only]
     API --> DB[(PostgreSQL 16)]
     API -->|readiness and SSE limits| Redis[(Redis 7)]
     API -->|structured analysis| DeepSeek[DeepSeek API]
@@ -353,7 +352,7 @@ Mock LLM, persistence, and Backup/Restore together. It uses unique temporary
 resources and removes them after completion:
 
 ```bash
-PJA_SMOKE_MILESTONE=2.0.1 PJA_APP_VERSION=2.0.4 \
+PJA_SMOKE_MILESTONE=2.0.1 PJA_APP_VERSION=2.0.5 \
   scripts/docker-smoke-v2.sh
 ```
 
@@ -407,7 +406,7 @@ The test and CI layers cover:
 - Strict PostgreSQL 16 Backup/Restore, full inventory comparison, and negative
   PostgreSQL 17 client gates before writes.
 
-CI and Version 2.0.4 release validation do not call DeepSeek. Provider behavior
+CI and Version 2.0.5 release validation do not call DeepSeek. Provider behavior
 is covered with deterministic mocks and the isolated Mock LLM. Test counts are
 deliberately not fixed here because they change as regressions are added.
 
@@ -433,6 +432,7 @@ the repository evidence. Version 1.6 and later link to formal releases.
 | [v2.0.1](docs/V2_0_1_RELEASE_NOTES.md) | Unified navigation, Remember Me, Project Knowledge PostgreSQL RAG, deployment fixes, and removal of Jobs/Rankings/Applications/Approvals/Tasks from the public workflow. |
 | [v2.0.2](docs/V2_0_2_RELEASE_NOTES.md) | PostgreSQL 16 client/server Backup/Restore compatibility gates and complete inventory validation. |
 | [v2.0.3](docs/V2_0_3_RELEASE_NOTES.md) | Resilient DeepSeek parsing/repair/fallback and safe upload with automatic Primary Resume selection. |
+| [v2.0.5](docs/V2_0_5_RELEASE_NOTES.md) | Private stateless Java normalization, deterministic Shadow, Java-authoritative execution binding, second-scan security, safe local fallback, and production rollout evidence. |
 | [v2.0.4](docs/V2_0_4_RELEASE_NOTES.md) | Portfolio architecture material, Request ID/error contracts, monitoring SQL optimization, and PostgreSQL-backed Analyze idempotency. |
 
 ## Known Limitations
@@ -458,7 +458,7 @@ the repository evidence. Version 1.6 and later link to formal releases.
 
 - Repository: [HKJoker-Z/personal-job-agent](https://github.com/HKJoker-Z/personal-job-agent)
 - Default branch: `main`
-- Status: Version 2.0.4 is the current stable production release.
+- Status: Version 2.0.5 is the current stable production release.
 - License: no license file is currently included. Public source visibility does
   not itself grant reuse rights; normal copyright rules apply.
 
@@ -468,9 +468,10 @@ the repository evidence. Version 1.6 and later link to formal releases.
 - [Verified Project Knowledge](docs/PROJECT_KNOWLEDGE.md)
 - [Architecture overview](docs/ARCHITECTURE.md)
 - [Architecture Decision Records](docs/adr/README.md)
-- [Fictional Version 2.0.4 demo](docs/demo/README.md)
+- [Fictional Version 2.0.5 demo](docs/demo/README.md)
 - [Version 2.0.4 architecture](docs/V2_0_4_ARCHITECTURE.md)
 - [Version 2.0.4 API](docs/V2_0_4_API.md)
+- [Version 2.0.5 release notes](docs/V2_0_5_RELEASE_NOTES.md)
 - [Authentication and Remember Me](docs/V2_AUTHENTICATION.md)
 - [Project Knowledge RAG](docs/V2_RAG.md)
 - [Development](docs/V2_DEVELOPMENT.md)

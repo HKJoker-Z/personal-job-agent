@@ -1,7 +1,7 @@
 # Architecture Decision Records
 
 These records describe decisions already implemented in Personal Job Agent
-Version 2.0.4.
+Version 2.0.5.
 
 | ADR | Status | Decision |
 | --- | --- | --- |

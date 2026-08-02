@@ -1,5 +1,23 @@
 # Java normalization production rollout
 
+## Version 2.0.5 final release status
+
+Phases IVA through IVD-B are complete. The accepted production baseline before
+the Version 2.0.5 image cutover is application `2.0.4`, Alembic `20260730_07`,
+mode `java`, Backend digest
+`sha256:eb58b008cb368547a9e16b987a21da6185ec280e0cf64552a90ebebfcf7a9488`,
+and unchanged Java digest
+`sha256:57e3e68c96ca629e4216e4cb19d55c0d9a52ad9bfb2d49c289fdc94f61f0d47f`.
+The IVD-B evidence decision is GO.
+
+The final release changes only application version-bearing Backend/Worker/
+Outbox and Frontend images, all promoted by immutable digest from the reviewed
+release source commit. It keeps mode `java`, Alembic `20260730_07`, the Java
+image/project/key/private network, public ports, and database topology. No
+migration command is required. Emergency mode rollback omits the Stage 4 and
+Stage 3 overrides and recreates only Backend in `local`; image rollback uses
+the recorded previous application digests without a schema downgrade.
+
 ## Phase IVA purpose and boundary
 
 Phase IVA predeploys one private, stateless Java normalization-only service on
