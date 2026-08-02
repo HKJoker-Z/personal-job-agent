@@ -6,6 +6,7 @@ reviewable in Git history.
 
 | Date | Report |
 |---|---|
+| 2026-08-01 | [Version 2.0.5 Release Preparation](2026-08-01-v2.0.5-release-preparation-work-report.md) |
 | 2026-08-01 | [Java Normalization Production Stage 4 Java Evidence](2026-08-01-java-normalization-production-stage-4-java-evidence-work-report.md) |
 | 2026-08-01 | [Java Normalization Production Stage 4 Java Deployment](2026-08-01-java-normalization-production-stage-4-java-deployment-work-report.md) |
 | 2026-08-01 | [Java Normalization Production Stage 4 Java Preparation](2026-08-01-java-normalization-production-stage-4-java-preparation-work-report.md) |

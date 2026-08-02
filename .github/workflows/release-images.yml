@@ -1,6 +1,7 @@
 name: Release Container Images
 
 on:
+  workflow_dispatch:
   push:
     tags:
       - "v*.*.*"
@@ -26,7 +27,8 @@ jobs:
           node-version: "22"
       - run: cd frontend && npm ci && npm run build
 
-  publish:
+  publish-reviewed:
+    if: github.event_name == 'workflow_dispatch'
     needs: validate
     runs-on: ubuntu-latest
     permissions:
@@ -38,34 +40,91 @@ jobs:
           - component: backend
             image: ghcr.io/hkjoker-z/personal-job-agent-backend
             dockerfile: backend/Dockerfile
+            user: "10001:10001"
           - component: frontend
             image: ghcr.io/hkjoker-z/personal-job-agent-frontend
             dockerfile: frontend/Dockerfile
+            user: "101:101"
     steps:
       - uses: actions/checkout@v4
+      - id: release
+        run: |
+          VERSION="$(node -p "require('./frontend/package.json').version")"
+          test "${VERSION}" = "2.0.5"
+          echo "version=${VERSION}" >> "${GITHUB_OUTPUT}"
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - id: metadata
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ matrix.image }}
-          tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=semver,pattern={{major}}
-            type=raw,value=${{ github.ref_name }}
-            type=sha
-            type=raw,value=latest,enable=${{ !contains(github.ref_name, '-') }}
-      - uses: docker/build-push-action@v6
+      - id: build
+        uses: docker/build-push-action@v6
         with:
           context: .
           file: ${{ matrix.dockerfile }}
           push: true
-          tags: ${{ steps.metadata.outputs.tags }}
-          labels: ${{ steps.metadata.outputs.labels }}
-          cache-from: type=gha,scope=${{ matrix.component }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.component }}
+          tags: ${{ matrix.image }}:sha-${{ github.sha }}
+          build-args: |
+            APP_VERSION=${{ steps.release.outputs.version }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/HKJoker-Z/personal-job-agent
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ steps.release.outputs.version }}
+          cache-from: type=gha,scope=release-${{ matrix.component }}
+          cache-to: type=gha,mode=max,scope=release-${{ matrix.component }}
+      - name: Verify immutable publication metadata
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          EXPECTED_USER: ${{ matrix.user }}
+          EXPECTED_VERSION: ${{ steps.release.outputs.version }}
+          IMAGE: ${{ matrix.image }}
+        run: |
+          [[ "${DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]]
+          docker pull "${IMAGE}@${DIGEST}"
+          test "$(docker image inspect --format '{{.Config.User}}' "${IMAGE}@${DIGEST}")" = "${EXPECTED_USER}"
+          test "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.source"}}' "${IMAGE}@${DIGEST}")" = \
+            "https://github.com/HKJoker-Z/personal-job-agent"
+          test "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "${IMAGE}@${DIGEST}")" = \
+            "${GITHUB_SHA}"
+          test "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.version"}}' "${IMAGE}@${DIGEST}")" = \
+            "${EXPECTED_VERSION}"
+          ! docker image inspect "${IMAGE}@${DIGEST}" | grep -Ei \
+            '(DEEPSEEK_API_KEY|JD_NORMALIZATION_API_KEY|POSTGRES_(APP|MIGRATION)_PASSWORD)=[^"[:space:]]+'
+          ! docker history --no-trunc "${IMAGE}@${DIGEST}" | grep -Ei \
+            '(DEEPSEEK_API_KEY|JD_NORMALIZATION_API_KEY|POSTGRES_(APP|MIGRATION)_PASSWORD)=[^[:space:]]+'
+          printf 'Published `%s@%s` from `%s`.\n' \
+            "${IMAGE}" "${DIGEST}" "${GITHUB_SHA}" >> "${GITHUB_STEP_SUMMARY}"
+
+  verify-tagged-release:
+    if: github.event_name == 'push'
+    needs: validate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    strategy:
+      matrix:
+        image:
+          - ghcr.io/hkjoker-z/personal-job-agent-backend
+          - ghcr.io/hkjoker-z/personal-job-agent-frontend
+    steps:
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Verify the reviewed full-commit image
+        env:
+          IMAGE: ${{ matrix.image }}
+        run: |
+          EXPECTED_VERSION="${GITHUB_REF_NAME#v}"
+          docker pull "${IMAGE}:sha-${GITHUB_SHA}"
+          test "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.source"}}' "${IMAGE}:sha-${GITHUB_SHA}")" = \
+            "https://github.com/HKJoker-Z/personal-job-agent"
+          test "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "${IMAGE}:sha-${GITHUB_SHA}")" = \
+            "${GITHUB_SHA}"
+          test "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.version"}}' "${IMAGE}:sha-${GITHUB_SHA}")" = \
+            "${EXPECTED_VERSION}"
+          ! docker image inspect "${IMAGE}:sha-${GITHUB_SHA}" | grep -Ei \
+            '(DEEPSEEK_API_KEY|JD_NORMALIZATION_API_KEY|POSTGRES_(APP|MIGRATION)_PASSWORD)=[^"[:space:]]+'

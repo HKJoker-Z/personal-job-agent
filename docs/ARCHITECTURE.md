@@ -1,7 +1,8 @@
 # Personal Job Agent Architecture
 
-This document describes the architecture implemented by the Version 2.0.4
-release. Personal Job Agent is a **modular monolith**, not a collection of
+This document describes the architecture implemented by the Version 2.0.5
+release. Personal Job Agent is a **modular monolith** with one narrow private
+normalization service, not a collection of
 event-driven microservices. The FastAPI application contains the product
 modules and request orchestration in one deployable backend. PostgreSQL, Redis,
 asynchronous worker processes, the React frontend, Nginx, and operational
@@ -14,6 +15,7 @@ flowchart LR
     Person[Authenticated user] --> Edge[HTTPS Nginx edge]
     Edge --> Web[Frontend Nginx<br/>React/Vite static application]
     Web -->|same-origin /api| App[FastAPI modular monolith]
+    App -->|private deterministic normalization| Java[Spring Boot<br/>normalization-only]
     App --> DB[(PostgreSQL 16)]
     App -->|bounded advisory request| Model[DeepSeek API]
     App -->|readiness and SSE limits| Redis[(Redis 7)]
@@ -63,10 +65,12 @@ flowchart LR
 
 FastAPI validates that each request has exactly one Resume source and one JD
 source. It extracts or loads Resume text, safely acquires an allowed HTTPS job
-URL when requested, normalizes and section-truncates oversized inputs, scans
-untrusted content, constructs the bounded prompt, and controls the workflow
-audit trail. These steps do not delegate authorization or product decisions to
-the model.
+URL when requested, performs local normalization and a first scan, and in
+production makes one bounded private Java normalization attempt. A successful
+Java result must pass an authoritative second FastAPI scan; otherwise FastAPI
+uses `fallback_local`. FastAPI constructs the bounded prompt and controls the
+workflow audit trail. Java and the model receive no authorization or product
+decision ownership.
 
 ### DeepSeek-assisted advisory analysis
 
@@ -128,7 +132,8 @@ the implemented monitoring and deterministic offline Evaluation views.
 
 Production Nginx terminates HTTPS and serves the frontend, whose Nginx process
 proxies `/api` to FastAPI on private networks. PostgreSQL and Redis are not
-host-published. Readiness covers the expected Alembic revision, storage,
+host-published. Java runs statelessly on a dedicated internal network with no
+host-published port. Readiness covers the expected Alembic revision, storage,
 Project Knowledge, database search, Redis, worker heartbeat, disk space,
 authentication initialization, and provider configuration without calling
 DeepSeek.
@@ -169,7 +174,7 @@ publication attempts as dead letters. Dramatiq workers claim steps with
 database locks, attempts, and leases; write heartbeats; recover expired work;
 and let application-owned retry rules decide whether a step is rescheduled.
 
-In Version 2.0.4, this machinery remains a production health dependency and
+In Version 2.0.5, this machinery remains a production health dependency and
 supports retained Agent Run state, but the Application-based public workflow
 that created new runs is retired. Users may inspect retained Runs, read their
 Steps/Events and authenticated SSE stream, and cancel them. Public create,
@@ -188,5 +193,7 @@ retry, and resume requests are disabled.
 
 The [ADR index](adr/README.md) records the existing decisions behind the
 modular monolith, advisory analysis boundary, and Redis/worker foundation.
-Version-specific detail remains in
-[Version 2.0.4 Architecture](V2_0_4_ARCHITECTURE.md).
+Version-specific history remains in
+[Version 2.0.4 Architecture](V2_0_4_ARCHITECTURE.md), while the Java integration
+contract and rollout evidence are documented in
+[Java Production Normalization Integration](architecture/JAVA_PRODUCTION_NORMALIZATION_INTEGRATION.md).

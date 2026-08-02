@@ -2,9 +2,9 @@
 
 ## 1. Executive decision
 
-**GO with a normalization-only production integration, implemented and rolled
-out in bounded later phases. Do not deploy or integrate it as part of this
-audit.**
+**GO. The normalization-only production integration was implemented and rolled
+out through the bounded Phase IVA-IVD gates. Version 2.0.5 records the accepted
+Java-authoritative production state.**
 
 The smallest safe design is one private, stateless Spring Boot normalization
 service used only by synchronous `POST /api/analyze`. FastAPI remains the
@@ -21,8 +21,7 @@ Phase II added the FastAPI `local`/observation-only `shadow` client boundary.
 Phase IIIA now implements the reviewed Java-authoritative execution contract,
 safe local fallback, and legacy-compatible persistence. Phase IIIB now supplies
 an isolated disposable candidate and synthetic end-to-end evidence. Every
-production topology, rollout, migration, and deployment action remains future
-Phase IV work.
+production rollout completed through Phase IVD-B with a final GO decision.
 
 Do not integrate Java-owned create, read, update, or version-history APIs.
 There is no current Personal Job Agent product requirement for a second owner
@@ -31,16 +30,15 @@ behavior.
 
 ## 2. Current architecture
 
-Personal Job Agent 2.0.4 is a FastAPI modular monolith with a React client,
+Personal Job Agent 2.0.5 is a FastAPI modular monolith with a React client,
 PostgreSQL 16, Redis/Dramatiq foundations, and a synchronous Analyze workflow.
-The Java service is an independently containerized portfolio service with its
-own PostgreSQL/Flyway design and a stateless normalization-only profile.
-FastAPI can call that private contract in reviewed source code, but no
-production topology has been created and Java is not deployed or called by the
-production Personal Job Agent. The Phase IIIB candidate topology exists only
-under `ops/candidate/java-normalization/`; it uses a unique Compose project,
-synthetic PostgreSQL data, and the test-only mock provider, then removes its
-own resources.
+The Java service runs privately in its stateless normalization-only profile;
+its standalone PostgreSQL/Flyway design remains inactive. FastAPI calls the
+private contract in explicit `shadow` or `java` modes, while `local` is the
+immediate rollback mode. Production is Java-authoritative, Java has no host
+port, and FastAPI retains all public and stateful responsibilities. The Phase
+IIIB candidate topology remains available under
+`ops/candidate/java-normalization/` for synthetic isolated validation.
 
 The public Analyze security middleware runs outside the route:
 

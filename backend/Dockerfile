@@ -1,6 +1,6 @@
 FROM python:3.12-slim AS runtime
 
-ARG APP_VERSION=2.0.4
+ARG APP_VERSION=2.0.5
 ARG POSTGRES_CLIENT_MAJOR=16
 
 LABEL org.opencontainers.image.title="Personal Job Agent Backend" \

@@ -4,8 +4,8 @@
 
 Personal Job Agent is a private, administrator-led web application for
 evidence-grounded Resume and Job Description analysis. The current stable and
-production version is **2.0.4**. The current Alembic schema revision is
-`20260724_06` (`head`).
+production version is **2.0.5**. The current Alembic schema revision is
+`20260730_07` (`head`).
 
 The application uses a React/Vite frontend, a FastAPI/Python backend,
 SQLAlchemy 2, PostgreSQL 16, Redis, Dramatiq, a Transactional Outbox, Nginx,
@@ -18,26 +18,46 @@ AI output is advisory and requires human review. Personal Job Agent does not
 automatically submit applications, send email, contact employers, or guarantee
 Applicant Tracking System (ATS), interview, or hiring outcomes.
 
-## Current Version 2.0.4 Changes
+## Current Version 2.0.5 Changes
 
-Version 2.0.4 adds the English Architecture page, architecture documentation
-and ADRs, and a reproducible fictional three-minute demo. PostgreSQL now performs
-the Monitoring aggregation in SQL instead of loading all observations into
-Python; the published synthetic plans are engineering evidence, not production
-latency.
+Version 2.0.5 completes the bounded production integration of a private,
+stateless Spring Boot normalization-only service. FastAPI remains the only
+public application and owns security, idempotency, Project Knowledge retrieval,
+provider interaction, scoring, History, monitoring, and all persistence.
 
-Request IDs correlate the Edge/Frontend/Backend path, safe errors, workflow
-observations, and History audit details. Analyze errors use a stable
-`error_code`, `message`, `request_id`, and `retryable` contract.
+The integration has explicit `local`, `shadow`, and `java` modes. Shadow
+sampling is deterministic from the existing Analyze input fingerprint and does
+not change execution. In Java mode, one strictly validated Java result must pass
+an authoritative FastAPI second security scan before becoming effective. A
+bounded Java error or second-scan rejection selects the already scanned local
+candidate as `fallback_local` without exposing Java internals.
 
-Analyze accepts an optional user-scoped `Idempotency-Key`. PostgreSQL table
-`analyze_idempotency_records` is the durable source of truth at Alembic
-`20260724_06`. Completed duplicates replay without a new provider call or
-History row. A unique constraint and row locks select one concurrent winner,
-and History/result finalization is atomic. The synchronous workflow records
-provider-start boundaries, configures SDK `max_retries=0`, permits one explicit
-format repair, and treats an ambiguous provider-started crash as indeterminate
-rather than claiming external exactly-once execution.
+The stable request fingerprint and completed replay behavior remain compatible.
+New attempts additionally bind an `analyze-execution-v1` fingerprint before
+Project Knowledge retrieval, prompt construction, Provider work, scoring,
+History, and result finalization. Production runs in `java` mode with policy
+`jd-normalization-v1`, dictionary `skills-v1`, private Java networking, and no
+Java host port. Alembic remains `20260730_07`.
+
+Production rollout evidence covered four Java-authoritative requests: 4/4 Java
+success, Request ID match, accepted second scan, pre-Provider execution binding,
+and Java execution source, with no Java failure, local fallback, duplicate
+Provider/History side effect, or Java-caused public failure. The existing
+Provider path separately contained one call failure and two output rejections;
+these non-Java observations do not represent a Java failure or a performance
+claim.
+
+The release also updates `python-dotenv` to 1.2.2, `requests` to 2.33.0, and
+`urllib3` to 2.7.0 after the production dependency scan identified advisories
+with patched releases. No public API contract changes with these updates.
+
+## Prior Version 2.0.4 Changes
+
+Version 2.0.4 added the English Architecture page, ADRs, Request ID/error
+contracts, SQL-based Monitoring aggregation, and PostgreSQL-backed Analyze
+idempotency. Completed duplicates replay without another provider call or
+History row; concurrent duplicates have one database winner, and ambiguous
+provider outcomes become explicitly indeterminate.
 
 ## Prior Version 2.0.3 Changes
 
@@ -107,22 +127,24 @@ that historical data.
 Personal Job Agent is a modular monolith with supporting PostgreSQL, Redis,
 worker, frontend, and operational processes. Concise companion references are
 the [architecture overview](ARCHITECTURE.md), [ADR index](adr/README.md), and
-[fictional Version 2.0.4 demo](demo/README.md). The authenticated frontend also
+[fictional Version 2.0.5 demo](demo/README.md). The authenticated frontend also
 includes a static, read-only
 [Architecture page (`/architecture`)](../frontend/src/pages/ArchitecturePage.jsx).
 
 The production request path is:
 
-`Browser → HTTPS Nginx Edge → Nginx Frontend → FastAPI Backend`
+`Browser → HTTPS Nginx Edge → Nginx Frontend → FastAPI Backend → private Java normalization`
 
 Nginx Edge terminates TLS. Frontend Nginx serves the React/Vite static bundle
 and reverse-proxies `/api` to FastAPI. Backend 8000, PostgreSQL 5432, and Redis
 6379 are not host-published.
 
 FastAPI performs authentication, CSRF and ownership checks, input scanning,
-Resume parsing, safe job URL acquisition, Project Knowledge retrieval, prompt
-construction, DeepSeek invocation, tolerant parsing, evidence reconciliation,
-History persistence, and monitoring.
+Resume parsing, safe job URL acquisition, authoritative second scanning,
+Project Knowledge retrieval, prompt construction, DeepSeek invocation, tolerant
+parsing, evidence reconciliation, History persistence, and monitoring. Java
+performs only deterministic JD normalization and lexical skill extraction in a
+private, stateless service.
 
 PostgreSQL 16 is authoritative for application and durable workflow state.
 Redis is a private transient queue broker. Dramatiq workers consume safe,
@@ -375,10 +397,11 @@ one-time CSRF refresh retry by code, and shows the request ID as a support
 reference for terminal Analyze errors.
 
 Request IDs remain observational metadata and are never used for
-authentication, authorization, ownership, or idempotency. Analyze idempotency
-is not implemented. The provider SDK retry setting also remains unchanged at
-`max_retries=2`; a later phase must define provider retry policy before making
-an at-most-one automatic provider-attempt claim.
+authentication, authorization, ownership, or idempotency. Analyze accepts an
+optional user-scoped `Idempotency-Key`; PostgreSQL owns the request fingerprint,
+claim/lease state, execution binding, and completed response. Both
+OpenAI-compatible clients use `max_retries=0`; the workflow permits at most one
+primary Provider call and one explicit format-only repair call.
 
 ## AI Reliability
 
@@ -387,7 +410,7 @@ trailing commas, unexpected aliases, nulls, optional-field omissions, scalar
 values where a list was requested, numeric strings, truncated output, or no
 usable response. Network timeouts and provider 5xx errors are also possible.
 
-Version 2.0.4 treats these as expected reliability conditions. It uses bounded
+Version 2.0.5 treats these as expected reliability conditions. It uses bounded
 local parsing first, tolerates non-critical schema differences, requests one
 format-only repair only when necessary, and selects local fallback when the
 model path is unusable. Non-critical omissions no longer force the entire
@@ -448,7 +471,7 @@ timing cases without DeepSeek. Pass rate is regression evidence, not model
 accuracy or hiring probability.
 
 History separately supports cover-letter DOCX and analysis-report PDF export.
-Version 2.0.4 does not provide OpenTelemetry export, Prometheus, Grafana,
+Version 2.0.5 does not provide OpenTelemetry export, Prometheus, Grafana,
 Langfuse, or distributed tracing.
 
 Worker and Outbox health are part of readiness. Worker heartbeat, stale-worker
@@ -459,8 +482,9 @@ payload bodies.
 ## Deployment and Production Engineering
 
 Production is single-host Docker Compose: Nginx HTTPS Edge, Nginx/React
-Frontend, FastAPI Backend, PostgreSQL 16.9, Redis 7.4.1, Dramatiq Worker, and
-Outbox Dispatcher. Only Edge 8080 is public.
+Frontend, FastAPI Backend, private stateless Java normalization, PostgreSQL
+16.9, Redis 7.4.1, Dramatiq Worker, and Outbox Dispatcher. Only Edge 8080 is
+public; Java has no host-published port.
 
 Backend/Frontend use immutable GHCR digests. GitHub Actions validates and
 publishes; production promotion remains manual.
@@ -491,22 +515,22 @@ inventory with explicit owner mapping where authorized.
 
 Version 2.0.1 was not deployed after restore rehearsal exposed a PostgreSQL
 17.10 archive incompatible with PostgreSQL 16. Version 2.0.2 added these strict
-gates; Version 2.0.4 retains them.
+gates; Version 2.0.5 retains them.
 
 ### Candidate, health, and rollback
 
-Upgrade stages immutable images on internal `127.0.0.1:18091`, then checks exact
-2.0.4 health/readiness, head schema, healthy/private dependencies, stable
-restarts, Resume/Primary, analysis idempotency, RAG, History, Architecture,
-optimized Monitoring, and restore assets.
+Release validation checks exact Version 2.0.5 health/readiness, Alembic
+`20260730_07`, mode `java`, reviewed immutable image digests, healthy/private
+dependencies, stable restarts/OOM state, and unchanged public ports without
+generating Analyze traffic.
 
 Readiness checks database/schema, files, Project Knowledge/search, Redis, Worker,
 disk, auth initialization, and LLM configuration without calling DeepSeek.
 
-Rollback restores Version 2.0.3 digests/config without deleting volumes, Resume
-files, backups, or knowledge. The additive idempotency ledger remains during
-ordinary image rollback; database/schema rollback is only for a separately
-diagnosed incompatibility after Analyze traffic is stopped.
+Image rollback restores the recorded Version 2.0.4 application digests without
+deleting volumes, Resume files, backups, or knowledge. Emergency mode rollback
+recreates only Backend in `local`. Alembic remains `20260730_07`; no schema
+downgrade or Java deletion is needed.
 
 ## Data Migration
 
@@ -534,6 +558,9 @@ Alembic history is linear through:
 - `20260717_04`: reliable Agent Runs, Worker, Outbox, approvals, budgets, usage,
   heartbeats, and dead letters.
 - `20260721_05`: one active Primary Resume per user.
+- `20260724_06`: durable Analyze idempotency records and constraints.
+- `20260730_07`: Java-authoritative execution source, version, fingerprint,
+  binding, and timing metadata on Analyze idempotency records.
 
 Retired feature tables remain intentionally present after migration.
 
@@ -637,9 +664,10 @@ later, closing the database-commit versus Redis-send gap.
 
 ### How can an upgrade be rolled back?
 
-Record Version 2.0.3 digests/config, rehearse PostgreSQL 16 recovery, validate
-migration, and test an internal 2.0.4 candidate. Rollback restores old
-images/config and preserves volumes because the schema is additive.
+Record Version 2.0.4 application digests/config, deploy reviewed Version 2.0.5
+digests, and preserve Alembic `20260730_07`. Rollback restores the old
+application images/config; an urgent Java-boundary rollback recreates only
+Backend in `local` mode.
 
 ### How does Primary Resume improve the workflow?
 
@@ -657,7 +685,7 @@ Resume without a stale reference.
 - PostgreSQL full-text RAG is lexical, not embedding/vector retrieval, and can
   miss semantic equivalents outside bounded synonyms.
 - Scanned PDFs without selectable text require external OCR; OCR is not in
-  Version 2.0.4.
+  Version 2.0.5.
 - Safe job URL extraction cannot parse every site or client-rendered page.
 - The system does not automatically apply, send email, contact employers, or
   guarantee ATS parsing, ranking, interviews, or hiring.

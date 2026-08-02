@@ -1,6 +1,6 @@
 # CI/CD and Container Image Publishing
 
-Version 2.0.4 CI includes full Python test discovery, a real PostgreSQL 16 service test, frontend Vitest coverage for resilient analysis and Analyze idempotency, the retained compatibility/product smoke, and a separate strict PostgreSQL 16 Backup/Restore rehearsal. Release publishing remains tag-driven and never deploys production automatically.
+Version 2.0.5 CI includes full Python test discovery, a real PostgreSQL 16 service test, frontend Vitest/build coverage, Java Maven verification, full-profile and normalization-only Java smoke tests, the isolated Java/FastAPI candidate, the retained compatibility/product smoke, and strict PostgreSQL 16 Backup/Restore rehearsal. CI never generates production Analyze traffic or deploys production automatically.
 
 ## Continuous Integration
 
@@ -21,11 +21,18 @@ CI does not use a real DeepSeek key, call the external LLM, deploy a server, or 
 
 ## GHCR Release Images
 
-`.github/workflows/release-images.yml` runs only when a semantic `v*.*.*` Git tag is pushed. It validates tests/builds, logs into GHCR using `GITHUB_TOKEN`, and publishes:
+`.github/workflows/release-images.yml` has two bounded paths. A reviewed manual
+run on the exact release source commit validates tests/builds and publishes:
 
 - `ghcr.io/hkjoker-z/personal-job-agent-backend`
 - `ghcr.io/hkjoker-z/personal-job-agent-frontend`
 
-For `v2.0.4`, images receive `2.0.4`, `2.0`, `2`, `v2.0.4`, `latest`, and `sha-<commit>` tags. The workflow needs `contents: read` and `packages: write`. It does not pass deployment secrets as build arguments or perform automatic SSH/server deployment.
+Each image receives only `sha-<full-commit>` during predeployment publication
+and records OCI source, full revision, and Version `2.0.5`. When annotated tag
+`v2.0.5` is later pushed after production GO, the tag-triggered path validates
+the already published exact-commit images without rebuilding or replacing them.
+The workflow needs `contents: read` and narrowly scoped package permissions. It
+does not pass deployment secrets as build arguments or perform automatic
+server deployment.
 
 Server promotion remains an explicit operator action because firewall, DNS, HTTPS, runtime backups, maintenance windows, and rollback decisions are deployment-specific. Version 1.9 provides repeatable artifacts and checks, not automatic cloud deployment, high availability, or zero-downtime guarantees.
