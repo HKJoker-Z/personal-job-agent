@@ -7,6 +7,7 @@ import sqlite3
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from analysis_contract import safe_model_metadata
 from database import get_connection, is_postgresql_backend
 from security_utils import normalized_security_scan
 
@@ -171,6 +172,33 @@ def has_output_leakage(security_scan: dict[str, Any]) -> bool:
     return False
 
 
+def safe_provider_observation(value: Any) -> dict[str, Any]:
+    """Keep provider telemetry bounded and free of prompts, bodies, or identifiers."""
+    metadata = safe_model_metadata(value if isinstance(value, dict) else {})
+    allowed = (
+        "model_id",
+        "thinking_enabled",
+        "response_mode",
+        "primary_attempt_count",
+        "repair_attempt_count",
+        "finish_reason",
+        "empty_content",
+        "transient_retry_reason",
+        "parse_outcome",
+        "salvage_action_categories",
+        "rejected_field_count",
+        "accepted_field_count",
+        "result_state",
+        "fallback_reason",
+        "input_tokens",
+        "output_tokens",
+        "total_tokens",
+        "response_length",
+        "latency_ms",
+    )
+    return {key: metadata[key] for key in allowed if key in metadata}
+
+
 def build_analysis_metric(
     *,
     workflow_id: str,
@@ -191,6 +219,7 @@ def build_analysis_metric(
     error_code: str | None = None,
     error_stage: str | None = None,
     source_type: str | None = None,
+    provider_observation: dict[str, Any] | None = None,
     created_at: str | None = None,
     completed_at: str | None = None,
 ) -> dict[str, Any]:
@@ -230,6 +259,9 @@ def build_analysis_metric(
         "error_code": error_code,
         "error_stage": error_stage,
         "source_type": source_type,
+        # This nested field is structured-log/diagnostic data. The existing
+        # database schema intentionally remains unchanged in this release.
+        "provider_observation": safe_provider_observation(provider_observation),
     }
 
 
@@ -344,6 +376,11 @@ def persist_analysis_metrics(metric: dict[str, Any], steps: list[dict[str, Any]]
 
 def persist_analysis_metrics_best_effort(metric: dict[str, Any], steps: list[dict[str, Any]]) -> None:
     try:
+        logger.info(
+            "Analysis provider observation workflow_id=%s observation=%s",
+            metric.get("workflow_id"),
+            safe_provider_observation(metric.get("provider_observation")),
+        )
         persist_analysis_metrics(metric, steps)
     except Exception as exc:
         logger.warning("Monitoring metrics persistence failed error_type=%s", type(exc).__name__)

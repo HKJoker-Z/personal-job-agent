@@ -36,6 +36,10 @@ ALIASES = {
     "REST": ("rest api", "restful"),
 }
 
+UNAVAILABLE_JOB_SUMMARY = "Job Summary unavailable: no validated job-description content was available."
+UNAVAILABLE_MATCH_REASONS = "Match Reasons unavailable: no validated skill or evidence breakdown was available."
+MAX_DETERMINISTIC_NARRATIVE_CHARS = 320
+
 
 def normalize_analysis_text(value: str) -> str:
     text = str(value or "").replace("\x00", "").replace("\r\n", "\n").replace("\r", "\n")
@@ -124,6 +128,49 @@ def keyword_skill_states(resume_text: str, job_description: str) -> tuple[list[s
     return matched[:12], missing[:12]
 
 
+def deterministic_job_summary(job_description: str) -> str:
+    """Create a bounded summary from already validated local JD text only."""
+    text = normalize_analysis_text(job_description)
+    if not text:
+        return UNAVAILABLE_JOB_SUMMARY
+    for raw_line in text.splitlines():
+        line = raw_line.strip().lstrip("-•* ").strip()
+        if not line or _heading(line):
+            continue
+        sentence = re.split(r"(?<=[.!?。！？])\s+", line, maxsplit=1)[0].strip()
+        if sentence:
+            return sentence[:MAX_DETERMINISTIC_NARRATIVE_CHARS]
+    return UNAVAILABLE_JOB_SUMMARY
+
+
+def deterministic_match_reasons(
+    scoring_breakdown: dict[str, dict[str, Any]],
+    matched_skills: list[str],
+    missing_skills: list[str],
+) -> str:
+    """Describe only backend-owned score/skill facts; never infer candidate claims."""
+    strong = [
+        key.replace("_", " ")
+        for key, value in scoring_breakdown.items()
+        if isinstance(value, dict) and int(value.get("score") or 0) >= 70
+    ]
+    weak = [
+        key.replace("_", " ")
+        for key, value in scoring_breakdown.items()
+        if isinstance(value, dict) and int(value.get("score") or 0) < 60
+    ]
+    parts: list[str] = []
+    if matched_skills:
+        parts.append(f"Matched skills: {', '.join(matched_skills[:5])}.")
+    elif strong:
+        parts.append(f"Stronger score dimensions: {', '.join(strong[:3])}.")
+    if missing_skills:
+        parts.append(f"Missing or unverified requirements: {', '.join(missing_skills[:5])}.")
+    elif weak:
+        parts.append(f"Lower score dimensions: {', '.join(weak[:3])}.")
+    return " ".join(parts)[:MAX_DETERMINISTIC_NARRATIVE_CHARS] or UNAVAILABLE_MATCH_REASONS
+
+
 def deterministic_scoring(
     result: dict[str, Any], resume_text: str, job_description: str, retrieved_chunks: list[dict[str, Any]]
 ) -> dict[str, dict[str, Any]]:
@@ -201,6 +248,10 @@ def local_fallback_result(
         "evidence_mapping": [
             {"skill": skill, "source": "resume", "evidence": []} for skill in matched
         ],
+        "job_summary": deterministic_job_summary(job_description),
     }
     result["scoring_breakdown"] = deterministic_scoring(result, resume_text, job_description, chunks)
+    result["match_reason"] = deterministic_match_reasons(
+        result["scoring_breakdown"], matched, missing
+    )
     return result

@@ -120,7 +120,7 @@ def _default_invoker(system_prompt: str, user_prompt: str) -> str:
         raise ValueError("Requirement extraction model is not configured.")
     client = OpenAI(api_key=settings.deepseek_api_key, base_url="https://api.deepseek.com")
     result = client.chat.completions.create(
-        model="deepseek-chat",
+        model=settings.deepseek_model,
         messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
         response_format={"type": "json_object"},
         temperature=0,
@@ -130,6 +130,7 @@ def _default_invoker(system_prompt: str, user_prompt: str) -> str:
 
 
 def llm_requirements(description: str, invoker: RequirementInvoker | None = None) -> tuple[list[dict[str, object]], dict[str, object]]:
+    settings = load_config()
     sanitized, scan = scan_and_sanitize_untrusted_text(description, "job_description")
     if scan.get("blocked"):
         raise ValueError("Job Description contains credential-like content and cannot be sent to a model.")
@@ -177,7 +178,7 @@ def llm_requirements(description: str, invoker: RequirementInvoker | None = None
             "verification_status": "needs_review",
         })
     metadata = {
-        "model": "deepseek-chat",
+        "model": settings.deepseek_model,
         "prompt_version": "v2.0.2-requirements-1",
         "latency_ms": round((time.monotonic() - started) * 1000),
         "item_count": len(validated),

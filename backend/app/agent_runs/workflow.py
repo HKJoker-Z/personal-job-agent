@@ -23,6 +23,7 @@ from app.db.models import (
 from app.db.session import session_factory
 from app.materials.generator import MaterialGenerationError, MaterialGenerationTimeout
 from app.materials.service import MaterialConflict, MaterialNotFound, MaterialService
+from config import load_config
 
 
 class PermanentWorkflowError(RuntimeError):
@@ -251,7 +252,7 @@ def _failure_usage(exc: Exception) -> dict[str, Any] | None:
         return None
     return {
         "provider": "deepseek",
-        "model": "deepseek-chat",
+        "model": load_config(validate_production=False).deepseek_model,
         "input_tokens": int(value.get("input_tokens") or 0),
         "output_tokens": int(value.get("output_tokens") or 0),
         "total_tokens": int(value.get("total_tokens") or 0),

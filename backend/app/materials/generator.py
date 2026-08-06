@@ -43,7 +43,7 @@ def _default_invoker(system_prompt: str, user_prompt: str) -> tuple[str, dict[st
         raise MaterialGenerationError("Application Material model is not configured.")
     client = OpenAI(api_key=settings.deepseek_api_key, base_url="https://api.deepseek.com")
     response = client.chat.completions.create(
-        model="deepseek-chat",
+        model=settings.deepseek_model,
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
@@ -79,6 +79,7 @@ def generate_grounded_material(
     In tests the deterministic seed is returned unless a Mock invoker is passed.
     """
     started = time.monotonic()
+    settings = load_config()
     if invoker is None and os.getenv("APP_ENV", "development").strip().lower() == "test":
         return seed_json, seed_text, {
             "provider": "deterministic-test", "model": None,
@@ -150,7 +151,7 @@ def generate_grounded_material(
             "Application Material output schema is invalid.", token_metadata,
         ) from exc
     return payload.content_json, payload.content_text, {
-        "provider": "deepseek", "model": "deepseek-chat",
+        "provider": "deepseek", "model": settings.deepseek_model,
         "prompt_version": PROMPT_VERSION,
         "latency_ms": round((time.monotonic() - started) * 1000),
         "token_metadata": token_metadata,
