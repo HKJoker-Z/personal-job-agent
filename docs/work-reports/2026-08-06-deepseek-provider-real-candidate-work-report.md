@@ -15,7 +15,8 @@ Candidate branch: test/deepseek-provider-real-candidate
 
 PR #51 was merged with a normal merge commit. Local main and origin/main
 were synchronized at the merge commit before the candidate branch was
-created. The candidate PR URL will be recorded after it is opened.
+created. The candidate PR is open at
+https://github.com/HKJoker-Z/personal-job-agent/pull/52 and remains unmerged.
 
 The production baseline remained v2.0.5, Alembic 20260730_07, Java JD
 normalization mode java, Java policy jd-normalization-v1, and skill
@@ -254,13 +255,14 @@ changed.
 Candidate runner commit: 3e0d320 (test: add isolated DeepSeek real-provider
 candidate runner).
 
-Documentation/report commit: e09bbab (docs: record DeepSeek real-provider
-candidate evidence).
+Documentation/report commits: e09bbab (docs: record DeepSeek real-provider
+candidate evidence), d4bf677 (docs: link the candidate pull request), and
+254370a (docs: record final candidate check status).
 
 PR title: Test: Validate DeepSeek acceptance against real provider
 Candidate PR: https://github.com/HKJoker-Z/personal-job-agent/pull/52
 Candidate PR final head at the completed check set:
-d4bf677297c8aaaefbef8f90ec95914682ad4f7a.
+254370ae9675afd2f9f92e0ee536bcadcc143922.
 
 The final GitHub check set completed CLEAN: Backend, PostgreSQL, Frontend,
 Docker, Compose, Java, candidate, smoke, OpenAPI-adjacent, repository-safety,
