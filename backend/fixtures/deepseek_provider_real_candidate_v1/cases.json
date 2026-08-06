@@ -1,0 +1,112 @@
+[
+  {
+    "case_id": "backend_strong_short",
+    "role_family": "technical_backend",
+    "match_profile": "strong",
+    "resume": "Synthetic candidate: backend engineer. Built Python FastAPI services with PostgreSQL, Redis, Docker, and REST APIs. Delivered a small event-tracking project and maintained automated tests.",
+    "job_description": "Backend Engineer. Required: Python, FastAPI, PostgreSQL, REST, and Docker. Preferred: Redis and automated testing. Build reliable APIs and document operational decisions.",
+    "project_knowledge": [
+      {
+        "chunk_id": 101,
+        "document_title": "Synthetic backend evidence",
+        "content": "# API delivery\nA synthetic internal project uses FastAPI, PostgreSQL, Redis, Docker, and REST endpoints."
+      }
+    ]
+  },
+  {
+    "case_id": "backend_partial_medium",
+    "role_family": "technical_backend",
+    "match_profile": "partial",
+    "resume": "Synthetic candidate: software engineer with four years of Python and SQL work. Maintained Flask services, wrote integration tests, and supported Linux deployments. A personal project uses a small REST API. No Kubernetes experience is listed.",
+    "job_description": "Backend Platform Engineer. Required: Python, SQL, REST, Linux, and Kubernetes. Preferred: FastAPI, Kafka, and Terraform. Improve service reliability, testing, and deployment automation.",
+    "project_knowledge": [
+      {
+        "chunk_id": 102,
+        "document_title": "Synthetic platform evidence",
+        "content": "# Platform notes\nA synthetic platform prototype documents REST service checks, Linux operations, and test automation."
+      }
+    ]
+  },
+  {
+    "case_id": "support_low_short",
+    "role_family": "support_engineering",
+    "match_profile": "low",
+    "resume": "Synthetic candidate: customer support specialist with ticket triage, knowledge-base writing, and basic spreadsheet reporting. Coordinated issue handoffs and documented recurring questions.",
+    "job_description": "Support Engineer. Required: Python troubleshooting, SQL diagnostics, Linux, REST APIs, and incident response. Preferred: FastAPI and Docker. Partner with developers to reproduce technical issues.",
+    "project_knowledge": []
+  },
+  {
+    "case_id": "frontend_medium_short",
+    "role_family": "technical_frontend",
+    "match_profile": "partial",
+    "resume": "Synthetic candidate: frontend developer. Built TypeScript and React dashboards, used HTML and CSS, and integrated REST endpoints. A portfolio project includes accessible tables and basic test coverage.",
+    "job_description": "Frontend Engineer. Required: React, TypeScript, HTML, CSS, and REST integration. Preferred: Python, FastAPI, and Docker. Build accessible interfaces for operational teams.",
+    "project_knowledge": []
+  },
+  {
+    "case_id": "platform_strong_medium",
+    "role_family": "technical_platform",
+    "match_profile": "strong",
+    "resume": "Synthetic candidate: platform engineer with experience operating Docker and Kubernetes services on AWS. Created GitHub Actions pipelines, Linux runbooks, Terraform modules, and a monitoring demo. Worked with developers on incident reviews.",
+    "job_description": "Platform Engineer. Required: Docker, Kubernetes, AWS, Linux, GitHub Actions, and Terraform. Preferred: Python and PostgreSQL. Own delivery automation, service health, and practical incident response.",
+    "project_knowledge": [
+      {
+        "chunk_id": 105,
+        "document_title": "Synthetic operations evidence",
+        "content": "# Operations practice\nA synthetic service uses Kubernetes, AWS, Docker, GitHub Actions, and Terraform with bounded runbooks."
+      }
+    ]
+  },
+  {
+    "case_id": "data_low_medium",
+    "role_family": "technical_data",
+    "match_profile": "low",
+    "resume": "Synthetic candidate: data analyst. Prepared SQL reports, cleaned CSV exports, and used spreadsheet formulas for weekly metrics. Completed a small Python notebook for data quality checks.",
+    "job_description": "Data Platform Engineer. Required: Python, PostgreSQL, Docker, Kubernetes, and CI/CD. Preferred: Kafka, AWS, and Terraform. Build production data services with reliable deployment practices.",
+    "project_knowledge": []
+  },
+  {
+    "case_id": "support_medium_medium",
+    "role_family": "support_engineering",
+    "match_profile": "partial",
+    "resume": "Synthetic candidate: technical support engineer. Diagnosed REST integrations, queried SQL databases, wrote Python scripts for ticket enrichment, and maintained Linux troubleshooting guides. Projects include a small Dockerized service.",
+    "job_description": "Technical Support Engineer. Required: REST, SQL, Python, Linux, and incident response. Preferred: Docker, PostgreSQL, and FastAPI. Help customers isolate reproducible integration failures and improve support documentation.",
+    "project_knowledge": [
+      {
+        "chunk_id": 107,
+        "document_title": "Synthetic support evidence",
+        "content": "# Support workflow\nA synthetic support workflow records REST reproduction steps, SQL checks, Python helpers, and Docker test environments."
+      }
+    ]
+  },
+  {
+    "case_id": "backend_preferred_medium",
+    "role_family": "technical_backend",
+    "match_profile": "strong",
+    "resume": "Synthetic candidate: API engineer. Developed Python services, FastAPI endpoints, PostgreSQL schemas, Redis caching, and Docker Compose test environments. Built a project that retrieves approved snippets for an internal search screen.",
+    "job_description": "API Engineer. Required: Python, FastAPI, PostgreSQL, and REST. Preferred: Redis, Docker, and RAG concepts. Improve API quality and use validated evidence in internal tooling.",
+    "project_knowledge": [
+      {
+        "chunk_id": 108,
+        "document_title": "Synthetic retrieval evidence",
+        "content": "# Retrieval prototype\nA synthetic API project uses Redis, Docker, PostgreSQL, and retrieval-augmented generation terminology in a bounded search flow."
+      }
+    ]
+  },
+  {
+    "case_id": "qa_low_short",
+    "role_family": "technical_quality",
+    "match_profile": "low",
+    "resume": "Synthetic candidate: QA coordinator. Wrote manual test cases, managed regression checklists, and reported defects with clear reproduction notes. Used a browser-based issue tracker and basic SQL queries.",
+    "job_description": "Automation Engineer. Required: Python, REST, PostgreSQL, Docker, and CI/CD. Preferred: FastAPI, Kubernetes, and Redis. Create reliable automated tests for backend services.",
+    "project_knowledge": []
+  },
+  {
+    "case_id": "integration_support_medium",
+    "role_family": "support_engineering",
+    "match_profile": "partial",
+    "resume": "Synthetic candidate: integration specialist. Supported REST and webhook customers, wrote Python and SQL diagnostics, and maintained a Docker-based reproduction project. Produced concise runbooks and escalation notes.",
+    "job_description": "Integration Support Engineer. Required: REST, Python, SQL, and incident response. Preferred: Docker, FastAPI, PostgreSQL, and JavaScript. Resolve API integration issues and keep customer-facing technical guidance accurate.",
+    "project_knowledge": []
+  }
+]
