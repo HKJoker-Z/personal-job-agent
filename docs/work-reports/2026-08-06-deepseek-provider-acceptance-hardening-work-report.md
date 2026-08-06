@@ -433,12 +433,13 @@ The four implementation commits are:
 2. aeb7473 — test: add acceptance corpus and narrative coverage
 3. 0ae5fd8 — test: add backend and frontend acceptance regressions
 4. db180eb — docs: record DeepSeek acceptance hardening
+5. 31b4bef — docs: finalize report commit references
 
-The final delivery-evidence update commit is added after PR creation.
+The final PR-check evidence update commit is added after the PR checks complete.
 
 ## 35. Pull request URL
 
-The final pull request URL is recorded after the PR is created and pushed.
+https://github.com/HKJoker-Z/personal-job-agent/pull/51
 
 ## 36. Risks and negative effects
 
@@ -495,6 +496,6 @@ created, and no application version was bumped.
 
 ## Delivery evidence
 
-Local evidence is complete as documented in section 32. The PR URL, final
-delivery-evidence commit SHA, and required GitHub check results are added after
-the branch is pushed and the checks complete.
+Local evidence is complete as documented in section 32. GitHub check results
+and the final delivery-evidence commit SHA are added after the PR checks
+complete.
