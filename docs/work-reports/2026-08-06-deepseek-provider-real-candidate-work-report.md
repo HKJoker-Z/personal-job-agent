@@ -254,10 +254,11 @@ changed.
 Candidate runner commit: 3e0d320 (test: add isolated DeepSeek real-provider
 candidate runner).
 
-The documentation/report commit and candidate PR URL will be recorded in the
-final update to this report after the documentation/test-only PR is opened.
+Documentation/report commit: e09bbab (docs: record DeepSeek real-provider
+candidate evidence).
 
 PR title: Test: Validate DeepSeek acceptance against real provider
+Candidate PR: https://github.com/HKJoker-Z/personal-job-agent/pull/52
 
 ## 15. Decision and rollout prerequisites
 
