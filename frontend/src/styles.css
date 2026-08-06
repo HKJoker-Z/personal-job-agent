@@ -654,6 +654,39 @@ button:disabled {
   background: #fff4e8;
 }
 
+.analysis-state-badge {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  margin-bottom: 12px;
+  border: 1px solid #b7c4d4;
+  border-radius: 999px;
+  padding: 4px 10px;
+  color: #344054;
+  background: #f7f9fc;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.analysis-state-badge.complete {
+  border-color: #a9d8c9;
+  color: #135f54;
+  background: #edf9f6;
+}
+
+.analysis-state-badge.repaired,
+.analysis-state-badge.partial {
+  border-color: #ead39a;
+  color: #694b00;
+  background: #fff9e8;
+}
+
+.analysis-state-badge.fallback {
+  border-color: #edb37a;
+  color: #743400;
+  background: #fff4e8;
+}
+
 .resume-library,
 .resume-upload-area {
   display: grid;

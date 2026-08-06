@@ -77,6 +77,30 @@ class ConfigTest(unittest.TestCase):
         with self.assertRaisesRegex(ConfigError, "AGENT_MODEL_MAX_OUTPUT_TOKENS"):
             self.load({"AGENT_MODEL_MAX_OUTPUT_TOKENS": "5001"})
 
+    def test_deepseek_model_and_thinking_configuration_are_explicit(self):
+        config = self.load()
+        self.assertEqual(config.deepseek_model, "deepseek-v4-pro")
+        self.assertFalse(config.deepseek_thinking_enabled)
+        enabled = self.load({
+            "DEEPSEEK_MODEL": "operator-selected-model",
+            "DEEPSEEK_THINKING_ENABLED": "true",
+        })
+        self.assertEqual(enabled.deepseek_model, "operator-selected-model")
+        self.assertTrue(enabled.deepseek_thinking_enabled)
+        with self.assertRaisesRegex(ConfigError, "DEEPSEEK_MODEL"):
+            self.load({"DEEPSEEK_MODEL": "   "})
+
+    def test_retry_and_repair_output_budgets_are_bounded(self):
+        config = self.load()
+        self.assertEqual(config.model_max_output_tokens, 1600)
+        self.assertEqual(config.model_length_retry_output_tokens, 2400)
+        self.assertEqual(config.model_repair_output_tokens, 1000)
+        with self.assertRaisesRegex(ConfigError, "AGENT_MODEL_LENGTH_RETRY_OUTPUT_TOKENS"):
+            self.load({
+                "AGENT_MODEL_MAX_OUTPUT_TOKENS": "2000",
+                "AGENT_MODEL_LENGTH_RETRY_OUTPUT_TOKENS": "1000",
+            })
+
     def test_csv_origin_parser(self):
         config = self.load({"ALLOWED_ORIGINS": "https://a.example, https://b.example"})
         self.assertEqual(config.allowed_origins, ("https://a.example", "https://b.example"))

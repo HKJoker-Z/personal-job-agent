@@ -363,7 +363,7 @@ class V203AnalysisApiTest(unittest.TestCase):
         with patch(
             "legacy_application.call_deepseek_raw",
             return_value=provider_response,
-        ):
+        ), patch("legacy_application.call_deepseek_repair") as repair:
             response = self.client.post("/api/analyze", **request)
         self.assert_analyze_error(
             response,
@@ -371,6 +371,7 @@ class V203AnalysisApiTest(unittest.TestCase):
             code="OUTPUT_SECURITY_BLOCKED",
         )
         self.assertNotIn(INTERNAL_SECURITY_MARKER, response.text)
+        repair.assert_not_called()
 
     def test_persistence_failure_uses_safe_stable_envelope(self):
         request = self.valid_analyze_request(save_to_history="true")

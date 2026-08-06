@@ -102,6 +102,7 @@ def _candidate_provider(
     rag_chunks: list[dict[str, Any]] | None = None,
     analysis_prompt: str | None = None,
     usage_out: dict[str, Any] | None = None,
+    deadline_monotonic: float | None = None,
 ):
     global _provider_call_count
     settings = legacy_application.load_config(validate_production=False)
@@ -129,6 +130,7 @@ def _candidate_provider(
         rag_chunks,
         analysis_prompt,
         usage_out,
+        deadline_monotonic,
     )
 
 
