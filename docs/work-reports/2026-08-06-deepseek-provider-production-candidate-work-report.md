@@ -236,7 +236,7 @@ Production source commit: bb9f4141300b76f2e00b3729e8fc5e490cae681f.
 
 This report branch is `ops/deepseek-provider-production-candidate`.
 
-Report PR URL will be finalized after the documentation-only PR is opened.
+Report PR: https://github.com/HKJoker-Z/personal-job-agent/pull/54
 The required PR title is:
 
 `Ops: Record DeepSeek provider production candidate`
