@@ -1,0 +1,150 @@
+[
+  {
+    "id": "strictly_valid_canonical_json",
+    "content": "{\"matched_skills\":[\"Python\"],\"missing_skills\":[\"Kubernetes\"],\"unknown_skills\":[],\"concise_dimension_assessments\":{\"skills_match\":{\"score\":80,\"assessment\":\"Evidence.\",\"evidence_ids\":[\"resume\"]}},\"evidence_references\":[{\"skill\":\"Python\",\"evidence_ids\":[\"resume\"]}],\"unsupported_claim_candidates\":[],\"concise_recommendations\":[\"Keep evidence.\"]}",
+    "expected_previous": "complete",
+    "expected_new": "complete"
+  },
+  {
+    "id": "markdown_fenced_json",
+    "content": "```json\n{\"matched_skills\":[\"Python\"],\"missing_skills\":[],\"unknown_skills\":[],\"concise_dimension_assessments\":{\"skills_match\":{\"score\":80,\"assessment\":\"Evidence.\",\"evidence_ids\":[\"resume\"]}},\"evidence_references\":[{\"skill\":\"Python\",\"evidence_ids\":[\"resume\"]}],\"unsupported_claim_candidates\":[],\"concise_recommendations\":[\"Keep evidence.\"]}\n```",
+    "expected_previous": "repaired",
+    "expected_new": "repaired"
+  },
+  {
+    "id": "outer_wrapper",
+    "content": "{\"analysis\":{\"matched_skills\":[\"Python\"],\"missing_skills\":[],\"unknown_skills\":[],\"concise_dimension_assessments\":{\"skills_match\":{\"score\":80,\"assessment\":\"Evidence.\",\"evidence_ids\":[\"resume\"]}},\"evidence_references\":[{\"skill\":\"Python\",\"evidence_ids\":[\"resume\"]}],\"unsupported_claim_candidates\":[],\"concise_recommendations\":[\"Keep evidence.\"]}}",
+    "expected_previous": "repaired",
+    "expected_new": "repaired"
+  },
+  {
+    "id": "supported_aliases",
+    "content": "{\"matchedSkills\":\"Python\",\"gaps\":[],\"unknowns\":[],\"recommendations\":[\"Keep evidence.\"]}",
+    "expected_previous": "partial",
+    "expected_new": "partial"
+  },
+  {
+    "id": "missing_optional_fields",
+    "content": "{\"matched_skills\":[\"Python\"],\"missing_skills\":[],\"unknown_skills\":[],\"concise_recommendations\":[\"Keep evidence.\"]}",
+    "expected_previous": "partial",
+    "expected_new": "partial"
+  },
+  {
+    "id": "null_fields",
+    "content": "{\"matched_skills\":[\"Python\"],\"missing_skills\":null,\"unknown_skills\":[],\"concise_recommendations\":null}",
+    "expected_previous": "partial",
+    "expected_new": "partial"
+  },
+  {
+    "id": "scalar_list_mismatch",
+    "content": "{\"matched_skills\":\"Python\",\"missing_skills\":[],\"unknown_skills\":[],\"concise_recommendations\":[\"Keep evidence.\"]}",
+    "expected_previous": "complete",
+    "expected_new": "partial"
+  },
+  {
+    "id": "numeric_strings_and_score_clamp",
+    "content": "{\"matched_skills\":[\"Python\"],\"missing_skills\":[],\"unknown_skills\":[],\"concise_dimension_assessments\":{\"skills_match\":{\"score\":\"120\",\"assessment\":\"Evidence.\",\"evidence_ids\":[]}},\"concise_recommendations\":[\"Keep evidence.\"]}",
+    "expected_previous": "complete",
+    "expected_new": "partial"
+  },
+  {
+    "id": "invalid_list_element_preserves_valid",
+    "content": "{\"matched_skills\":[\"Python\",{\"not\":\"a string\"}],\"missing_skills\":[],\"unknown_skills\":[],\"concise_recommendations\":[\"Keep evidence.\"]}",
+    "expected_previous": "complete",
+    "expected_new": "partial"
+  },
+  {
+    "id": "invalid_evidence_id",
+    "content": "{\"matched_skills\":[\"Python\"],\"missing_skills\":[],\"unknown_skills\":[],\"concise_dimension_assessments\":{\"skills_match\":{\"score\":80,\"assessment\":\"Evidence.\",\"evidence_ids\":[\"pk:999\"]}},\"evidence_references\":[{\"skill\":\"Python\",\"evidence_ids\":[\"pk:999\"]}],\"concise_recommendations\":[\"Keep evidence.\"]}",
+    "expected_previous": "partial",
+    "expected_new": "partial",
+    "requires_evidence_reconciliation": true
+  },
+  {
+    "id": "unsupported_claim_candidate",
+    "content": "{\"matched_skills\":[\"Python\"],\"missing_skills\":[],\"unknown_skills\":[],\"concise_recommendations\":[\"Keep evidence.\"],\"unsupported_claim_candidates\":[\"Invented scale claim.\"]}",
+    "expected_previous": "partial",
+    "expected_new": "partial",
+    "requires_evidence_reconciliation": true
+  },
+  {
+    "id": "unknown_top_level_field",
+    "content": "{\"matched_skills\":[\"Python\"],\"missing_skills\":[],\"unknown_skills\":[],\"concise_recommendations\":[\"Keep evidence.\"],\"unknown_field\":\"ignored\"}",
+    "expected_previous": "complete",
+    "expected_new": "partial"
+  },
+  {
+    "id": "empty_content",
+    "content": "",
+    "expected_previous": "fallback",
+    "expected_new": "fallback"
+  },
+  {
+    "id": "finish_reason_length",
+    "content": "{\"matched_skills\":[\"Python\"],\"missing_skills\":[",
+    "finish_reason": "length",
+    "expected_provider_error": "MODEL_OUTPUT_TRUNCATED",
+    "expected_previous": "fallback",
+    "expected_new": "fallback"
+  },
+  {
+    "id": "truncated_json",
+    "content": "{\"matched_skills\":[\"Python\"],\"missing_skills\":[",
+    "repair_content": "{\"matched_skills\":[\"Python\"],\"missing_skills\":[],\"unknown_skills\":[],\"concise_dimension_assessments\":{\"skills_match\":{\"score\":80,\"assessment\":\"Evidence.\",\"evidence_ids\":[\"resume\"]}},\"evidence_references\":[{\"skill\":\"Python\",\"evidence_ids\":[\"resume\"]}],\"unsupported_claim_candidates\":[],\"concise_recommendations\":[\"Keep evidence.\"]}",
+    "expected_previous": "repaired",
+    "expected_new": "repaired"
+  },
+  {
+    "id": "malformed_json",
+    "content": "{matched_skills: [Python]}",
+    "repair_content": "{\"matched_skills\":[\"Python\"],\"missing_skills\":[],\"unknown_skills\":[],\"concise_dimension_assessments\":{\"skills_match\":{\"score\":80,\"assessment\":\"Evidence.\",\"evidence_ids\":[\"resume\"]}},\"evidence_references\":[{\"skill\":\"Python\",\"evidence_ids\":[\"resume\"]}],\"unsupported_claim_candidates\":[],\"concise_recommendations\":[\"Keep evidence.\"]}",
+    "expected_previous": "repaired",
+    "expected_new": "repaired"
+  },
+  {
+    "id": "root_array",
+    "content": "[\"Python\"]",
+    "repair_content": "{\"matched_skills\":[\"Python\"],\"missing_skills\":[],\"unknown_skills\":[],\"concise_dimension_assessments\":{\"skills_match\":{\"score\":80,\"assessment\":\"Evidence.\",\"evidence_ids\":[\"resume\"]}},\"evidence_references\":[{\"skill\":\"Python\",\"evidence_ids\":[\"resume\"]}],\"unsupported_claim_candidates\":[],\"concise_recommendations\":[\"Keep evidence.\"]}",
+    "expected_previous": "repaired",
+    "expected_new": "repaired"
+  },
+  {
+    "id": "plain_prose",
+    "content": "The analysis is below: {\"matched_skills\":[\"Python\"],\"missing_skills\":[],\"unknown_skills\":[],\"concise_dimension_assessments\":{\"skills_match\":{\"score\":80,\"assessment\":\"Evidence.\",\"evidence_ids\":[\"resume\"]}},\"evidence_references\":[{\"skill\":\"Python\",\"evidence_ids\":[\"resume\"]}],\"unsupported_claim_candidates\":[],\"concise_recommendations\":[\"Keep evidence.\"]}",
+    "expected_previous": "repaired",
+    "expected_new": "repaired"
+  },
+  {
+    "id": "repair_success",
+    "content": "The analysis is below: {\"matched_skills\":[\"Python\"],\"missing_skills\":[],\"unknown_skills\":[],\"concise_dimension_assessments\":{\"skills_match\":{\"score\":80,\"assessment\":\"Evidence.\",\"evidence_ids\":[\"resume\"]}},\"evidence_references\":[{\"skill\":\"Python\",\"evidence_ids\":[\"resume\"]}],\"unsupported_claim_candidates\":[],\"concise_recommendations\":[\"Keep evidence.\"]}",
+    "repair_content": "{\"matched_skills\":[\"Python\"],\"missing_skills\":[],\"unknown_skills\":[],\"concise_dimension_assessments\":{\"skills_match\":{\"score\":80,\"assessment\":\"Evidence.\",\"evidence_ids\":[\"resume\"]}},\"evidence_references\":[{\"skill\":\"Python\",\"evidence_ids\":[\"resume\"]}],\"unsupported_claim_candidates\":[],\"concise_recommendations\":[\"Keep evidence.\"]}",
+    "expected_previous": "repaired",
+    "expected_new": "repaired"
+  },
+  {
+    "id": "severely_unsafe_output",
+    "content": "{\"matched_skills\":[\"Python\"],\"api_key\":\"sk-test-only-1234567890abcdef123456\"}",
+    "expected_security": "reject_before_repair",
+    "expected_previous": "security_rejection",
+    "expected_new": "security_rejection"
+  },
+  {
+    "id": "repair_failure",
+    "content": "not JSON and no usable object",
+    "repair_content": "",
+    "expected_previous": "fallback",
+    "expected_new": "fallback"
+  },
+  {
+    "id": "transient_failure_then_success",
+    "sequence": ["http_503", "success"],
+    "expected_previous": "fallback",
+    "expected_new": "complete"
+  },
+  {
+    "id": "transient_failure_then_failure",
+    "sequence": ["http_503", "http_503"],
+    "expected_previous": "fallback",
+    "expected_new": "fallback"
+  }
+]
