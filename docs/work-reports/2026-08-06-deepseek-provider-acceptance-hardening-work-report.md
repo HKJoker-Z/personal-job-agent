@@ -402,8 +402,22 @@ Local final checks passed as follows:
   explicitly excluded by path.
 - git diff --check passed.
 
-The GitHub PR check results are recorded after the PR is pushed. No deployment
-is part of this work.
+The GitHub PR check results for PR #51 also passed. The CI run
+[31079007972](https://github.com/HKJoker-Z/personal-job-agent/actions/runs/31079007972),
+JD Normalization Service CI run
+[31079007942](https://github.com/HKJoker-Z/personal-job-agent/actions/runs/31079007942),
+Integrated Backend Production run
+[31079007928](https://github.com/HKJoker-Z/personal-job-agent/actions/runs/31079007928),
+Java Normalization Production run
+[31079008054](https://github.com/HKJoker-Z/personal-job-agent/actions/runs/31079008054),
+and Java Normalization Candidate run
+[31079008250](https://github.com/HKJoker-Z/personal-job-agent/actions/runs/31079008250)
+all completed successfully. The required jobs included backend unit and
+PostgreSQL tests, complete backend tests, frontend build, Compose/runtime
+validation, Docker smoke/build, repository safety, Java verify and smokes, and
+candidate integration. The integrated-backend and application image
+publication jobs were skipped by their workflow conditions. No deployment or
+image publication occurred.
 
 ## 33. Changed files
 
@@ -434,8 +448,9 @@ The four implementation commits are:
 3. 0ae5fd8 — test: add backend and frontend acceptance regressions
 4. db180eb — docs: record DeepSeek acceptance hardening
 5. 31b4bef — docs: finalize report commit references
+6. a2ea1e0 — docs: add pull request delivery metadata
 
-The final PR-check evidence update commit is added after the PR checks complete.
+The final PR-check evidence update commit follows this list.
 
 ## 35. Pull request URL
 
@@ -496,6 +511,6 @@ created, and no application version was bumped.
 
 ## Delivery evidence
 
-Local evidence is complete as documented in section 32. GitHub check results
-and the final delivery-evidence commit SHA are added after the PR checks
-complete.
+Local and GitHub evidence is complete as documented in section 32. The final
+delivery-evidence commit contains this update; its SHA is available as the
+latest commit in the pull request history.
