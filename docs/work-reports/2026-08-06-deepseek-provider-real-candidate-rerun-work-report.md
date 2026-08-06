@@ -196,9 +196,11 @@ schema setup. That container was removed; the corrected final run passed all
 PR #52 merge commit:
 47aa34434c10bc9ffd62aa9233fda6ee01bba82a.
 
-Rerun documentation commit and candidate PR URL will be finalized in this
-report before the rerun PR is merged. The rerun PR title is:
-Test: Revalidate DeepSeek provider acceptance.
+Rerun documentation commit: 789027d (docs: record DeepSeek provider
+candidate rerun).
+
+Rerun PR: https://github.com/HKJoker-Z/personal-job-agent/pull/53
+The rerun PR title is: Test: Revalidate DeepSeek provider acceptance.
 
 ## 11. Decision and exact next prerequisite
 
