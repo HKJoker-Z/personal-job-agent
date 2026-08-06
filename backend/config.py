@@ -22,8 +22,11 @@ ALLOWED_APP_ENVS = ("development", "production", "test")
 ALLOWED_LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
 ALLOWED_JD_NORMALIZATION_MODES = ("local", "shadow", "java")
 VERSION_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$")
+MODEL_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$")
 JAVA_API_KEY_MINIMUM_BYTES = 32
 JAVA_API_KEY_MAXIMUM_BYTES = 512
+DEFAULT_DEEPSEEK_MODEL = "deepseek-v4-pro"
+MAX_PROVIDER_OUTPUT_TOKENS = 5_000
 
 
 class ConfigError(RuntimeError):
@@ -84,6 +87,21 @@ def parse_csv(value: str | None) -> tuple[str, ...]:
     return tuple(items)
 
 
+def parse_model_id(name: str, value: str | None, default: str) -> str:
+    """Validate an operator-selected provider model without rewriting it."""
+    if value is None:
+        selected = default
+    else:
+        selected = value.strip()
+        if not selected:
+            raise ConfigError(f"{name} must be a nonblank bounded model identifier.")
+    if not MODEL_ID_PATTERN.fullmatch(selected):
+        raise ConfigError(
+            f"{name} must be 1-120 safe ASCII characters without whitespace."
+        )
+    return selected
+
+
 def resolve_path(value: str | None, default: Path) -> Path:
     if not value or not value.strip():
         return default.resolve(strict=False)
@@ -116,11 +134,17 @@ class AppConfig:
     project_knowledge_path: Path
     project_knowledge_seed_path: Path
     deepseek_api_key: str
+    deepseek_model: str
+    deepseek_thinking_enabled: bool
     allowed_origins: tuple[str, ...]
     trusted_hosts: tuple[str, ...]
     max_upload_size_mb: int
     request_timeout_seconds: int
     model_max_output_tokens: int
+    model_length_retry_output_tokens: int
+    model_repair_output_tokens: int
+    provider_retry_backoff_seconds: float
+    provider_overall_deadline_seconds: int
     analysis_resume_max_chars: int
     analysis_job_description_max_chars: int
     enable_api_docs: bool
@@ -308,6 +332,16 @@ def load_config(*, validate_production: bool = True) -> AppConfig:
         project_knowledge_path=resolve_path(os.getenv("PROJECT_KNOWLEDGE_PATH"), knowledge_default),
         project_knowledge_seed_path=resolve_path(os.getenv("PROJECT_KNOWLEDGE_SEED_PATH"), seed_default),
         deepseek_api_key=deepseek_api_key,
+        deepseek_model=parse_model_id(
+            "DEEPSEEK_MODEL",
+            os.getenv("DEEPSEEK_MODEL"),
+            DEFAULT_DEEPSEEK_MODEL,
+        ),
+        deepseek_thinking_enabled=parse_bool(
+            "DEEPSEEK_THINKING_ENABLED",
+            os.getenv("DEEPSEEK_THINKING_ENABLED"),
+            False,
+        ),
         allowed_origins=allowed_origins,
         trusted_hosts=trusted_hosts,
         max_upload_size_mb=parse_int("MAX_UPLOAD_SIZE_MB", os.getenv("MAX_UPLOAD_SIZE_MB"), 10, 1, 32),
@@ -317,9 +351,37 @@ def load_config(*, validate_production: bool = True) -> AppConfig:
         model_max_output_tokens=parse_int(
             "AGENT_MODEL_MAX_OUTPUT_TOKENS",
             os.getenv("AGENT_MODEL_MAX_OUTPUT_TOKENS"),
-            1200,
+            1600,
             100,
-            5000,
+            MAX_PROVIDER_OUTPUT_TOKENS,
+        ),
+        model_length_retry_output_tokens=parse_int(
+            "AGENT_MODEL_LENGTH_RETRY_OUTPUT_TOKENS",
+            os.getenv("AGENT_MODEL_LENGTH_RETRY_OUTPUT_TOKENS"),
+            2400,
+            100,
+            MAX_PROVIDER_OUTPUT_TOKENS,
+        ),
+        model_repair_output_tokens=parse_int(
+            "AGENT_MODEL_REPAIR_OUTPUT_TOKENS",
+            os.getenv("AGENT_MODEL_REPAIR_OUTPUT_TOKENS"),
+            1000,
+            100,
+            MAX_PROVIDER_OUTPUT_TOKENS,
+        ),
+        provider_retry_backoff_seconds=parse_float(
+            "PROVIDER_RETRY_BACKOFF_SECONDS",
+            os.getenv("PROVIDER_RETRY_BACKOFF_SECONDS"),
+            0.25,
+            0.0,
+            2.0,
+        ),
+        provider_overall_deadline_seconds=parse_int(
+            "PROVIDER_OVERALL_DEADLINE_SECONDS",
+            os.getenv("PROVIDER_OVERALL_DEADLINE_SECONDS"),
+            130,
+            10,
+            300,
         ),
         analysis_resume_max_chars=parse_int(
             "ANALYSIS_RESUME_MAX_CHARS",
@@ -346,6 +408,16 @@ def load_config(*, validate_production: bool = True) -> AppConfig:
         ),
         jd_normalization=load_java_normalization_config(),
     )
+    if config.model_length_retry_output_tokens < config.model_max_output_tokens:
+        raise ConfigError(
+            "AGENT_MODEL_LENGTH_RETRY_OUTPUT_TOKENS must be at least "
+            "AGENT_MODEL_MAX_OUTPUT_TOKENS."
+        )
+    if config.model_repair_output_tokens > config.model_length_retry_output_tokens:
+        raise ConfigError(
+            "AGENT_MODEL_REPAIR_OUTPUT_TOKENS cannot exceed "
+            "AGENT_MODEL_LENGTH_RETRY_OUTPUT_TOKENS."
+        )
     if production and validate_production:
         if not config.deepseek_api_key:
             raise ConfigError("DEEPSEEK_API_KEY must be configured in production.")
@@ -368,7 +440,13 @@ def safe_config_status(config: AppConfig) -> dict[str, object]:
         "trusted_host_count": len(config.trusted_hosts),
         "max_upload_size_mb": config.max_upload_size_mb,
         "request_timeout_seconds": config.request_timeout_seconds,
+        "deepseek_model": config.deepseek_model,
+        "deepseek_thinking_enabled": config.deepseek_thinking_enabled,
         "model_max_output_tokens": config.model_max_output_tokens,
+        "model_length_retry_output_tokens": config.model_length_retry_output_tokens,
+        "model_repair_output_tokens": config.model_repair_output_tokens,
+        "provider_retry_backoff_seconds": config.provider_retry_backoff_seconds,
+        "provider_overall_deadline_seconds": config.provider_overall_deadline_seconds,
         "analysis_resume_max_chars": config.analysis_resume_max_chars,
         "analysis_job_description_max_chars": config.analysis_job_description_max_chars,
         "monitoring_admin_configured": config.monitoring_admin_token_configured,

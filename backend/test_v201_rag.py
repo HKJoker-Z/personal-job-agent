@@ -145,8 +145,7 @@ class ProjectKnowledgeRagTest(unittest.TestCase):
         self.assertEqual(metadata["output_tokens"], 310)
         self.assertFalse(metadata["reached_token_limit"])
         self.assertGreater(metadata["response_length"], 0)
-        self.assertRegex(metadata["provider_request_id_hash"], r"^[a-f0-9]{16}$")
-        self.assertNotEqual(metadata["provider_request_id_hash"], "mock-valid-compact-800")
+        self.assertNotIn("provider_request_id_hash", metadata)
 
     def test_finish_reason_length_maps_to_truncated_before_json_parsing(self):
         with self.assertRaises(ModelOutputError) as raised:
@@ -403,7 +402,7 @@ class ProjectKnowledgeRagTest(unittest.TestCase):
         client.close()
         self.assertEqual(response.status_code, 200)
         detail = response.json()
-        self.assertEqual(detail["analysis_status"], "complete")
+        self.assertEqual(detail["analysis_status"], "partial")
         self.assertNotIn("must be rejected", response.text)
         self.assertEqual(detail["rag_sources"], [])
         insert_record.assert_not_called()

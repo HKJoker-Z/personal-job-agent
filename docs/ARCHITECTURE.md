@@ -74,12 +74,17 @@ decision ownership.
 
 ### DeepSeek-assisted advisory analysis
 
-The backend makes a bounded call to `deepseek-chat` through DeepSeek's
-OpenAI-compatible API. The model proposes compact skill judgments,
-assessments, evidence references, and recommendations. The backend accepts
-standard JSON, performs bounded structural normalization, and may make at most
-one format-only repair call. If the provider or response remains unusable, a
-deterministic local keyword fallback returns the stable result shape.
+The backend makes a bounded JSON Output call to the validated
+`DEEPSEEK_MODEL` (default quality candidate `deepseek-v4-pro`) through
+DeepSeek's OpenAI-compatible API. The model proposes compact skill judgments,
+assessments, evidence references, and recommendations. The request disables
+thinking by default, keeps SDK retries at zero, and allows one bounded
+transient retry plus one format-only repair. The backend accepts standard JSON,
+performs field-level salvage, reconciles evidence, and deterministically fills
+Job Summary and Match Reasons. If the provider or response remains unusable, a
+deterministic local keyword fallback returns the stable result shape. See
+[`DEEPSEEK_PROVIDER_ACCEPTANCE.md`](DEEPSEEK_PROVIDER_ACCEPTANCE.md) for the
+state and security contract.
 
 DeepSeek does not own the final score, trusted source metadata, authorization,
 persistence identity, or an employment decision.

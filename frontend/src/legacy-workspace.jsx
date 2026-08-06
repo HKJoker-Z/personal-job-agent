@@ -115,6 +115,14 @@ function displayText(value, fallback = "Not provided") {
   return String(value || "").trim() || fallback;
 }
 
+function displayAnalysisNarrative(value, fallback) {
+  return typeof value === "string" && value.trim() ? value.trim() : fallback;
+}
+
+function normalizedAnalysisStatus(value) {
+  return ["complete", "repaired", "partial", "fallback"].includes(value) ? value : "complete";
+}
+
 function displayRagMode(value) {
   const cleanValue = String(value || "").trim();
   if (!cleanValue) {
@@ -851,8 +859,13 @@ function AnalysisResult({ result }) {
   const savedToHistory = Boolean(result?.saved_to_history);
   const securityStatus = result?.security_status || "not_available";
   const blockedBySecurity = securityStatus === "blocked";
-  const analysisStatus = ["complete", "repaired", "partial", "fallback"].includes(result?.analysis_status)
-    ? result.analysis_status : "complete";
+  const analysisStatus = normalizedAnalysisStatus(result?.analysis_status);
+  const statusLabels = {
+    complete: "Complete",
+    repaired: "Repaired",
+    partial: "Partial",
+    fallback: "Fallback",
+  };
   const statusMessages = {
     repaired: "The model response was automatically normalized.",
     partial: "Some optional analysis fields were unavailable, but the usable result is shown.",
@@ -878,6 +891,13 @@ function AnalysisResult({ result }) {
 
   return (
     <section className="panel results-panel">
+      <div
+        className={`analysis-state-badge ${analysisStatus}`}
+        role="status"
+        aria-label={`Analysis state: ${statusLabels[analysisStatus]}`}
+      >
+        Analysis state: {statusLabels[analysisStatus]}
+      </div>
       {statusMessages[analysisStatus] && <p className={`analysis-status-banner ${analysisStatus}`} role="status">{statusMessages[analysisStatus]}</p>}
       <div className="score-row">
         <div>
@@ -904,12 +924,12 @@ function AnalysisResult({ result }) {
 
       <section className="result-section">
         <h3>岗位摘要</h3>
-        <p>{result.job_summary || "No summary generated."}</p>
+        <p>{displayAnalysisNarrative(result?.job_summary, "Job Summary unavailable.")}</p>
       </section>
 
       <section className="result-section">
         <h3>匹配原因</h3>
-        <p>{result.match_reason || "No match reason generated."}</p>
+        <p>{displayAnalysisNarrative(result?.match_reason, "Match Reasons unavailable.")}</p>
       </section>
 
       <ResultList title="匹配技能" items={result.matched_skills} />
@@ -1479,6 +1499,14 @@ function HistoryPage() {
             </div>
           </div>
 
+          <div
+            className={`analysis-state-badge ${normalizedAnalysisStatus(selectedRecord.analysis_status)}`}
+            role="status"
+            aria-label={`Analysis state: ${normalizedAnalysisStatus(selectedRecord.analysis_status)}`}
+          >
+            Analysis state: {normalizedAnalysisStatus(selectedRecord.analysis_status)}
+          </div>
+
           <SecurityAuditSection
             scan={selectedRecord.security_scan}
             status={selectedRecord.security_status}
@@ -1487,12 +1515,12 @@ function HistoryPage() {
 
           <section className="result-section">
             <h3>Match Reason</h3>
-            <p>{selectedRecord.match_reason || "No match reason generated."}</p>
+            <p>{displayAnalysisNarrative(selectedRecord.match_reason, "Match Reasons unavailable.")}</p>
           </section>
 
           <section className="result-section">
             <h3>Job Summary</h3>
-            <p>{selectedRecord.job_summary || "No summary generated."}</p>
+            <p>{displayAnalysisNarrative(selectedRecord.job_summary, "Job Summary unavailable.")}</p>
           </section>
 
           <ResultList title="Matched Skills" items={selectedRecord.matched_skills} />
@@ -2701,4 +2729,4 @@ export function LegacyWorkspace({ initialTab = "analyze" }) {
   </section>;
 }
 
-export { AnalyzePage, ErrorBoundary, RagSourcesSection };
+export { AnalyzePage, AnalysisResult, ErrorBoundary, HistoryPage, RagSourcesSection };

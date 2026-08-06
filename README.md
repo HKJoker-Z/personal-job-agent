@@ -74,20 +74,24 @@ runs remain readable and cancellable.
 4. If Project Knowledge RAG is enabled, the backend builds a bounded query and
    retrieves the most relevant Project Knowledge chunks.
 5. Security checks scan untrusted Resume/JD text and retrieved project evidence.
-6. The backend constructs a boundary-marked prompt and calls `deepseek-chat`
-   through the OpenAI-compatible DeepSeek API.
-7. It first attempts standard JSON parsing.
-8. It then attempts safe extraction and loose normalization for fences,
-   surrounding prose, wrapper objects, trailing commas, aliases, missing optional
-   fields, and bounded type coercion.
-9. If no usable structure remains, it makes at most one short, format-only repair
-   call; it does not rerun the complete analysis.
-10. If the provider is unavailable or the response still cannot be used, the
-    backend creates a deterministic local keyword-based fallback.
+6. The backend constructs a boundary-marked prompt and calls the validated
+   `DEEPSEEK_MODEL` (default quality candidate `deepseek-v4-pro`) through the
+   OpenAI-compatible DeepSeek API.
+7. It requests JSON Output with one canonical JSON example and thinking disabled
+   by default, then parses and validates the response locally.
+8. It applies bounded field-level salvage for known aliases, safe type/default
+   conversions, list-item cleanup, evidence IDs, and unsupported claims.
+9. It allows one transient primary retry and at most one format-only repair;
+   the maximum is three Provider calls for a new execution.
+10. If no safe usable structure remains, the backend creates a deterministic
+    local keyword-based fallback.
 11. The backend validates evidence IDs, reconciles matched/missing skills,
-    removes unsupported content, generates `rag_sources`, and calculates the
-    final weighted score.
+    completes Job Summary and Match Reasons deterministically, and calculates
+    the final weighted score.
 12. The user may save the normalized result and workflow audit trail to History.
+
+The detailed Provider contract is documented in
+[`docs/DEEPSEEK_PROVIDER_ACCEPTANCE.md`](docs/DEEPSEEK_PROVIDER_ACCEPTANCE.md).
 
 The system tries to preserve every usable part of an analysis. An invalid
 non-critical field, unsupported claim, or unknown evidence ID produces a warning
@@ -140,14 +144,17 @@ downgrade and does not remove or expose Java.
 
 | Result state | Meaning |
 | --- | --- |
-| `complete` | The model returned a directly usable compact result with no degradation warning. |
-| `repaired` | Local structural normalization or the single format-only repair recovered a usable model result. |
-| `partial` | Usable model content was retained, but defaults, aliases, evidence rejection, or claim filtering produced warnings. |
-| `fallback` | The model/provider path was unusable; deterministic local matching returned the stable result shape. |
+| `complete` | The primary response was canonical, complete enough for the contract, and produced no meaningful warning. |
+| `repaired` | Bounded syntactic normalization or the single format-only repair recovered usable content without discarding a material field. |
+| `partial` | Safe Provider content remained primary, but bounded salvage, evidence cleanup, or unsupported-claim cleanup was applied. |
+| `fallback` | No Provider response met the minimum safe contract or security required rejection; deterministic local matching returned the stable result shape. |
 
-`fallback` is intentionally more basic than a full model result, but it still
-includes deterministic scoring, recommendations, RAG metadata, and evidence
-mapping when relevant evidence is available.
+Every state includes stable Job Summary and Match Reasons sections. They use
+validated Provider content when available, otherwise bounded deterministic local
+data or an explicit unavailable explanation. `fallback` is intentionally more
+basic than a full model result, but it still includes deterministic scoring,
+recommendations, RAG metadata, and evidence mapping when relevant evidence is
+available.
 
 ## Resume Workflow
 

@@ -15,24 +15,38 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
-from openai import OpenAI
+from openai import (
+    APIConnectionError,
+    APITimeoutError,
+    InternalServerError,
+    OpenAI,
+    RateLimitError,
+)
 from pydantic import BaseModel, ValidationError
 from pypdf import PdfReader
 
 from agent_workflow import AgentWorkflow, WorkflowContext
 from analysis_contract import (
+    MODEL_OUTPUT_EMPTY,
+    MODEL_OUTPUT_RESOURCE_LIMIT,
+    MODEL_OUTPUT_TRUNCATED,
     MODEL_PROVIDER_ERROR,
     CompactAnalysisOutput,
     ModelOutputError,
     ProviderAnalysisResponse,
+    OPTIONAL_PROVIDER_NARRATIVE_FIELDS,
     adapt_provider_completion,
     compact_analysis_warnings,
     parse_model_json,
     parse_model_json_result,
+    salvage_compact_analysis,
+    salvage_warning_messages,
     safe_model_metadata,
     validate_compact_analysis,
 )
 from analysis_fallback import (
+    deterministic_job_summary,
+    deterministic_match_reasons,
     deterministic_scoring,
     local_fallback_result,
     normalize_analysis_text,
@@ -144,7 +158,9 @@ settings = load_config()
 
 APP_NAME = "personal-job-agent"
 DEEPSEEK_BASE_URL = "https://api.deepseek.com"
-DEEPSEEK_MODEL = "deepseek-chat"
+DEEPSEEK_MODEL = settings.deepseek_model
+MAX_PROVIDER_CALLS_PER_ANALYZE = 3
+MAX_PRIMARY_PROVIDER_CALLS = MAX_PROVIDER_CALLS_PER_ANALYZE - 1
 MAX_RESUME_TEXT_CHARS = settings.analysis_resume_max_chars
 MAX_JOB_TEXT_CHARS = settings.analysis_job_description_max_chars
 PROJECT_KNOWLEDGE_SOURCE_PATH = PROJECT_KNOWLEDGE_LOGICAL_NAME
@@ -860,7 +876,8 @@ def normalize_result(
             retrieved_chunks=retrieved_rag_chunks,
         )
 
-    match_reason = normalize_string(data.get("match_reason")).strip()
+    raw_match_reason = data.get("match_reason")
+    match_reason = raw_match_reason.strip() if isinstance(raw_match_reason, str) else ""
     weighted_reason = build_match_reason_fallback(scoring_breakdown, matched_skills, missing_skills)
     if match_reason:
         match_reason = f"{match_reason}\n{weighted_reason}"
@@ -876,7 +893,11 @@ def normalize_result(
     return {
         "company_name": normalize_named_field(data.get("company_name"), "Unknown Company"),
         "job_title": normalize_named_field(data.get("job_title"), "Unknown Position"),
-        "job_summary": normalize_string(data.get("job_summary")),
+        "job_summary": (
+            data.get("job_summary").strip()
+            if isinstance(data.get("job_summary"), str)
+            else ""
+        )[:320],
         "match_score": calculate_weighted_match_score(scoring_breakdown),
         "match_reason": match_reason,
         "matched_skills": matched_skills,
@@ -888,6 +909,25 @@ def normalize_result(
         "upgraded_resume_bullets": upgraded_resume_bullets,
         "rag_sources": rag_sources,
     }
+
+
+def ensure_deterministic_narratives(result: dict[str, Any], job_description: str) -> None:
+    """Fill the two public narrative fields from validated local facts only."""
+    summary = result.get("job_summary")
+    if not isinstance(summary, str) or not summary.strip():
+        result["job_summary"] = deterministic_job_summary(job_description)
+    else:
+        result["job_summary"] = summary.strip()[:320]
+
+    match_reason = result.get("match_reason")
+    if not isinstance(match_reason, str) or not match_reason.strip():
+        result["match_reason"] = deterministic_match_reasons(
+            result.get("scoring_breakdown") if isinstance(result.get("scoring_breakdown"), dict) else {},
+            normalize_list(result.get("matched_skills")),
+            normalize_list(result.get("missing_skills")),
+        )
+    else:
+        result["match_reason"] = match_reason.strip()[:320]
 
 
 def compact_analysis_to_result(
@@ -1183,14 +1223,74 @@ def enforce_analysis_grounding(
         )
 
 
+def provider_retry_reason(exc: Exception | ModelOutputError) -> str | None:
+    """Return a fixed retry category without inspecting or logging exception text."""
+    if isinstance(exc, APITimeoutError):
+        return "read_timeout"
+    if isinstance(exc, APIConnectionError):
+        return "connect_timeout"
+    if isinstance(exc, RateLimitError):
+        return "http_429"
+    if isinstance(exc, InternalServerError):
+        return "http_5xx"
+    status_code = getattr(exc, "status_code", None)
+    if status_code == 429:
+        return "http_429"
+    if isinstance(status_code, int) and 500 <= status_code <= 599:
+        return "http_5xx"
+    if isinstance(exc, TimeoutError):
+        return "read_timeout"
+    if isinstance(exc, ConnectionError):
+        return "connect_timeout"
+    if isinstance(exc, ModelOutputError):
+        return {
+            MODEL_OUTPUT_EMPTY: "empty_content",
+            MODEL_OUTPUT_TRUNCATED: "finish_length",
+            MODEL_OUTPUT_RESOURCE_LIMIT: "resource_limit",
+        }.get(exc.error_code)
+    return None
+
+
+def provider_request_options(runtime_settings: Any, *, max_tokens: int) -> dict[str, Any]:
+    """Build the bounded, JSON-mode request shared by primary and repair calls."""
+    options: dict[str, Any] = {
+        "model": runtime_settings.deepseek_model,
+        "response_format": {"type": "json_object"},
+        "max_tokens": max_tokens,
+        "extra_body": {
+            "thinking": {
+                "type": "enabled" if runtime_settings.deepseek_thinking_enabled else "disabled"
+            }
+        },
+    }
+    # DeepSeek documents thinking as independent from sampling controls. Keep
+    # the legacy deterministic temperature only for the default disabled path.
+    if not runtime_settings.deepseek_thinking_enabled:
+        options["temperature"] = 0.2
+    return options
+
+
+def _provider_metadata_base(runtime_settings: Any, *, attempt_count: int = 0) -> dict[str, Any]:
+    return {
+        "model_id": runtime_settings.deepseek_model,
+        "thinking_enabled": runtime_settings.deepseek_thinking_enabled,
+        "response_mode": "json_object",
+        "primary_attempt_count": attempt_count,
+        "repair_attempt_count": 0,
+    }
+
+
 def call_deepseek_raw(
     resume_text: str,
     job_description: str,
     rag_chunks: list[dict[str, Any]] | None = None,
     analysis_prompt: str | None = None,
     usage_out: dict[str, Any] | None = None,
+    deadline_monotonic: float | None = None,
 ) -> ProviderAnalysisResponse:
+    """Run at most two bounded primary calls, with one stable transient retry."""
     runtime_settings = load_config(validate_production=False)
+    base_metadata = _provider_metadata_base(runtime_settings)
     if runtime_settings.mock_provider_enabled:
         if runtime_settings.app_env == "production":
             raise HTTPException(status_code=500, detail="Mock provider is unavailable in production.")
@@ -1210,149 +1310,239 @@ def call_deepseek_raw(
             "concise_recommendations": ["Add only verified project evidence."],
         })
         metadata = safe_model_metadata({
+            **base_metadata,
             "finish_reason": "stop",
             "response_length": len(content),
             "latency_ms": 0,
+            "primary_attempt_count": 1,
         })
         if usage_out is not None:
             usage_out.update(metadata)
         return ProviderAnalysisResponse(content=content, metadata=metadata)
-    api_key = runtime_settings.deepseek_api_key
-    if not api_key:
+    if not runtime_settings.deepseek_api_key:
         logger.error("DeepSeek configuration failed error_type=MissingApiKey")
         raise HTTPException(
             status_code=500,
             detail="DeepSeek API key is not configured on the backend.",
         )
 
-    client = OpenAI(
-        api_key=api_key,
-        base_url=DEEPSEEK_BASE_URL,
-        timeout=runtime_settings.request_timeout_seconds,
-        max_retries=0,
+    prompt = analysis_prompt or build_safe_analysis_prompt(
+        resume_text=resume_text,
+        job_description=job_description,
+        rag_chunks=rag_chunks or [],
     )
-
-    started = time.perf_counter()
-    try:
-        logger.info("DeepSeek call started")
-        completion = client.chat.completions.create(
-            model=DEEPSEEK_MODEL,
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "Output valid JSON only. Do not include markdown, code fences, "
-                        "or explanatory text."
-                    ),
-                },
-                {
-                    "role": "user",
-                    "content": analysis_prompt
-                    or build_safe_analysis_prompt(
-                        resume_text=resume_text,
-                        job_description=job_description,
-                        rag_chunks=rag_chunks or [],
-                    ),
-                },
-            ],
-            response_format={"type": "json_object"},
-            temperature=0.2,
-            max_tokens=runtime_settings.model_max_output_tokens,
-        )
-    except Exception as exc:
-        latency_ms = round((time.perf_counter() - started) * 1000, 3)
-        metadata = safe_model_metadata({"latency_ms": latency_ms})
-        if usage_out is not None:
-            usage_out.update(metadata)
-        logger.warning(
-            "DeepSeek call failed error_code=%s error_type=%s latency_ms=%s",
-            MODEL_PROVIDER_ERROR,
-            type(exc).__name__,
-            latency_ms,
-        )
-        raise ModelOutputError(MODEL_PROVIDER_ERROR, metadata=metadata) from exc
-
-    latency_ms = round((time.perf_counter() - started) * 1000, 3)
-    try:
-        response = adapt_provider_completion(
-            completion,
-            max_output_tokens=runtime_settings.model_max_output_tokens,
-            latency_ms=latency_ms,
-        )
-    except ModelOutputError as exc:
-        if usage_out is not None:
-            usage_out.update(exc.metadata)
-        logger.warning(
-            "DeepSeek output rejected error_code=%s finish_reason=%s output_tokens=%s "
-            "response_length=%s reached_token_limit=%s latency_ms=%s",
-            exc.error_code,
-            exc.metadata.get("finish_reason"),
-            exc.metadata.get("output_tokens"),
-            exc.metadata.get("response_length"),
-            exc.metadata.get("reached_token_limit"),
-            exc.metadata.get("latency_ms"),
-        )
-        raise
-
-    if usage_out is not None:
-        usage_out.update(response.metadata)
-    logger.info(
-        "DeepSeek call succeeded finish_reason=%s input_tokens=%s output_tokens=%s "
-        "total_tokens=%s response_length=%s reached_token_limit=%s latency_ms=%s",
-        response.metadata.get("finish_reason"),
-        response.metadata.get("input_tokens"),
-        response.metadata.get("output_tokens"),
-        response.metadata.get("total_tokens"),
-        response.metadata.get("response_length"),
-        response.metadata.get("reached_token_limit"),
-        response.metadata.get("latency_ms"),
+    deadline = deadline_monotonic or (
+        time.monotonic() + runtime_settings.provider_overall_deadline_seconds
     )
-    return response
+    retry_reason: str | None = None
+    last_error: ModelOutputError | None = None
+    for attempt in range(1, MAX_PRIMARY_PROVIDER_CALLS + 1):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        client = OpenAI(
+            api_key=runtime_settings.deepseek_api_key,
+            base_url=DEEPSEEK_BASE_URL,
+            timeout=min(runtime_settings.request_timeout_seconds, max(0.1, remaining)),
+            max_retries=0,
+        )
+        max_tokens = (
+            runtime_settings.model_length_retry_output_tokens
+            if retry_reason == "finish_length"
+            else runtime_settings.model_max_output_tokens
+        )
+        started = time.perf_counter()
+        metadata_seed = {
+            **base_metadata,
+            "primary_attempt_count": attempt,
+            "transient_retry_reason": retry_reason,
+        }
+        try:
+            logger.info(
+                "DeepSeek call started attempt=%s model=%s thinking_enabled=%s response_mode=json_object max_tokens=%s",
+                attempt,
+                runtime_settings.deepseek_model,
+                runtime_settings.deepseek_thinking_enabled,
+                max_tokens,
+            )
+            options = provider_request_options(runtime_settings, max_tokens=max_tokens)
+            completion = client.chat.completions.create(
+                **options,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "Return JSON only. The final content must be exactly one JSON object. "
+                            "Do not include Markdown fences or prose outside the object."
+                        ),
+                    },
+                    {"role": "user", "content": prompt},
+                ],
+            )
+            response = adapt_provider_completion(
+                completion,
+                max_output_tokens=max_tokens,
+                latency_ms=round((time.perf_counter() - started) * 1000, 3),
+            )
+            metadata = safe_model_metadata({
+                **response.metadata,
+                **metadata_seed,
+                "primary_attempt_count": attempt,
+            })
+            response = ProviderAnalysisResponse(content=response.content, metadata=metadata)
+            if usage_out is not None:
+                usage_out.update(metadata)
+            logger.info(
+                "DeepSeek call succeeded attempt=%s finish_reason=%s output_tokens=%s response_length=%s latency_ms=%s",
+                attempt,
+                metadata.get("finish_reason"),
+                metadata.get("output_tokens"),
+                metadata.get("response_length"),
+                metadata.get("latency_ms"),
+            )
+            return response
+        except ModelOutputError as exc:
+            reason = provider_retry_reason(exc)
+            metadata = safe_model_metadata({
+                **exc.metadata,
+                **metadata_seed,
+                "primary_attempt_count": attempt,
+                "empty_content": exc.error_code == MODEL_OUTPUT_EMPTY,
+            })
+            last_error = ModelOutputError(exc.error_code, metadata=metadata)
+            if usage_out is not None:
+                usage_out.update(metadata)
+            logger.warning(
+                "DeepSeek output rejected attempt=%s error_code=%s finish_reason=%s output_tokens=%s latency_ms=%s",
+                attempt,
+                exc.error_code,
+                metadata.get("finish_reason"),
+                metadata.get("output_tokens"),
+                metadata.get("latency_ms"),
+            )
+            if not reason or attempt >= MAX_PRIMARY_PROVIDER_CALLS:
+                raise last_error from exc
+            retry_reason = reason
+        except Exception as exc:
+            reason = provider_retry_reason(exc)
+            latency_ms = round((time.perf_counter() - started) * 1000, 3)
+            metadata = safe_model_metadata({
+                **metadata_seed,
+                "latency_ms": latency_ms,
+                "primary_attempt_count": attempt,
+            })
+            last_error = ModelOutputError(MODEL_PROVIDER_ERROR, metadata=metadata)
+            if usage_out is not None:
+                usage_out.update(metadata)
+            logger.warning(
+                "DeepSeek call failed attempt=%s error_code=%s error_type=%s latency_ms=%s",
+                attempt,
+                MODEL_PROVIDER_ERROR,
+                type(exc).__name__,
+                latency_ms,
+            )
+            if not reason or attempt >= MAX_PRIMARY_PROVIDER_CALLS:
+                raise last_error from exc
+            retry_reason = reason
+
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        time.sleep(min(runtime_settings.provider_retry_backoff_seconds, remaining))
+
+    if last_error is not None:
+        raise last_error
+    raise ModelOutputError(
+        MODEL_PROVIDER_ERROR,
+        metadata=safe_model_metadata({
+            **base_metadata,
+            "primary_attempt_count": MAX_PRIMARY_PROVIDER_CALLS,
+        }),
+    )
 
 
 def call_deepseek_repair(
     raw_response: str,
     *,
     usage_out: dict[str, Any] | None = None,
+    deadline_monotonic: float | None = None,
 ) -> ProviderAnalysisResponse:
     """Make the single allowed, bounded format-only repair request."""
     runtime_settings = load_config(validate_production=False)
     if not runtime_settings.deepseek_api_key:
         raise ModelOutputError(MODEL_PROVIDER_ERROR)
+    deadline = deadline_monotonic or (
+        time.monotonic() + runtime_settings.provider_overall_deadline_seconds
+    )
+    remaining = deadline - time.monotonic()
+    if remaining <= 0.05:
+        raise ModelOutputError(
+            MODEL_PROVIDER_ERROR,
+            metadata=safe_model_metadata({
+                **_provider_metadata_base(runtime_settings),
+                "repair_attempt_count": 0,
+                "fallback_reason": "provider_deadline",
+            }),
+        )
     client = OpenAI(
         api_key=runtime_settings.deepseek_api_key,
         base_url=DEEPSEEK_BASE_URL,
-        timeout=runtime_settings.request_timeout_seconds,
+        timeout=min(
+            runtime_settings.request_timeout_seconds,
+            max(0.1, remaining),
+        ),
         max_retries=0,
     )
-    repair_tokens = min(800, runtime_settings.model_max_output_tokens)
+    repair_tokens = runtime_settings.model_repair_output_tokens
     repair_prompt = (
         "Convert the model text below into one concise JSON object. Preserve only explicit analysis; "
         "do not add facts. Use keys matched_skills, missing_skills, unknown_skills, "
-        "concise_dimension_assessments, evidence_references, and concise_recommendations.\n\n"
+        "concise_dimension_assessments, evidence_references, unsupported_claim_candidates, "
+        "and concise_recommendations. The final content must be exactly one JSON object; "
+        "do not use Markdown fences or prose outside it.\n\n"
         + str(raw_response or "")[:12_000]
     )
     started = time.perf_counter()
     try:
+        options = provider_request_options(runtime_settings, max_tokens=repair_tokens)
         completion = client.chat.completions.create(
-            model=DEEPSEEK_MODEL,
+            **options,
             messages=[
                 {"role": "system", "content": "Return JSON only. Repair format; never redo the analysis."},
                 {"role": "user", "content": repair_prompt},
             ],
-            response_format={"type": "json_object"},
-            temperature=0,
-            max_tokens=repair_tokens,
         )
     except Exception as exc:
-        metadata = safe_model_metadata({"latency_ms": (time.perf_counter() - started) * 1000})
+        metadata = safe_model_metadata({
+            **_provider_metadata_base(runtime_settings),
+            "repair_attempt_count": 1,
+            "latency_ms": (time.perf_counter() - started) * 1000,
+        })
         if usage_out is not None:
             usage_out.update(metadata)
         raise ModelOutputError(MODEL_PROVIDER_ERROR, metadata=metadata) from exc
-    response = adapt_provider_completion(
-        completion,
-        max_output_tokens=repair_tokens,
-        latency_ms=round((time.perf_counter() - started) * 1000, 3),
+    try:
+        response = adapt_provider_completion(
+            completion,
+            max_output_tokens=repair_tokens,
+            latency_ms=round((time.perf_counter() - started) * 1000, 3),
+        )
+    except ModelOutputError as exc:
+        metadata = safe_model_metadata({
+            **exc.metadata,
+            **_provider_metadata_base(runtime_settings),
+            "repair_attempt_count": 1,
+        })
+        if usage_out is not None:
+            usage_out.update(metadata)
+        raise ModelOutputError(exc.error_code, metadata=metadata) from exc
+    response = ProviderAnalysisResponse(
+        content=response.content,
+        metadata=safe_model_metadata({
+            **response.metadata,
+            **_provider_metadata_base(runtime_settings),
+            "repair_attempt_count": 1,
+        }),
     )
     if usage_out is not None:
         usage_out.update(response.metadata)
@@ -1363,15 +1553,34 @@ def model_response_to_result(
     raw_response: str,
     *,
     repairer: Any | None = None,
+    metadata_out: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], str, list[str]]:
     """Parse locally first, then perform at most one model format repair."""
     try:
         parsed_result = parse_model_json_result(raw_response)
+        salvaged = salvage_compact_analysis(parsed_result.data)
+        compact = validate_compact_analysis(salvaged.data)
         warnings = list(parsed_result.warnings)
         warnings.extend(compact_analysis_warnings(parsed_result.data))
-        compact = validate_compact_analysis(parsed_result.data)
-        status = "repaired" if parsed_result.normalized else ("partial" if warnings else "complete")
-        return compact_analysis_to_result(compact), status, list(dict.fromkeys(warnings))
+        warnings.extend(salvage_warning_messages(salvaged.action_codes))
+        if metadata_out is not None:
+            metadata_out.update({
+                "parse_outcome": "local_format_repair" if parsed_result.normalized else "canonical",
+                "salvage_action_categories": list(salvaged.action_codes),
+                "rejected_field_count": salvaged.rejected_field_count,
+                "accepted_field_count": salvaged.accepted_field_count,
+            })
+        if salvaged.action_codes:
+            status = "partial"
+        elif parsed_result.normalized:
+            status = "repaired"
+        else:
+            status = "complete"
+        result = compact_analysis_to_result(compact)
+        for field_name in OPTIONAL_PROVIDER_NARRATIVE_FIELDS:
+            if isinstance(salvaged.data.get(field_name), str) and salvaged.data[field_name]:
+                result[field_name] = salvaged.data[field_name]
+        return result, status, list(dict.fromkeys(warnings))
     except (ModelOutputError, ValidationError, ValueError):
         pass
 
@@ -1385,11 +1594,26 @@ def model_response_to_result(
         else str(repaired_response or "")
     )
     parsed_result = parse_model_json_result(repaired_text)
-    compact = validate_compact_analysis(parsed_result.data)
+    salvaged = salvage_compact_analysis(parsed_result.data)
+    compact = validate_compact_analysis(salvaged.data)
     warnings = ["The model response was automatically normalized by one format-only repair call."]
     warnings.extend(parsed_result.warnings)
     warnings.extend(compact_analysis_warnings(parsed_result.data))
-    return compact_analysis_to_result(compact), "repaired", list(dict.fromkeys(warnings))
+    warnings.extend(salvage_warning_messages(salvaged.action_codes))
+    if metadata_out is not None:
+        metadata_out.update({
+            "parse_outcome": "format_repair_call",
+            "salvage_action_categories": list(salvaged.action_codes),
+            "rejected_field_count": salvaged.rejected_field_count,
+            "accepted_field_count": salvaged.accepted_field_count,
+            "repair_attempt_count": 1,
+        })
+    status = "partial" if salvaged.action_codes else "repaired"
+    result = compact_analysis_to_result(compact)
+    for field_name in OPTIONAL_PROVIDER_NARRATIVE_FIELDS:
+        if isinstance(salvaged.data.get(field_name), str) and salvaged.data[field_name]:
+            result[field_name] = salvaged.data[field_name]
+    return result, status, list(dict.fromkeys(warnings))
 
 
 def analyze_with_deepseek(
@@ -1425,6 +1649,7 @@ def analyze_with_deepseek(
         result, resume_text, job_description, rag_chunks or []
     )
     result["match_score"] = calculate_weighted_match_score(result["scoring_breakdown"])
+    ensure_deterministic_narratives(result, job_description)
     result["analysis_status"] = status
     result["analysis_warnings"] = warnings
     return result
@@ -1783,6 +2008,7 @@ REMAINING_WORKFLOW_STEPS = (
     ("validate_evidence_references", "Validate Evidence References"),
     ("reconcile_evidence", "Reconcile Evidence"),
     ("recommend_next_action", "Recommend Next Action"),
+    ("final_output_scan", "Final Output Security Scan"),
     ("save_application", "Save Application"),
     ("finalize_result", "Finalize Result"),
 )
@@ -1917,6 +2143,7 @@ def record_analysis_observation(
         error_code=error_code,
         error_stage=error_stage,
         source_type=context.source_type,
+        provider_observation=context.model_metadata,
     )
     persist_analysis_metrics_best_effort(metric, steps)
 
@@ -3061,6 +3288,9 @@ async def analyze(
     analysis_status = "complete"
     analysis_warnings: list[str] = list(input_warnings)
     provider_available = True
+    provider_deadline = time.monotonic() + load_config(
+        validate_production=False
+    ).provider_overall_deadline_seconds
     try:
         if idempotency_service is not None and idempotency_claim is not None:
             if execution_binding is None:
@@ -3078,6 +3308,7 @@ async def analyze(
             context.retrieved_chunks,
             analysis_prompt=context.safe_prompt,
             usage_out=context.model_metadata,
+            deadline_monotonic=provider_deadline,
         )
         context.llm_raw_response = provider_response.content
         context.model_metadata = dict(provider_response.metadata)
@@ -3091,7 +3322,22 @@ async def analyze(
         provider_available = False
         workflow.add_warning()
         if isinstance(exc, ModelOutputError):
-            context.model_metadata = safe_model_metadata(exc.metadata)
+            context.model_metadata = safe_model_metadata({
+                **exc.metadata,
+                "model_id": DEEPSEEK_MODEL,
+                "thinking_enabled": settings.deepseek_thinking_enabled,
+                "response_mode": "json_object",
+                "result_state": "fallback",
+                "fallback_reason": "provider_call_failed",
+            })
+        else:
+            context.model_metadata = safe_model_metadata({
+                "model_id": DEEPSEEK_MODEL,
+                "thinking_enabled": settings.deepseek_thinking_enabled,
+                "response_mode": "json_object",
+                "result_state": "fallback",
+                "fallback_reason": "provider_call_failed",
+            })
         analysis_status = "fallback"
         analysis_warnings.append(
             "AI response could not be fully parsed. A local fallback analysis is shown."
@@ -3112,10 +3358,10 @@ async def analyze(
             context.security_scan = merge_security_scans(context.security_scan, output_scan)
             if output_scan.get("findings"):
                 workflow.add_warning()
-            if marker_leaked:
+            if marker_leaked or output_scan.get("sensitive_data_detected") or output_scan.get("blocked"):
                 workflow.fail_step(
                     "scan_llm_output",
-                    "LLM output security scanning detected internal instruction leakage.",
+                    "LLM output security scanning detected a blocking security finding.",
                 )
                 skip_workflow_steps_after(
                     workflow,
@@ -3154,9 +3400,10 @@ async def analyze(
     workflow.start_step("parse_model_json", "Parse Model JSON")
     if provider_available:
         try:
-            repairer = None
-            if idempotency_service is not None and idempotency_claim is not None:
-                def repairer(raw_response: str) -> ProviderAnalysisResponse:
+            parse_metadata: dict[str, Any] = {}
+
+            def repairer(raw_response: str) -> ProviderAnalysisResponse:
+                if idempotency_service is not None and idempotency_claim is not None:
                     if execution_binding is None:
                         raise IdempotencyError(
                             "IDEMPOTENCY_PERSISTENCE_FAILED",
@@ -3166,11 +3413,61 @@ async def analyze(
                         idempotency_claim,
                         execution_binding,
                     )
-                    return call_deepseek_repair(raw_response)
+                repair_metadata: dict[str, Any] = {}
+                try:
+                    repaired = call_deepseek_repair(
+                        raw_response,
+                        usage_out=repair_metadata,
+                        deadline_monotonic=provider_deadline,
+                    )
+                finally:
+                    context.model_metadata = safe_model_metadata({
+                        **context.model_metadata,
+                        **repair_metadata,
+                    })
+                repaired_content = (
+                    repaired.content
+                    if isinstance(repaired, ProviderAnalysisResponse)
+                    else str(repaired or "")
+                )
+                sanitized_repair, repair_scan, repair_marker = scan_llm_output(repaired_content)
+                context.security_scan = merge_security_scans(context.security_scan, repair_scan)
+                if repair_marker or repair_scan.get("sensitive_data_detected") or repair_scan.get("blocked"):
+                    workflow.fail_step(
+                        "parse_model_json",
+                        "Format repair output failed the blocking security boundary.",
+                    )
+                    skip_workflow_steps_after(
+                        workflow,
+                        after_key="parse_model_json",
+                        message="Skipped because the format repair output was blocked by security scanning.",
+                    )
+                    raise_security_blocked(
+                        workflow,
+                        context,
+                        status_code=502,
+                        message="LLM output failed security validation. Please try again.",
+                        error_code="OUTPUT_SECURITY_BLOCKED",
+                        error_stage="scan_llm_output",
+                    )
+                return ProviderAnalysisResponse(
+                    content=sanitized_repair,
+                    metadata=(
+                        repaired.metadata
+                        if isinstance(repaired, ProviderAnalysisResponse)
+                        else {}
+                    ),
+                )
             result, analysis_status, parsed_warnings = model_response_to_result(
                 context.llm_raw_response,
                 repairer=repairer,
+                metadata_out=parse_metadata,
             )
+            context.model_metadata = safe_model_metadata({
+                **context.model_metadata,
+                **parse_metadata,
+                "result_state": analysis_status,
+            })
             analysis_warnings.extend(parsed_warnings)
             context.json_parse_success = True
             if analysis_status != "complete":
@@ -3186,10 +3483,17 @@ async def analyze(
             )
         except IdempotencyError as exc:
             raise idempotency_http_exception(exc) from exc
+        except HTTPException:
+            raise
         except Exception as exc:
             context.json_parse_success = False
             workflow.add_warning()
             analysis_status = "fallback"
+            context.model_metadata = safe_model_metadata({
+                **context.model_metadata,
+                "result_state": "fallback",
+                "fallback_reason": "minimum_safe_contract_failed",
+            })
             analysis_warnings.append(
                 "AI response could not be fully parsed. A local fallback analysis is shown."
             )
@@ -3275,6 +3579,7 @@ async def analyze(
             context.retrieved_chunks,
         )
         result["match_score"] = calculate_weighted_match_score(result["scoring_breakdown"])
+        ensure_deterministic_narratives(result, context.sanitized_job_text)
         result["rag_sources"] = build_default_rag_sources(
             context.retrieved_chunks,
             result.get("matched_skills") or [],
@@ -3289,6 +3594,13 @@ async def analyze(
             if analysis_status == "complete":
                 analysis_status = "partial"
         result["analysis_status"] = analysis_status
+        # Evidence cleanup and deterministic grounding can change a provider
+        # result from complete to partial after JSON parsing. Keep the
+        # structured observation aligned with the final public state.
+        context.model_metadata = safe_model_metadata({
+            **context.model_metadata,
+            "result_state": analysis_status,
+        })
         result["analysis_warnings"] = list(dict.fromkeys(analysis_warnings))
         result["recommendations"] = normalize_list(
             result.get("recommendations") or result.get("resume_suggestions")
@@ -3340,6 +3652,49 @@ async def analyze(
     result["security_scan"] = context.security_scan
     result["security_status"] = context.security_status
     result["security_policy_version"] = SECURITY_POLICY_VERSION
+
+    workflow.start_step("final_output_scan", "Final Output Security Scan")
+    try:
+        serialized_result = json.dumps(result, ensure_ascii=False, separators=(",", ":"), default=str)
+        _sanitized_final, final_scan, final_marker = scan_llm_output(serialized_result)
+        context.security_scan = merge_security_scans(context.security_scan, final_scan)
+        if final_marker or final_scan.get("sensitive_data_detected") or final_scan.get("blocked"):
+            workflow.fail_step(
+                "final_output_scan",
+                "Final serialized analysis failed the blocking security boundary.",
+            )
+            skip_workflow_steps_after(
+                workflow,
+                after_key="final_output_scan",
+                message="Skipped because final output security scanning blocked the response.",
+            )
+            raise_security_blocked(
+                workflow,
+                context,
+                status_code=502,
+                message="The analysis result failed final security validation. Please try again.",
+                error_code="OUTPUT_SECURITY_BLOCKED",
+                error_stage="final_output_scan",
+            )
+        context.security_scan = normalized_security_scan(context.security_scan)
+        context.security_status = security_status_from_scan(context.security_scan)
+        result["security_scan"] = context.security_scan
+        result["security_status"] = context.security_status
+        workflow.complete_step(
+            "final_output_scan",
+            "Final serialized analysis passed output security scanning.",
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        fail_analysis_and_raise(
+            workflow,
+            context,
+            step_key="final_output_scan",
+            message="Final output security scanning failed.",
+            error_code="FINAL_OUTPUT_SCAN_FAILED",
+            exc=exc,
+        )
 
     if save_to_history:
         workflow.start_step("save_application", "Save Application")
@@ -3403,7 +3758,24 @@ async def analyze(
         }
         result["model_completion"] = {
             key: context.model_metadata.get(key)
-            for key in ("finish_reason", "response_length", "reached_token_limit", "latency_ms")
+            for key in (
+                "finish_reason",
+                "response_length",
+                "reached_token_limit",
+                "latency_ms",
+                "model_id",
+                "thinking_enabled",
+                "response_mode",
+                "primary_attempt_count",
+                "repair_attempt_count",
+                "empty_content",
+                "transient_retry_reason",
+                "parse_outcome",
+                "salvage_action_categories",
+                "rejected_field_count",
+                "accepted_field_count",
+            )
+            if key in context.model_metadata
         }
         workflow.complete_step(
             "finalize_result",

@@ -6,6 +6,8 @@ reviewable in Git history.
 
 | Date | Report |
 |---|---|
+| 2026-08-06 | [DeepSeek Provider Acceptance Hardening v1](2026-08-06-deepseek-provider-acceptance-hardening-work-report.md) |
+| 2026-08-02 | [Version 2.0.5 Closeout Audit](2026-08-02-v2.0.5-closeout-audit-work-report.md) |
 | 2026-08-02 | [Version 2.0.5 Production Release](2026-08-02-v2.0.5-production-release-work-report.md) |
 | 2026-08-01 | [Version 2.0.5 Release Preparation](2026-08-01-v2.0.5-release-preparation-work-report.md) |
 | 2026-08-01 | [Java Normalization Production Stage 4 Java Evidence](2026-08-01-java-normalization-production-stage-4-java-evidence-work-report.md) |

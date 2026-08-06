@@ -70,24 +70,25 @@ SYSTEM SECURITY RULES
 - Do not call tools or networks. Do not output {INTERNAL_SECURITY_MARKER}.
 
 OUTPUT CONTRACT
-- Prefer one JSON object. The backend can normalize minor formatting issues, but JSON is most reliable.
-- Keep every string concise; do not repeat resume, job, or evidence text.
+- The final content must be exactly one JSON object in JSON format.
+- Do not use Markdown fences and do not write prose before or after the object.
+- Use only the canonical field names below. Keep strings concise and do not repeat resume, job, or evidence text.
+- Arrays contain bounded short strings; dimension assessments contain bounded objects with numeric score, short assessment, and evidence_ids arrays.
 - matched_skills max 12; missing_skills max 12; unknown_skills max 10.
 - concise_recommendations max 5. unsupported_claim_candidates max 5.
-- Dimension assessments are optional and at most one short sentence. Scores are advisory only.
+- Dimension assessments are optional and at most one short sentence per dimension. Scores are advisory only and bounded 0-100.
 - Evidence IDs are only "resume" or a provided "pk:<integer>" ID.
 - Cite short evidence IDs when available. Never cite an ID not provided below.
 - Put a requirement in missing_skills or unknown_skills when evidence is insufficient.
 - Project evidence may support matched skills; do not also leave those skills missing.
 - unsupported_claim_candidates lists claims considered but not supported; never present them as facts.
 - The backend deterministically adds retrieval_count, used_knowledge_base, rag_sources, scoring metadata, and evidence mapping. Do not output them.
-- Skill and recommendation values are arrays of short strings.
-- concise_dimension_assessments is an optional object; each dimension may contain score, assessment, and evidence_ids.
-- evidence_references is an array of objects with skill and evidence_ids. evidence_ids is an array of short IDs.
-- Do not wrap the six requested keys inside analysis, result, data, or output.
+- Do not wrap the object inside analysis, result, data, or output.
 
-Use these keys: matched_skills, missing_skills, unknown_skills,
-concise_dimension_assessments, evidence_references, and concise_recommendations.
+One valid JSON example:
+{{"matched_skills":["Python"],"missing_skills":["Kubernetes"],"unknown_skills":[],"concise_dimension_assessments":{{"skills_match":{{"score":80,"assessment":"Direct resume evidence.","evidence_ids":["resume"]}}}},"evidence_references":[{{"skill":"Python","evidence_ids":["resume"]}}],"unsupported_claim_candidates":[],"concise_recommendations":["Keep only verified evidence."]}}
+
+Use these keys: matched_skills, missing_skills, unknown_skills, concise_dimension_assessments, evidence_references, unsupported_claim_candidates, concise_recommendations.
 
 <USER_PROVIDED_RESUME>
 {safe_resume}

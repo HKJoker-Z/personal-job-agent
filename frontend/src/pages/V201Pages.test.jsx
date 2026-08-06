@@ -3,7 +3,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { apiJson } from "../api/client";
-import { AnalyzePage, RagSourcesSection } from "../legacy-workspace";
+import { AnalysisResult, AnalyzePage, HistoryPage, RagSourcesSection } from "../legacy-workspace";
 import { DashboardPage } from "./DashboardPage";
 import { FeatureRemovedPage, NotFoundPage } from "./FeatureStatePage";
 
@@ -59,6 +59,71 @@ describe("Version 2.0.1 simplified workspace", () => {
   it("hides RAG sources when RAG is off", () => {
     render(<RagSourcesSection ragMode="off" sources={[]} />);
     expect(screen.queryByText("RAG Sources")).not.toBeInTheDocument();
+  });
+
+  it.each(["complete", "repaired", "partial", "fallback"])(
+    "renders summary, Match Reasons, and the state badge for %s results",
+    (analysisStatus) => {
+      render(<AnalysisResult result={{
+        analysis_status: analysisStatus,
+        match_score: 65,
+        job_summary: `Synthetic summary ${analysisStatus}`,
+        match_reason: `Synthetic reason ${analysisStatus}`,
+        matched_skills: ["FastAPI"],
+        missing_skills: [],
+        scoring_breakdown: {},
+        ats_analysis: {},
+      }} />);
+      expect(screen.getByText(`Synthetic summary ${analysisStatus}`)).toBeInTheDocument();
+      expect(screen.getByText(`Synthetic reason ${analysisStatus}`)).toBeInTheDocument();
+      expect(screen.getByRole("status", { name: new RegExp(`Analysis state: ${analysisStatus}`, "i") })).toBeInTheDocument();
+    },
+  );
+
+  it("keeps both narrative sections visible for null and malformed legacy values", () => {
+    render(<AnalysisResult result={{
+      analysis_status: "fallback",
+      match_score: 0,
+      job_summary: { unexpected: "object" },
+      match_reason: null,
+      matched_skills: [],
+      missing_skills: [],
+      scoring_breakdown: {},
+      ats_analysis: {},
+    }} />);
+    expect(screen.getByText("Job Summary unavailable.")).toBeInTheDocument();
+    expect(screen.getByText("Match Reasons unavailable.")).toBeInTheDocument();
+    expect(screen.getByText("Job Summary unavailable.")).toBeVisible();
+  });
+
+  it("keeps History detail state and narrative rendering consistent", async () => {
+    global.fetch
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        total: 1,
+        items: [{ id: 12, company_name: "Synthetic Co", job_title: "Backend Engineer", match_score: 70, security_status: "passed", next_action_decision: "pending" }],
+      }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        id: 12,
+        company_name: "Synthetic Co",
+        job_title: "Backend Engineer",
+        match_score: 70,
+        analysis_status: "partial",
+        job_summary: "History summary",
+        match_reason: "History reason",
+        matched_skills: [],
+        missing_skills: [],
+        scoring_breakdown: {},
+        ats_analysis: {},
+        security_status: "passed",
+        security_scan: {},
+        next_action: {},
+      }), { status: 200 }));
+    render(<HistoryPage />);
+    expect(await screen.findByText("Synthetic Co")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "View" }));
+    expect(await screen.findByText("History summary")).toBeInTheDocument();
+    expect(screen.getByText("History reason")).toBeInTheDocument();
+    expect(screen.getByRole("status", { name: /Analysis state: partial/i })).toBeInTheDocument();
   });
 
   it.each([

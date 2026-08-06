@@ -175,7 +175,7 @@ class AnalyzeIdempotencyTest(unittest.TestCase):
             rag_top_k=5,
             project_knowledge=None,
             save_to_history=False,
-            model="deepseek-chat",
+            model="deepseek-v4-pro",
             security_policy_version="v1",
         )
         first = request_fingerprint(**values)

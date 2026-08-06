@@ -16,7 +16,7 @@ domain-separated SHA-256 hash, never the raw key.
 keys, explicit nulls, compact separators, and UTF-8. It includes effective
 Resume/JD hashes, Resume Version ID, normalized Job URL, RAG and top-k,
 Project Knowledge document/content version hash, History choice,
-`deepseek-chat`, compact-analysis contract version, and the security policy
+the validated `DEEPSEEK_MODEL`, compact-analysis contract version, and the security policy
 version. Request IDs, time, cookies, CSRF values, and generated IDs are
 excluded.
 
@@ -38,9 +38,11 @@ is held during provider I/O.
 
 Immediately before the primary call and before the optional repair call, the
 winner persists `provider_started_at`. OpenAI-compatible SDK automatic
-transport retries are disabled with `max_retries=0`. The application permits at
-most one primary call and one explicit format repair. Handled timeout, 5xx,
-invalid JSON, or repair failure can still finalize the deterministic fallback.
+transport retries are disabled with `max_retries=0`. The application permits
+two primary attempts at most and one explicit format repair, for an absolute
+maximum of three Provider calls. Handled timeout, 5xx, empty content,
+length-truncated output, invalid JSON, or repair failure can still finalize the
+deterministic fallback. A completed replay makes zero Provider calls.
 
 ## Atomic History
 
