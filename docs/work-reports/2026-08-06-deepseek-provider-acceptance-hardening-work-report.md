@@ -432,7 +432,7 @@ The four implementation commits are:
 1. 8b4fe51 — feat: add structured DeepSeek provider acceptance path
 2. aeb7473 — test: add acceptance corpus and narrative coverage
 3. 0ae5fd8 — test: add backend and frontend acceptance regressions
-4. b939e15 — docs: record DeepSeek acceptance hardening
+4. db180eb — docs: record DeepSeek acceptance hardening
 
 The final delivery-evidence update commit is added after PR creation.
 
