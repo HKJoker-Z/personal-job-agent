@@ -259,6 +259,13 @@ candidate evidence).
 
 PR title: Test: Validate DeepSeek acceptance against real provider
 Candidate PR: https://github.com/HKJoker-Z/personal-job-agent/pull/52
+Candidate PR final head at the completed check set:
+d4bf677297c8aaaefbef8f90ec95914682ad4f7a.
+
+The final GitHub check set completed CLEAN: Backend, PostgreSQL, Frontend,
+Docker, Compose, Java, candidate, smoke, OpenAPI-adjacent, repository-safety,
+and script checks passed. The application-image and integrated-backend-image
+publication jobs were skipped by design; no image was published.
 
 ## 15. Decision and rollout prerequisites
 
