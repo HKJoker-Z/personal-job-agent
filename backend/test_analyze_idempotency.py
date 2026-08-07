@@ -543,21 +543,10 @@ class AnalyzeEndpointIdempotencyTest(unittest.TestCase):
 
         content = json.dumps(
             {
-                "matched_skills": ["Python"],
-                "missing_skills": ["PostgreSQL"],
-                "unknown_skills": [],
-                "concise_dimension_assessments": {
-                    "skills_match": {
-                        "score": 70,
-                        "assessment": "Python matches.",
-                        "evidence_ids": ["resume"],
-                    }
-                },
-                "evidence_references": [
-                    {"skill": "Python", "evidence_ids": ["resume"]}
-                ],
-                "unsupported_claim_candidates": [],
-                "concise_recommendations": ["Add verified PostgreSQL evidence."],
+                "job_summary": "Python backend engineering role.",
+                "match_reasons": ["Python is present in the resume."],
+                "recommendations": [],
+                "resume_improvements": [],
             }
         )
         return ProviderAnalysisResponse(

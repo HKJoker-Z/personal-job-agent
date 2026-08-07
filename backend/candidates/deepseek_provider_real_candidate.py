@@ -45,6 +45,7 @@ from legacy_application import (
     ensure_deterministic_narratives,
     model_response_to_result,
     reconcile_result_with_rag_evidence,
+    sanitize_provider_narratives,
     scan_llm_output,
     validate_model_evidence_references,
 )
@@ -321,7 +322,17 @@ def _run_case(case: dict[str, Any], runtime_settings: Any) -> dict[str, Any]:
                     safe_content,
                     repairer=repairer,
                     metadata_out=parse_metadata,
+                    resume_text=resume_text,
+                    job_description=job_text,
                 )
+                removed_narratives = sanitize_provider_narratives(
+                    result,
+                    resume_text=resume_text,
+                    job_description=job_text,
+                    retrieved_chunks=rag_chunks,
+                )
+                if removed_narratives and status == "complete":
+                    status = "partial"
             except Exception:
                 fallback_reason = "minimum_safe_contract_failed"
                 result = None

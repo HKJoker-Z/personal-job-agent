@@ -199,6 +199,7 @@ jobs:
             ':!.env.example' ':!.env.production.example' ':!README.md' ':!docs/' \
             ':!backend/test_security_utils.py' ':!backend/test_safe_prompt.py' \
             ':!backend/evals/cases.json' ':!backend/test_evaluation_service.py' \
-            ':!backend/fixtures/deepseek_provider_acceptance_v1/corpus.json'; then
+            ':!backend/fixtures/deepseek_provider_acceptance_v1/corpus.json' \
+            ':!backend/fixtures/deepseek_provider_acceptance_v2/corpus.json'; then
             exit 1
           fi

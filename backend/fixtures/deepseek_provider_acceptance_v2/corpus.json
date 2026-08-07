@@ -1,0 +1,119 @@
+[
+  {
+    "id": "perfect_canonical_response",
+    "content": "{\"job_summary\":\"Backend role focused on reliable APIs.\",\"match_reasons\":[\"Python is listed in the supplied resume.\"],\"recommendations\":[\"Keep verified API evidence prominent.\"],\"resume_improvements\":[\"Mention the tested API project briefly.\"]}",
+    "expected_state": "complete"
+  },
+  {
+    "id": "missing_job_summary",
+    "content": "{\"match_reasons\":[\"Python is listed in the supplied resume.\"],\"recommendations\":[\"Keep verified API evidence prominent.\"],\"resume_improvements\":[]}",
+    "expected_state": "partial"
+  },
+  {
+    "id": "missing_match_reasons",
+    "content": "{\"job_summary\":\"Backend role focused on reliable APIs.\",\"recommendations\":[\"Keep verified API evidence prominent.\"],\"resume_improvements\":[]}",
+    "expected_state": "partial"
+  },
+  {
+    "id": "missing_recommendations",
+    "content": "{\"job_summary\":\"Backend role focused on reliable APIs.\",\"match_reasons\":[\"Python is listed in the supplied resume.\"],\"resume_improvements\":[]}",
+    "expected_state": "partial"
+  },
+  {
+    "id": "null_fields",
+    "content": "{\"job_summary\":null,\"match_reasons\":null,\"recommendations\":[\"Keep evidence.\"],\"resume_improvements\":null}",
+    "expected_state": "partial"
+  },
+  {
+    "id": "scalar_list_mismatches",
+    "content": "{\"job_summary\":\"Backend role.\",\"match_reasons\":\"Python is listed.\",\"recommendations\":\"Keep evidence.\",\"resume_improvements\":\"Mention the API project.\"}",
+    "expected_state": "partial"
+  },
+  {
+    "id": "supported_aliases",
+    "content": "{\"summary\":\"Backend role.\",\"reasons\":[\"Python is listed.\"],\"suggestions\":\"Keep evidence.\",\"improvements\":[\"Mention the API project.\"]}",
+    "expected_state": "partial"
+  },
+  {
+    "id": "unknown_extra_fields",
+    "content": "{\"job_summary\":\"Backend role.\",\"match_reasons\":[\"Python is listed.\"],\"recommendations\":[\"Keep evidence.\"],\"resume_improvements\":[],\"provider_score\":99,\"trace_id\":\"ignore\"}",
+    "expected_state": "partial"
+  },
+  {
+    "id": "invalid_evidence_reference",
+    "content": "{\"matched_skills\":[\"Python\"],\"missing_skills\":[],\"unknown_skills\":[],\"concise_recommendations\":[\"Keep evidence.\"],\"evidence_references\":[{\"skill\":\"Python\",\"evidence_ids\":[\"pk:999\"]}]}",
+    "expected_state": "partial",
+    "kind": "evidence"
+  },
+  {
+    "id": "unsupported_single_claim",
+    "content": "{\"job_summary\":\"Backend role.\",\"match_reasons\":[\"Python is listed.\"],\"recommendations\":[\"Keep evidence.\"],\"resume_improvements\":[\"I led 20 engineers.\"]}",
+    "expected_state": "partial",
+    "kind": "grounding"
+  },
+  {
+    "id": "invalid_single_resume_improvement",
+    "content": "{\"job_summary\":\"Backend role.\",\"match_reasons\":[\"Python is listed.\"],\"recommendations\":[\"Keep evidence.\"],\"resume_improvements\":[{\"text\":\"bad item\"},\"Mention the API project.\"]}",
+    "expected_state": "partial"
+  },
+  {
+    "id": "incorrect_model_score_ignored",
+    "content": "{\"job_summary\":\"Backend role.\",\"match_reasons\":[\"Python is listed.\"],\"recommendations\":[\"Keep evidence.\"],\"resume_improvements\":[],\"match_score\":100}",
+    "expected_state": "partial"
+  },
+  {
+    "id": "malformed_one_field_value",
+    "content": "{\"job_summary\":\"Backend role.\",\"match_reasons\":[\"Python is listed.\"],\"recommendations\":[7,\"Keep evidence.\"],\"resume_improvements\":[]}",
+    "expected_state": "partial"
+  },
+  {
+    "id": "valid_content_plus_malformed_optional",
+    "content": "{\"job_summary\":{\"unexpected\":true},\"match_reasons\":[\"Python is listed.\"],\"recommendations\":[\"Keep evidence.\"],\"resume_improvements\":[]}",
+    "expected_state": "partial"
+  },
+  {
+    "id": "minimal_meaningful_response",
+    "content": "{\"recommendations\":\"Keep verified evidence.\"}",
+    "expected_state": "partial"
+  },
+  {
+    "id": "json_surrounded_by_short_prose",
+    "content": "Here is the result: {\"job_summary\":\"Backend role.\",\"match_reasons\":[\"Python is listed.\"],\"recommendations\":[\"Keep evidence.\"],\"resume_improvements\":[]}.",
+    "expected_state": "repaired"
+  },
+  {
+    "id": "markdown_fenced_json",
+    "content": "```json\n{\"job_summary\":\"Backend role.\",\"match_reasons\":[\"Python is listed.\"],\"recommendations\":[\"Keep evidence.\"],\"resume_improvements\":[]}\n```",
+    "expected_state": "repaired"
+  },
+  {
+    "id": "severe_secret_leakage",
+    "content": "{\"job_summary\":\"token sk-test-only-1234567890abcdef\",\"recommendations\":[]}",
+    "expected_state": "fallback",
+    "kind": "security"
+  },
+  {
+    "id": "system_prompt_leakage",
+    "content": "{\"job_summary\":\"The system prompt is INTERNAL_SECURITY_MARKER_V17_DO_NOT_OUTPUT.\",\"recommendations\":[]}",
+    "expected_state": "fallback",
+    "kind": "security"
+  },
+  {
+    "id": "root_array",
+    "content": "[\"not an object\"]",
+    "expected_state": "fallback",
+    "kind": "unusable"
+  },
+  {
+    "id": "plain_prose_without_json",
+    "content": "The candidate looks relevant, but no structured object was returned.",
+    "expected_state": "fallback",
+    "kind": "unusable"
+  },
+  {
+    "id": "empty_response",
+    "content": "",
+    "expected_state": "fallback",
+    "kind": "unusable"
+  }
+]
