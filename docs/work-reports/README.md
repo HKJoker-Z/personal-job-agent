@@ -6,6 +6,7 @@ reviewable in Git history.
 
 | Date | Report |
 |---|---|
+| 2026-08-07 | [DeepSeek Authenticated Transport Attribution](2026-08-07-deepseek-authenticated-transport-attribution-work-report.md) |
 | 2026-08-07 | [DeepSeek Dedicated Direct Client](2026-08-07-deepseek-dedicated-direct-client-work-report.md) |
 | 2026-08-07 | [DeepSeek Direct Connectivity Candidate](2026-08-07-deepseek-direct-connectivity-candidate-work-report.md) |
 | 2026-08-07 | [Provider Deadline Enforcement](2026-08-07-provider-deadline-enforcement-work-report.md) |
