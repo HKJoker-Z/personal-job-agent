@@ -418,7 +418,7 @@ Compose networking, and production environment files were not changed.
 
 - `62e9d6d` — `feat: simplify DeepSeek provider acceptance contract`;
 - `0369598` — `fix: retain established prompt security boundary`;
-- report/index commit: recorded after this report is added.
+- `b421640bb9da86d090f39f0abe7c291caa152bf1` — `docs: record pragmatic DeepSeek acceptance gate`.
 
 ## 42. Pull request
 
