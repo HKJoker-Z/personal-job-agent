@@ -466,4 +466,3 @@ Backend process environment.
 - no CI job calls DeepSeek; real calls exist only behind explicit manual
   candidate/attribution opt-ins;
 - PR #57 remains open and must not be merged automatically.
-

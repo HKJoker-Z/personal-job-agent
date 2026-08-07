@@ -10,7 +10,7 @@ if [[ "${PJA_REAL_DEEPSEEK_ATTRIBUTION:-}" != "1" ]]; then
 fi
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
-artifact_dir="${PJA_ATTRIBUTION_ARTIFACT_DIR:-$(mktemp -d "${TMPDIR:-/tmp}/deepseek-attribution.XXXXXX")}" 
+artifact_dir="${PJA_ATTRIBUTION_ARTIFACT_DIR:-$(mktemp -d "${TMPDIR:-/tmp}/deepseek-attribution.XXXXXX")}"
 cleanup_artifact_dir=0
 if [[ -z "${PJA_ATTRIBUTION_ARTIFACT_DIR:-}" ]]; then
   cleanup_artifact_dir=1
