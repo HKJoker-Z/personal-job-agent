@@ -357,8 +357,9 @@ Source and delivery commits:
 - report branch: `ops/pragmatic-provider-production-candidate`;
 - initial report commit: `ab213edec1db24c3253a3eb70e9d7147cf6db3b7`;
 - report PR: https://github.com/HKJoker-Z/personal-job-agent/pull/59;
-- subsequent report metadata commit: the final documentation commit on the
-  report branch is recorded in the PR head and remains documentation-only.
+- report metadata commit: `88722ec00cf92979669537cb0e745891319e2bcb`;
+- this finalization commit is documentation-only and is the report-branch
+  follow-up to that metadata commit.
 
 ## 14. Next prerequisite and risks
 
