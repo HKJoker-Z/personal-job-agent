@@ -368,9 +368,9 @@ artifact was not accepted as a code result. The sanitized rerun passed. The
 candidate changes are under `backend/candidates` and do not alter shared
 production networking.
 
-At the final pushed head `180ceb99380ce25dca35032ceba13af89e9ecc8b`, PR #56
-was open, non-draft, and mergeable. All 20 reported checks completed with no
-failures: `backend-tests`, `complete-backend-tests`, `verify`,
+At the final code/evidence head `180ceb99380ce25dca35032ceba13af89e9ecc8b`,
+PR #56 was open, non-draft, and mergeable. All 20 reported checks completed
+with no failures: `backend-tests`, `complete-backend-tests`, `verify`,
 `isolated-candidate`, `production-assets-and-java`, `frontend-build`,
 `postgres-16-integration`, `container-smoke`, `backend-postgres`,
 `local-mode-production-assets`, `normalization-only-no-database-smoke`,
@@ -403,8 +403,9 @@ Logical commits created on the existing PR branch:
 - `a68fbb5` — `test: add direct provider connectivity harness`.
 - `b922232` — `test: cover direct provider transport isolation`.
 - `180ceb9` — `docs: record direct connectivity candidate evidence`.
-- The report/index delivery commit is the final report-bearing head shown by
-  GitHub after push; it is intentionally not rewritten or squashed.
+- `5d1ea26` — `docs: record final candidate CI state` (report-only).
+- The final report synchronization head is returned in the delivery handoff;
+  no published commit was rewritten, squashed, or rebased.
 
 Updated PR: [Fix: Enforce bounded Analyze provider deadlines — PR #56](https://github.com/HKJoker-Z/personal-job-agent/pull/56)
 
