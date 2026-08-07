@@ -36,9 +36,16 @@ MAX_PROVIDER_METADATA_TOKENS = 1_000_000
 MAX_PROVIDER_METADATA_LATENCY_MS = 300_000
 SAFE_RETRY_REASONS = {
     "connect_timeout",
+    "connect_error",
     "read_timeout",
+    "read_error",
     "write_timeout",
+    "write_error",
     "pool_timeout",
+    "remote_protocol_error",
+    "local_protocol_error",
+    "proxy_error",
+    "tls_or_connect_error",
     "provider_attempt_deadline_exhausted",
     "transient_http_429",
     "transient_http_5xx",
@@ -58,11 +65,19 @@ SAFE_TIMEOUT_CATEGORIES = {
 }
 SAFE_PROVIDER_ERROR_CATEGORIES = {
     *SAFE_TIMEOUT_CATEGORIES,
+    "connect_error",
+    "read_error",
+    "write_error",
+    "remote_protocol_error",
+    "local_protocol_error",
+    "proxy_error",
+    "tls_or_connect_error",
     "provider_attempt_deadline_exhausted",
     "provider_phase_deadline_exhausted",
     "transient_http_429",
     "transient_http_5xx",
     "transport_error",
+    "transport_error_other",
     "unknown_bounded_provider_error",
 }
 SAFE_DEADLINE_BUCKETS = {"gt_60s", "31_60s", "11_30s", "1_10s", "exhausted"}
