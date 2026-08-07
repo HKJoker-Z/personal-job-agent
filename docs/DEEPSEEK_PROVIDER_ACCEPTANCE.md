@@ -47,7 +47,24 @@ connect/read timeout, HTTP 429, HTTP 5xx, documented resource exhaustion,
 empty content, or `finish_reason=length`. The length retry is the only retry
 that increases the output budget. Backoff is bounded by
 `PROVIDER_RETRY_BACKOFF_SECONDS`, and the overall Provider deadline is bounded
-by `PROVIDER_OVERALL_DEADLINE_SECONDS`.
+by `PROVIDER_OVERALL_DEADLINE_SECONDS`. The deadline is one absolute
+monotonic-clock deadline shared by both primary attempts and the optional
+repair; each attempt receives a timeout derived from its remaining budget.
+
+The default Provider deadline remains 130 seconds. A 30-second reserve is kept
+for deterministic fallback construction, final output security processing,
+History/idempotency finalization, and response serialization. The application
+safety deadline is 175 seconds (the unchanged 180-second external client
+contract with a five-second delivery margin). A primary attempt uses a maximum
+60-second configured request budget with component limits of connect 5 seconds,
+write 10 seconds, pool 5 seconds, and a read/total-body limit derived from the
+remaining absolute deadline. The retry reserves the configured 0.25-second
+backoff; repair reserves five seconds before the finalization reserve.
+
+HTTPX read timeouts are per-read-operation, so the synchronous client also
+wraps the response byte stream with the same absolute deadline. A Provider
+response that drips chunks indefinitely cannot extend the phase by resetting a
+per-read timeout. SDK automatic retries remain zero.
 
 If the primary content is safe but cannot be parsed or validated, one
 format-only repair call is allowed. It is never a second analysis request and
@@ -119,10 +136,27 @@ to repair.
 Structured observations are bounded to model ID, thinking boolean, JSON mode,
 attempt counts, finish reason, empty-content flag, fixed retry category, parse
 outcome, fixed salvage categories, accepted/rejected field counts, state,
-fallback category, returned token usage, and duration. Prompts, Resume/JD
-text, Provider bodies, reasoning content, credentials, arbitrary exception
-text, request IDs, and content hashes are not recorded. Existing monitoring
-tables are reused; no migration is required for this metadata.
+fallback category, timeout category, remaining-deadline bucket, deadline
+exhaustion, retry/repair/fallback flags, finalization flags, client-disconnect
+flag, returned token usage, bounded attempt durations, and duration. Prompts,
+Resume/JD text, Provider bodies, reasoning content, credentials, arbitrary
+exception text, request IDs, and content hashes are not recorded. Existing
+monitoring tables are reused; no migration is required for this metadata.
+The new timing fields remain internal to monitoring observations and
+structured logs rather than the public Analyze body, preserving byte-for-byte
+stability for equivalent local results and completed idempotency replays.
+
+## Client disconnect and fallback
+
+The request remains synchronous. Disconnects are checked at async boundaries;
+the synchronous SDK call itself is not polled from another event loop. The
+transport deadline still closes a stalled Provider response, and a disconnect
+detected before Provider work selects the deterministic fallback without
+starting a call. If a caller disconnects after Provider work has begun, the
+server completes at most one bounded finalization so the idempotency record is
+not left stale. A completed replay returns the stored result and makes zero
+Provider calls. Attempt tokens continue to prevent stale workers from
+finalizing a takeover.
 
 ## Rollback and deferred experiments
 

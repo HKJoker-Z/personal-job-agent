@@ -448,7 +448,18 @@ class AnalyzeIdempotencyTest(unittest.TestCase):
         db.close()
 
     def test_sdk_transport_retries_are_zero_for_primary_and_repair(self):
-        with patch.dict(os.environ, {"DEEPSEEK_API_KEY": "test-only-key"}):
+        with patch.dict(
+            os.environ,
+            {
+                "DEEPSEEK_API_KEY": "test-only-key",
+                "HTTP_PROXY": "",
+                "HTTPS_PROXY": "",
+                "ALL_PROXY": "",
+                "http_proxy": "",
+                "https_proxy": "",
+                "all_proxy": "",
+            },
+        ):
             with patch("legacy_application.OpenAI") as openai:
                 openai.return_value.chat.completions.create.side_effect = RuntimeError("offline")
                 with self.assertRaises(ModelOutputError):
@@ -776,6 +787,7 @@ class AnalyzeEndpointIdempotencyTest(unittest.TestCase):
             {
                 "PROVIDER_OVERALL_DEADLINE_SECONDS": "10",
                 "REQUEST_TIMEOUT_SECONDS": "5",
+                "DEEPSEEK_API_KEY": "test-only-key",
             },
         ), patch("legacy_application.OpenAI") as openai:
             response = self.request(key, save=False)

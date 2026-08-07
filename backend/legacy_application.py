@@ -1688,10 +1688,10 @@ def call_deepseek_raw(
             if usage_out is not None:
                 usage_out.update(metadata)
             logger.warning(
-                "DeepSeek call failed attempt=%s error_code=%s error_type=%s latency_ms=%s",
+                "DeepSeek call failed attempt=%s error_code=%s retry_category=%s latency_ms=%s",
                 attempt,
                 MODEL_PROVIDER_ERROR,
-                type(exc).__name__,
+                reason or "provider_call_failed",
                 latency_ms,
             )
             if deadline.expired():
@@ -3763,8 +3763,8 @@ async def analyze(
             "Provider was unavailable; continuing with deterministic local analysis.",
         )
         logger.warning(
-            "DeepSeek analysis unavailable; local fallback selected error_type=%s",
-            type(exc).__name__,
+            "DeepSeek analysis unavailable; local fallback selected fallback_category=%s",
+            context.model_metadata.get("fallback_reason") or "provider_call_failed",
         )
 
     if provider_available:
@@ -3940,7 +3940,10 @@ async def analyze(
                 "validate_structured_output",
                 "Deterministic fallback output has the stable analysis structure.",
             )
-            logger.warning("DeepSeek response fallback selected error_type=%s", type(exc).__name__)
+            logger.warning(
+                "DeepSeek response fallback selected fallback_category=%s",
+                context.model_metadata.get("fallback_reason") or "minimum_safe_contract_failed",
+            )
     else:
         context.json_parse_success = False
         result = local_fallback_result(

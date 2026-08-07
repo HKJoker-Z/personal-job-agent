@@ -6,6 +6,7 @@ reviewable in Git history.
 
 | Date | Report |
 |---|---|
+| 2026-08-07 | [Provider Deadline Enforcement](2026-08-07-provider-deadline-enforcement-work-report.md) |
 | 2026-08-06 | [Version 2.0.6 Release (NO-GO)](2026-08-06-v2.0.6-release-work-report.md) |
 | 2026-08-06 | [DeepSeek Provider Production Candidate](2026-08-06-deepseek-provider-production-candidate-work-report.md) |
 | 2026-08-06 | [DeepSeek Provider Real Candidate Rerun](2026-08-06-deepseek-provider-real-candidate-rerun-work-report.md) |

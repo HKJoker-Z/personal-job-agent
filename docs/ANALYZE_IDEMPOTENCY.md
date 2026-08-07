@@ -44,6 +44,16 @@ maximum of three Provider calls. Handled timeout, 5xx, empty content,
 length-truncated output, invalid JSON, or repair failure can still finalize the
 deterministic fallback. A completed replay makes zero Provider calls.
 
+The Provider boundary uses one absolute `time.monotonic()` deadline. The
+default is 130 seconds and is shared by the first primary call, its one
+application retry, retry backoff, response-body reading, local acceptance
+parsing, and the one format-only repair. Each HTTP call receives a timeout
+derived from the remaining deadline rather than a fresh 60-second timeout.
+The transport also enforces the absolute deadline while reading a non-streaming
+response body. No retry or repair starts unless its bounded call can fit before
+the 30-second fallback/finalization reserve; the repair has an additional
+five-second minimum reserve and retry backoff is reserved separately.
+
 ## Atomic History
 
 For `save_to_history=true`, the History row, normalized response,
@@ -63,6 +73,15 @@ indeterminate, expired pre-provider rows become failed, and only expired
 terminal rows are deleted. Expiry/status and status/lease indexes keep work
 bounded. JSON storage means PostgreSQL growth follows request volume and
 response size; retention and the 512 KiB cap bound that exposure.
+
+When the caller disconnects, the request does not start a new retry after the
+authoritative deadline. A disconnect detectable before Provider work selects
+the existing deterministic fallback and still finalizes the current claim once.
+If the disconnect occurs during the synchronous SDK call, the transport
+deadline bounds the call; after control returns, the existing attempt token
+guards the single History/idempotency finalization. A completed result replays
+exactly; an ambiguous persistence state retains the existing
+`IDEMPOTENCY_OUTCOME_UNKNOWN` contract.
 
 ## Security
 
