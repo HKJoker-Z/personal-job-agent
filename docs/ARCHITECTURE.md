@@ -76,13 +76,14 @@ decision ownership.
 
 The backend makes a bounded JSON Output call to the validated
 `DEEPSEEK_MODEL` (default quality candidate `deepseek-v4-pro`) through
-DeepSeek's OpenAI-compatible API. The model proposes compact skill judgments,
-assessments, evidence references, and recommendations. The request disables
-thinking by default, keeps SDK retries at zero, and allows one bounded
-transient retry plus one format-only repair. The backend accepts standard JSON,
-performs field-level salvage, reconciles evidence, and deterministically fills
-Job Summary and Match Reasons. If the provider or response remains unusable, a
-deterministic local keyword fallback returns the stable result shape. See
+DeepSeek's OpenAI-compatible API. The model proposes only shallow narrative
+fields: Job Summary, Match Reasons, Recommendations, and Resume Improvements.
+The request disables thinking by default, keeps SDK retries at zero, and allows
+one bounded transient retry plus one format-only repair. The backend derives
+skill overlap, validates evidence, recalculates scoring, performs field-level
+salvage, and deterministically completes unavailable narratives. If the
+provider or response remains unusable, a deterministic local keyword fallback
+returns the stable result shape. See
 [`DEEPSEEK_PROVIDER_ACCEPTANCE.md`](DEEPSEEK_PROVIDER_ACCEPTANCE.md) for the
 state and security contract.
 

@@ -55,6 +55,24 @@ SAFE_TIMEOUT_CATEGORIES = {
 }
 SAFE_DEADLINE_BUCKETS = {"gt_60s", "31_60s", "11_30s", "1_10s", "exhausted"}
 
+# The active Provider contract is deliberately shallow.  The fields below are
+# the only fields the prompt asks DeepSeek to generate.  The older compact
+# skill/dimension/evidence fields remain accepted as bounded compatibility
+# input for already-created fixtures and operator experiments, but they are
+# not authoritative in the active Analyze path.
+PROVIDER_CANONICAL_FIELDS = (
+    "job_summary",
+    "match_reasons",
+    "recommendations",
+    "resume_improvements",
+)
+PROVIDER_FIELD_ALIASES = {
+    "job_summary": ("jobSummary", "summary"),
+    "match_reasons": ("matchReasons", "reasons", "match_reason", "matchReason"),
+    "recommendations": ("suggestions", "next_steps", "nextSteps", "concise_recommendations"),
+    "resume_improvements": ("resumeImprovements", "resume_suggestions", "improvements"),
+}
+
 CANONICAL_ANALYSIS_FIELDS = (
     "matched_skills",
     "missing_skills",
@@ -133,10 +151,9 @@ class SalvagedCompactAnalysis:
     """Deterministic field-level normalization before Pydantic validation.
 
     The minimum safe acceptance contract is deliberately semantic rather than a
-    field count: at least one skill-state judgment, dimension assessment, or
-    concise recommendation must survive bounded normalization. Backend-owned
-    scoring, evidence reconciliation, Job Summary, and Match Reasons are then
-    derived only from validated local data.
+    field count: at least one bounded narrative or legacy judgment must survive
+    normalization. Backend-owned scoring, evidence reconciliation, Job Summary,
+    and Match Reasons are then completed or derived from validated local data.
     """
 
     data: dict[str, Any]
@@ -274,6 +291,35 @@ def _salvage_string_list(
                 rejected[0] += len(value) - maximum_items
             break
     return result
+
+
+def _salvage_narrative_field(
+    value: Any,
+    *,
+    list_field: bool,
+    maximum_items: int,
+    maximum_length: int,
+    actions: list[str],
+    rejected: list[int],
+) -> str | list[str]:
+    """Normalize the active shallow narrative contract without rejecting peers."""
+    if list_field:
+        return _salvage_string_list(
+            value,
+            maximum_items=maximum_items,
+            maximum_length=maximum_length,
+            actions=actions,
+            rejected=rejected,
+        )
+    if value is None:
+        _note_action(actions, "null_field_defaulted")
+        return ""
+    clean = _clean_salvage_string(value, maximum=maximum_length, actions=actions)
+    if clean is None:
+        _note_action(actions, "invalid_field_defaulted")
+        rejected[0] += 1
+        return ""
+    return clean
 
 
 def _salvage_evidence_ids(
@@ -529,69 +575,124 @@ def salvage_compact_analysis(data: dict[str, Any]) -> SalvagedCompactAnalysis:
     rejected = [0]
     normalized: dict[str, Any] = {}
     known_keys = set(CANONICAL_ANALYSIS_FIELDS)
+    known_keys.update(PROVIDER_CANONICAL_FIELDS)
     known_keys.update(OPTIONAL_PROVIDER_NARRATIVE_FIELDS)
     for aliases in TOP_LEVEL_FIELD_ALIASES.values():
+        known_keys.update(aliases)
+    for aliases in PROVIDER_FIELD_ALIASES.values():
         known_keys.update(aliases)
     for key in data:
         if key not in known_keys:
             _note_action(actions, "unknown_top_level_field_ignored")
             rejected[0] += 1
 
-    for field_name in CANONICAL_ANALYSIS_FIELDS:
+    legacy_present = any(
+        key in data
+        for key in (
+            "matched_skills", "matchedSkills", "matches",
+            "missing_skills", "missingSkills", "gaps",
+            "unknown_skills", "unknownSkills", "unknowns",
+            "concise_dimension_assessments", "dimension_assessments",
+            "dimensionAssessments", "assessments", "dimensions",
+            "evidence_references", "evidenceReferences", "evidence_mapping", "evidenceMapping",
+            "unsupported_claim_candidates", "unsupportedCandidates", "unsupported_claims",
+            "concise_recommendations",
+        )
+    )
+
+    # Normalize the active four-field contract first.  A legacy response is
+    # allowed to remain complete for compatibility; a new response that omits
+    # one of these optional narrative fields becomes partial after defaults.
+    active_action_start = len(actions)
+    for field_name in PROVIDER_CANONICAL_FIELDS:
         source_key = field_name if field_name in data else next(
-            (alias for alias in TOP_LEVEL_FIELD_ALIASES[field_name] if alias in data),
+            (alias for alias in PROVIDER_FIELD_ALIASES[field_name] if alias in data),
             None,
         )
+        list_field = field_name != "job_summary"
         if source_key is None:
-            _note_action(
-                actions,
-                "missing_required_field_defaulted"
-                if field_name in REQUIRED_ANALYSIS_FIELDS
-                else "missing_optional_field_defaulted",
-            )
-            normalized[field_name] = {} if field_name == "concise_dimension_assessments" else []
+            if not legacy_present:
+                _note_action(actions, "missing_optional_field_defaulted")
+            normalized[field_name] = [] if list_field else ""
             continue
-        if source_key != field_name:
+        if source_key != field_name and not legacy_present:
             _note_action(actions, "field_alias_normalized")
-        value = data[source_key]
-        if field_name in {
-            "matched_skills", "missing_skills", "unknown_skills"
-        }:
-            normalized[field_name] = _salvage_string_list(
-                value,
-                maximum_items=12 if field_name != "unknown_skills" else 10,
-                maximum_length=80,
-                actions=actions,
-                rejected=rejected,
+        normalized[field_name] = _salvage_narrative_field(
+            data[source_key],
+            list_field=list_field,
+            maximum_items={
+                "match_reasons": 5,
+                "recommendations": 5,
+                "resume_improvements": 4,
+            }.get(field_name, 1),
+            maximum_length={
+                "job_summary": 480,
+                "match_reasons": 180,
+                "recommendations": 180,
+                "resume_improvements": 220,
+            }[field_name],
+            actions=actions,
+            rejected=rejected,
+        )
+    if legacy_present:
+        del actions[active_action_start:]
+
+    if legacy_present:
+        for field_name in CANONICAL_ANALYSIS_FIELDS:
+            source_key = field_name if field_name in data else next(
+                (alias for alias in TOP_LEVEL_FIELD_ALIASES[field_name] if alias in data),
+                None,
             )
-        elif field_name == "concise_recommendations":
-            normalized[field_name] = _salvage_string_list(
-                value,
-                maximum_items=5,
-                maximum_length=180,
-                actions=actions,
-                rejected=rejected,
-            )
-        elif field_name == "unsupported_claim_candidates":
-            normalized[field_name] = _salvage_string_list(
-                value,
-                maximum_items=5,
-                maximum_length=240,
-                actions=actions,
-                rejected=rejected,
-            )
-        elif field_name == "concise_dimension_assessments":
-            normalized[field_name] = _salvage_dimensions(
-                value,
-                actions=actions,
-                rejected=rejected,
-            )
-        else:
-            normalized[field_name] = _salvage_evidence_references(
-                value,
-                actions=actions,
-                rejected=rejected,
-            )
+            if source_key is None:
+                _note_action(
+                    actions,
+                    "missing_required_field_defaulted"
+                    if field_name in REQUIRED_ANALYSIS_FIELDS
+                    else "missing_optional_field_defaulted",
+                )
+                normalized[field_name] = {} if field_name == "concise_dimension_assessments" else []
+                continue
+            if source_key != field_name:
+                _note_action(actions, "field_alias_normalized")
+            value = data[source_key]
+            if field_name in {
+                "matched_skills", "missing_skills", "unknown_skills"
+            }:
+                normalized[field_name] = _salvage_string_list(
+                    value,
+                    maximum_items=12 if field_name != "unknown_skills" else 10,
+                    maximum_length=80,
+                    actions=actions,
+                    rejected=rejected,
+                )
+            elif field_name == "concise_recommendations":
+                normalized[field_name] = _salvage_string_list(
+                    value,
+                    maximum_items=5,
+                    maximum_length=180,
+                    actions=actions,
+                    rejected=rejected,
+                )
+            elif field_name == "unsupported_claim_candidates":
+                normalized[field_name] = _salvage_string_list(
+                    value,
+                    maximum_items=5,
+                    maximum_length=240,
+                    actions=actions,
+                    rejected=rejected,
+                )
+            elif field_name == "concise_dimension_assessments":
+                normalized[field_name] = _salvage_dimensions(
+                    value,
+                    actions=actions,
+                    rejected=rejected,
+                )
+            else:
+                normalized[field_name] = _salvage_evidence_references(
+                    value,
+                    actions=actions,
+                    rejected=rejected,
+                )
 
     # The active prompt intentionally keeps these backend-completed fields out
     # of the requested compact model contract. Accept them only as bounded
@@ -641,7 +742,14 @@ def salvage_warning_messages(action_codes: Any) -> list[str]:
 
 
 def compact_has_meaningful_analysis(compact: "CompactAnalysisOutput") -> bool:
-    """Minimum safe acceptance: retain a judgment, not merely a JSON object."""
+    """Minimum safe acceptance: retain useful narrative or a legacy judgment."""
+    if (
+        compact.job_summary.strip()
+        or compact.match_reasons
+        or compact.recommendations
+        or compact.resume_improvements
+    ):
+        return True
     assessments = compact.concise_dimension_assessments
     meaningful_assessment = any(
         getattr(assessments, key).assessment or getattr(assessments, key).score > 0
@@ -774,9 +882,25 @@ class CompactEvidenceReference(BaseModel):
 
 
 class CompactAnalysisOutput(BaseModel):
-    """The small set of judgments requested from the model."""
+    """The active shallow contract plus bounded legacy compatibility fields."""
 
     model_config = ConfigDict(extra="ignore", str_strip_whitespace=True, populate_by_name=True)
+
+    job_summary: Annotated[str, Field(max_length=480)] = Field(
+        default="", validation_alias=AliasChoices("job_summary", "jobSummary", "summary")
+    )
+    match_reasons: list[ConciseRecommendation] = Field(
+        default_factory=list,
+        validation_alias=AliasChoices("match_reasons", "matchReasons", "reasons", "match_reason", "matchReason"),
+    )
+    recommendations: list[ConciseRecommendation] = Field(
+        default_factory=list,
+        validation_alias=AliasChoices("recommendations", "suggestions", "next_steps", "nextSteps"),
+    )
+    resume_improvements: list[Annotated[str, Field(max_length=220)]] = Field(
+        default_factory=list,
+        validation_alias=AliasChoices("resume_improvements", "resumeImprovements", "resume_suggestions", "improvements"),
+    )
 
     matched_skills: list[ConciseSkill] = Field(
         default_factory=list, validation_alias=AliasChoices("matched_skills", "matchedSkills", "matches")
@@ -812,6 +936,16 @@ class CompactAnalysisOutput(BaseModel):
     )
     @classmethod
     def list_defaults(cls, value: Any) -> Any:
+        return _default_for_list(value)
+
+    @field_validator("job_summary", mode="before")
+    @classmethod
+    def clean_job_summary(cls, value: Any) -> str:
+        return _clean_text(value, 480)
+
+    @field_validator("match_reasons", "recommendations", "resume_improvements", mode="before")
+    @classmethod
+    def narrative_list_defaults(cls, value: Any) -> Any:
         return _default_for_list(value)
 
     @field_validator("evidence_references", mode="before")
@@ -859,6 +993,16 @@ class CompactAnalysisOutput(BaseModel):
     def clean_recommendations(cls, value: list[str]) -> list[str]:
         return list(dict.fromkeys(_clean_text(item, 180) for item in value if _clean_text(item, 180)))[:5]
 
+    @field_validator("match_reasons", mode="after")
+    @classmethod
+    def clean_match_reasons(cls, value: list[str]) -> list[str]:
+        return list(dict.fromkeys(_clean_text(item, 180) for item in value if _clean_text(item, 180)))[:5]
+
+    @field_validator("resume_improvements", mode="after")
+    @classmethod
+    def clean_resume_improvements(cls, value: list[str]) -> list[str]:
+        return list(dict.fromkeys(_clean_text(item, 220) for item in value if _clean_text(item, 220)))[:4]
+
     @field_validator("evidence_references", mode="after")
     @classmethod
     def dedupe_references(cls, value: list[CompactEvidenceReference]) -> list[CompactEvidenceReference]:
@@ -870,6 +1014,14 @@ class CompactAnalysisOutput(BaseModel):
                 seen.add(key)
                 result.append(item)
         return result[:12]
+
+    @model_validator(mode="after")
+    def synchronize_recommendation_compatibility(self) -> "CompactAnalysisOutput":
+        if not self.recommendations and self.concise_recommendations:
+            self.recommendations = list(self.concise_recommendations)
+        if not self.concise_recommendations and self.recommendations:
+            self.concise_recommendations = list(self.recommendations)
+        return self
 
     @model_validator(mode="after")
     def require_some_analysis(self) -> "CompactAnalysisOutput":
@@ -1077,6 +1229,9 @@ def _first_balanced_object(text: str) -> str | None:
 
 def _unwrap_analysis_object(value: dict[str, Any]) -> tuple[dict[str, Any], bool]:
     expected = {
+        "job_summary", "jobSummary", "summary", "match_reasons", "matchReasons", "reasons",
+        "match_reason", "matchReason", "recommendations", "suggestions", "next_steps", "nextSteps",
+        "resume_improvements", "resumeImprovements", "resume_suggestions", "improvements",
         "matched_skills", "matchedSkills", "matches", "missing_skills", "missingSkills", "gaps",
         "unknown_skills", "unknownSkills", "unknowns", "concise_recommendations", "recommendations",
         "suggestions", "next_steps", "nextSteps", "concise_dimension_assessments",
@@ -1145,15 +1300,19 @@ def parse_model_json(raw_response: str) -> dict[str, Any]:
 
 def compact_analysis_warnings(data: dict[str, Any]) -> list[str]:
     aliases = {
+        field_name: set(field_aliases)
+        for field_name, field_aliases in PROVIDER_FIELD_ALIASES.items()
+    }
+    aliases.update({
         "matched_skills": {"matchedSkills", "matches"},
         "missing_skills": {"missingSkills", "gaps"},
         "unknown_skills": {"unknownSkills", "unknowns"},
         "concise_dimension_assessments": {"dimension_assessments", "dimensionAssessments", "assessments", "dimensions"},
         "evidence_references": {"evidenceReferences", "evidence_mapping", "evidenceMapping"},
-        "concise_recommendations": {"recommendations", "suggestions", "next_steps", "nextSteps"},
-    }
+        "concise_recommendations": {"concise_recommendations"},
+    })
     warnings: list[str] = []
-    core = ("matched_skills", "missing_skills", "unknown_skills", "concise_recommendations")
+    core = ("job_summary", "match_reasons", "recommendations", "resume_improvements")
     missing = [key for key in core if key not in data and not aliases[key].intersection(data)]
     if missing:
         warnings.append("Some optional model fields were missing and safe defaults were used: " + ", ".join(missing) + ".")
@@ -1165,7 +1324,10 @@ def compact_analysis_warnings(data: dict[str, Any]) -> list[str]:
 
 
 def validate_compact_analysis(data: dict[str, Any]) -> CompactAnalysisOutput:
+    if not isinstance(data, dict):
+        raise ModelOutputError(MODEL_OUTPUT_SCHEMA_INVALID)
+    salvaged = salvage_compact_analysis(data)
     try:
-        return CompactAnalysisOutput.model_validate(data)
+        return CompactAnalysisOutput.model_validate(salvaged.data)
     except ValidationError as exc:
         raise ModelOutputError(MODEL_OUTPUT_SCHEMA_INVALID) from exc

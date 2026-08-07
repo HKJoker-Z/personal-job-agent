@@ -49,6 +49,7 @@ from analysis_fallback import (
     deterministic_job_summary,
     deterministic_match_reasons,
     deterministic_scoring,
+    keyword_skill_states,
     local_fallback_result,
     normalize_analysis_text,
     structure_aware_truncate,
@@ -938,10 +939,19 @@ def ensure_deterministic_narratives(result: dict[str, Any], job_description: str
 
 def compact_analysis_to_result(
     analysis: CompactAnalysisOutput,
+    *,
+    resume_text: str | None = None,
+    job_description: str | None = None,
 ) -> dict[str, Any]:
-    """Convert the tolerant model contract into the stable frontend contract."""
+    """Convert the Provider contract into the stable frontend contract.
+
+    In the active path, skill states are derived from the sanitized Resume/JD
+    and the Provider supplies only bounded narrative material.  Omitting the
+    context preserves the older conversion behavior for compatibility tests and
+    previously recorded fixtures.
+    """
     compact = analysis.model_dump()
-    dimensions = compact["concise_dimension_assessments"]
+    dimensions = compact.get("concise_dimension_assessments") or {}
     scoring_breakdown = {
         key: {
             "score": value["score"],
@@ -949,21 +959,39 @@ def compact_analysis_to_result(
             "evidence": list(value["evidence_ids"]),
         }
         for key, value in dimensions.items()
+        if isinstance(value, dict)
     }
-    matched_skills = list(compact["matched_skills"])
-    missing_skills = list(compact["missing_skills"])
-    unknown_skills = list(compact["unknown_skills"])
+    if resume_text is not None and job_description is not None:
+        matched_skills, missing_skills = keyword_skill_states(resume_text, job_description)
+        unknown_skills: list[str] = []
+    else:
+        matched_skills = list(compact.get("matched_skills") or [])
+        missing_skills = list(compact.get("missing_skills") or [])
+        unknown_skills = list(compact.get("unknown_skills") or [])
+
+    recommendations = list(
+        compact.get("recommendations")
+        or compact.get("concise_recommendations")
+        or []
+    )
+    resume_improvements = list(compact.get("resume_improvements") or [])
+    provider_match_reasons = list(compact.get("match_reasons") or [])
+    provider_match_reason = " ".join(provider_match_reasons).strip()
+    provider_summary = compact.get("job_summary") or ""
+    resume_suggestions = list(dict.fromkeys([*recommendations, *resume_improvements]))
     result = normalize_result(
         {
             "matched_skills": matched_skills,
             "missing_skills": missing_skills,
-            "resume_suggestions": compact["concise_recommendations"],
+            "resume_suggestions": resume_suggestions,
+            "job_summary": provider_summary,
+            "match_reason": provider_match_reason,
             "scoring_breakdown": scoring_breakdown,
             "ats_analysis": {
                 "important_keywords": [*matched_skills, *missing_skills, *unknown_skills],
                 "matched_keywords": matched_skills,
                 "missing_keywords": [*missing_skills, *unknown_skills],
-                "keyword_suggestions": compact["concise_recommendations"],
+                "keyword_suggestions": recommendations,
             },
             "cover_letter": "",
             "upgraded_resume_bullets": [],
@@ -972,9 +1000,19 @@ def compact_analysis_to_result(
         apply_rag_corrections=False,
     )
     result["unknown_skills"] = unknown_skills
-    result["recommendations"] = list(compact["concise_recommendations"])
-    result["_model_evidence_references"] = compact["evidence_references"]
-    result["_unsupported_claim_candidates"] = compact["unsupported_claim_candidates"]
+    result["recommendations"] = recommendations
+    result["resume_suggestions"] = resume_suggestions
+    if resume_text is not None and job_description is not None:
+        if not normalize_string(result.get("job_summary")).strip():
+            result["job_summary"] = deterministic_job_summary(job_description)
+        if not normalize_string(result.get("match_reason")).strip():
+            result["match_reason"] = deterministic_match_reasons(
+                scoring_breakdown,
+                matched_skills,
+                missing_skills,
+            )
+    result["_model_evidence_references"] = compact.get("evidence_references") or []
+    result["_unsupported_claim_candidates"] = compact.get("unsupported_claim_candidates") or []
     return result
 
 
@@ -1229,6 +1267,73 @@ def enforce_analysis_grounding(
         )
 
 
+def sanitize_provider_narratives(
+    result: dict[str, Any],
+    *,
+    resume_text: str,
+    job_description: str,
+    retrieved_chunks: list[dict[str, Any]],
+) -> int:
+    """Remove only unsupported narrative sentences while retaining safe peers."""
+    sources = [
+        EvidenceSource("resume", None, None, resume_text),
+        EvidenceSource("job_description", None, None, job_description),
+    ]
+    sources.extend(
+        EvidenceSource(
+            "project_knowledge",
+            str(chunk.get("chunk_id") or "") or None,
+            None,
+            normalize_string(chunk.get("content")),
+        )
+        for chunk in retrieved_chunks
+    )
+
+    def clean_text(value: Any) -> tuple[str, int]:
+        if not isinstance(value, str) or not value.strip():
+            return "", 0
+        kept: list[str] = []
+        removed = 0
+        for sentence in re.split(r"(?<=[.!?。！？])\s+|\n+", value):
+            sentence = sentence.strip()
+            if not sentence:
+                continue
+            links = validate_claims(sentence, sources)
+            if any(item.get("support_status") in {"unsupported", "partially_supported"} for item in links):
+                removed += 1
+                continue
+            kept.append(sentence)
+        return " ".join(kept)[:480], removed
+
+    def clean_list(value: Any) -> tuple[list[str], int]:
+        if not isinstance(value, list):
+            return [], 0
+        kept: list[str] = []
+        removed = 0
+        for item in value:
+            clean, count = clean_text(item)
+            removed += count
+            if clean:
+                kept.append(clean)
+        return list(dict.fromkeys(kept)), removed
+
+    removed_total = 0
+    summary, removed = clean_text(result.get("job_summary"))
+    removed_total += removed
+    if isinstance(result.get("job_summary"), str):
+        result["job_summary"] = summary
+    reason, removed = clean_text(result.get("match_reason"))
+    removed_total += removed
+    if isinstance(result.get("match_reason"), str):
+        result["match_reason"] = reason
+    for field_name in ("recommendations", "resume_suggestions"):
+        cleaned, removed = clean_list(result.get(field_name))
+        removed_total += removed
+        if isinstance(result.get(field_name), list):
+            result[field_name] = cleaned
+    return removed_total
+
+
 def provider_retry_reason(exc: Exception | ModelOutputError) -> str | None:
     """Return a fixed retry category without inspecting or logging exception text."""
     cause = getattr(exc, "__cause__", None)
@@ -1463,19 +1568,10 @@ def call_deepseek_raw(
         if runtime_settings.app_env == "production":
             raise HTTPException(status_code=500, detail="Mock provider is unavailable in production.")
         content = json.dumps({
-            "matched_skills": ["FastAPI"],
-            "missing_skills": ["PostgreSQL", "RAG"],
-            "unknown_skills": [],
-            "concise_dimension_assessments": {
-                "skills_match": {"score": 60, "assessment": "FastAPI is supported.", "evidence_ids": ["resume"]},
-                "project_experience": {"score": 0, "assessment": "No project evidence was used.", "evidence_ids": []},
-                "education": {"score": 0, "assessment": "No education evidence.", "evidence_ids": []},
-                "work_experience": {"score": 20, "assessment": "Resume evidence is limited.", "evidence_ids": ["resume"]},
-                "keyword_match": {"score": 60, "assessment": "FastAPI matches the job input.", "evidence_ids": ["resume"]},
-            },
-            "evidence_references": [{"skill": "FastAPI", "evidence_ids": ["resume"]}],
-            "unsupported_claim_candidates": [],
-            "concise_recommendations": ["Add only verified project evidence."],
+            "job_summary": "A concise comparison of the supplied resume and role.",
+            "match_reasons": ["Use only the supplied resume and role evidence."],
+            "recommendations": ["Keep verified project evidence prominent."],
+            "resume_improvements": [],
         })
         metadata = safe_model_metadata({
             **base_metadata,
@@ -1769,9 +1865,8 @@ def call_deepseek_repair(
     repair_tokens = runtime_settings.model_repair_output_tokens
     repair_prompt = (
         "Convert the model text below into one concise JSON object. Preserve only explicit analysis; "
-        "do not add facts. Use keys matched_skills, missing_skills, unknown_skills, "
-        "concise_dimension_assessments, evidence_references, unsupported_claim_candidates, "
-        "and concise_recommendations. The final content must be exactly one JSON object; "
+        "do not add facts. Use only job_summary, match_reasons, recommendations, and "
+        "resume_improvements. The Backend owns skills, evidence, and scores. The final content must be exactly one JSON object; "
         "do not use Markdown fences or prose outside it.\n\n"
         + str(raw_response or "")[:12_000]
     )
@@ -1910,6 +2005,8 @@ def model_response_to_result(
     *,
     repairer: Any | None = None,
     metadata_out: dict[str, Any] | None = None,
+    resume_text: str | None = None,
+    job_description: str | None = None,
 ) -> tuple[dict[str, Any], str, list[str]]:
     """Parse locally first, then perform at most one model format repair."""
     try:
@@ -1932,7 +2029,11 @@ def model_response_to_result(
             status = "repaired"
         else:
             status = "complete"
-        result = compact_analysis_to_result(compact)
+        result = compact_analysis_to_result(
+            compact,
+            resume_text=resume_text,
+            job_description=job_description,
+        )
         for field_name in OPTIONAL_PROVIDER_NARRATIVE_FIELDS:
             if isinstance(salvaged.data.get(field_name), str) and salvaged.data[field_name]:
                 result[field_name] = salvaged.data[field_name]
@@ -1965,7 +2066,11 @@ def model_response_to_result(
             "repair_attempt_count": 1,
         })
     status = "partial" if salvaged.action_codes else "repaired"
-    result = compact_analysis_to_result(compact)
+    result = compact_analysis_to_result(
+        compact,
+        resume_text=resume_text,
+        job_description=job_description,
+    )
     for field_name in OPTIONAL_PROVIDER_NARRATIVE_FIELDS:
         if isinstance(salvaged.data.get(field_name), str) and salvaged.data[field_name]:
             result[field_name] = salvaged.data[field_name]
@@ -2002,6 +2107,8 @@ def analyze_with_deepseek(
             raw_response,
             deadline_monotonic=provider_deadline.absolute_deadline,
         ),
+        resume_text=resume_text,
+        job_description=job_description,
     )
     validate_model_evidence_references(
         result,
@@ -3878,7 +3985,21 @@ async def analyze(
                 context.llm_raw_response,
                 repairer=repairer,
                 metadata_out=parse_metadata,
+                resume_text=context.sanitized_resume_text,
+                job_description=context.sanitized_job_text,
             )
+            removed_narratives = sanitize_provider_narratives(
+                result,
+                resume_text=context.sanitized_resume_text,
+                job_description=context.sanitized_job_text,
+                retrieved_chunks=context.retrieved_chunks,
+            )
+            if removed_narratives:
+                parsed_warnings.append(
+                    "Unsupported narrative claims were removed while preserving the safe analysis."
+                )
+                if analysis_status == "complete":
+                    analysis_status = "partial"
             context.model_metadata = safe_model_metadata({
                 **context.model_metadata,
                 **parse_metadata,

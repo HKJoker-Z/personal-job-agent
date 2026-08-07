@@ -14,7 +14,7 @@ const analysisStages = [
   {
     number: "03",
     title: "DeepSeek advisory analysis",
-    text: "DeepSeek proposes compact judgments and recommendations. It does not own authorization, trusted sources, persistence, or the final score.",
+    text: "DeepSeek proposes shallow narrative fields and recommendations. The backend owns skill overlap, evidence, authorization, persistence, and the final score.",
   },
   {
     number: "04",
