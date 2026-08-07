@@ -6,6 +6,7 @@ reviewable in Git history.
 
 | Date | Report |
 |---|---|
+| 2026-08-06 | [DeepSeek Provider Production Candidate](2026-08-06-deepseek-provider-production-candidate-work-report.md) |
 | 2026-08-06 | [DeepSeek Provider Real Candidate Rerun](2026-08-06-deepseek-provider-real-candidate-rerun-work-report.md) |
 | 2026-08-06 | [DeepSeek Provider Real Candidate Validation](2026-08-06-deepseek-provider-real-candidate-work-report.md) |
 | 2026-08-06 | [DeepSeek Provider Acceptance Hardening v1](2026-08-06-deepseek-provider-acceptance-hardening-work-report.md) |

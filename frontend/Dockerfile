@@ -10,7 +10,7 @@ COPY frontend/vite.config.js ./vite.config.js
 COPY frontend/src/ ./src/
 RUN npm run build
 
-FROM nginxinc/nginx-unprivileged:1.27-alpine AS runtime
+FROM nginxinc/nginx-unprivileged:alpine@sha256:a6c3ec0c0d249d68b0682df854d4a9e222b90fb607dc3fcf2f1d2fcbc85d347e AS runtime
 
 ARG APP_VERSION=2.0.5
 
