@@ -419,7 +419,11 @@ PR #57 starting head: `615cd71bc1eb2b36204ff5fd30926db608478f15`.
 
 Diagnostic implementation commit: `a4b8d65` (`test: attribute DeepSeek
 authenticated transport failures`). The report/index commit and final PR head
-are recorded in the final PR metadata after this report is committed.
+are:
+
+- report/index commit: `d6559f5de1708e8d841753d35f52ce2e3800d3e0`;
+- workflow-whitespace correction: `4d31d5a1301eed3f47c59707c4c4692994afcf76`;
+- final PR #57 head: `4d31d5a1301eed3f47c59707c4c4692994afcf76`.
 
 PR URL: https://github.com/HKJoker-Z/personal-job-agent/pull/57
 
