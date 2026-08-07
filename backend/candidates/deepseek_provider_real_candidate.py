@@ -469,6 +469,22 @@ def _case_record(
         _safe_int(repair_metadata.get("repair_attempt_count")),
         _safe_int(parse_metadata.get("repair_attempt_count")),
     ))
+    active_provider_durations_ms: list[float] = []
+    for metadata in (primary_metadata, repair_metadata):
+        metadata_durations = 0
+        for value in metadata.get("provider_attempt_durations_ms") or []:
+            try:
+                active_provider_durations_ms.append(round(max(0.0, float(value)), 3))
+                metadata_durations += 1
+            except (TypeError, ValueError, OverflowError):
+                continue
+        if metadata_durations == 0:
+            try:
+                active_provider_durations_ms.append(
+                    round(max(0.0, float(metadata.get("provider_attempt_duration_ms") or 0.0)), 3)
+                )
+            except (TypeError, ValueError, OverflowError):
+                pass
     retry_reason = primary_metadata.get("transient_retry_reason")
     retry_categories = [retry_reason] if isinstance(retry_reason, str) else []
     return {
@@ -480,6 +496,7 @@ def _case_record(
         "retry_count": max(0, primary_attempts - 1),
         "repair_count": repair_attempts,
         "provider_call_count": provider_calls,
+        "provider_attempt_durations_ms": active_provider_durations_ms[:3],
         "empty_content": bool(primary_metadata.get("empty_content")),
         "finish_reason": str(primary_metadata.get("finish_reason") or "unknown"),
         "length_retry_count": int(retry_reason == "finish_length"),
@@ -527,6 +544,11 @@ def _aggregate(records: list[dict[str, Any]], runtime_settings: Any, safe_logs: 
             timeout_categories[category] = timeout_categories.get(category, 0) + 1
     provider_latencies = [record["provider_duration_ms"] for record in records]
     end_to_end_latencies = [record["end_to_end_ms"] for record in records]
+    active_provider_latencies = [
+        duration
+        for record in records
+        for duration in record.get("provider_attempt_durations_ms") or []
+    ]
     return {
         "candidate_execution_count": len(records),
         **state_counts,
@@ -574,6 +596,7 @@ def _aggregate(records: list[dict[str, Any]], runtime_settings: Any, safe_logs: 
         },
         "maximum_provider_duration_ms": max(provider_latencies, default=0.0),
         "maximum_end_to_end_duration_ms": max(end_to_end_latencies, default=0.0),
+        "maximum_active_provider_operation_lifetime_ms": max(active_provider_latencies, default=0.0),
         "history_finalization": {
             "applicable": False,
             "status": "not_applicable_isolated_runner",
