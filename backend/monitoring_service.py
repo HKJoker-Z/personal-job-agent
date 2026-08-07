@@ -195,6 +195,20 @@ def safe_provider_observation(value: Any) -> dict[str, Any]:
         "total_tokens",
         "response_length",
         "latency_ms",
+        "timeout_category",
+        "timeout_categories",
+        "provider_attempt_durations_ms",
+        "provider_attempt_duration_ms",
+        "remaining_deadline_bucket",
+        "deadline_exhausted",
+        "retry_started",
+        "repair_started",
+        "fallback_selected",
+        "history_finalized",
+        "idempotency_finalized",
+        "client_disconnected",
+        "provider_phase_duration_ms",
+        "total_analyze_duration_ms",
     )
     return {key: metadata[key] for key in allowed if key in metadata}
 

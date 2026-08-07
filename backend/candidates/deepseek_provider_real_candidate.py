@@ -57,6 +57,10 @@ from security_utils import (
     scan_project_chunks,
     security_status_from_scan,
 )
+from provider_deadline import (
+    ANALYZE_TOTAL_SAFETY_DEADLINE_SECONDS,
+    ProviderDeadline,
+)
 
 
 EXPECTED_CONFIG = {
@@ -274,9 +278,15 @@ def _run_case(case: dict[str, Any], runtime_settings: Any) -> dict[str, Any]:
         rag_chunks=rag_chunks,
     )
     provider_started = time.perf_counter()
+    provider_deadline = ProviderDeadline.for_phase(
+        phase_started_monotonic=time.monotonic(),
+        configured_deadline_seconds=runtime_settings.provider_overall_deadline_seconds,
+        request_safety_deadline=time.monotonic() + ANALYZE_TOTAL_SAFETY_DEADLINE_SECONDS,
+    )
     provider_available = False
     security_rejected = False
     fallback_reason = ""
+    deadline_exhausted = False
     result: dict[str, Any] | None = None
     status = "fallback"
 
@@ -287,7 +297,7 @@ def _run_case(case: dict[str, Any], runtime_settings: Any) -> dict[str, Any]:
             rag_chunks,
             analysis_prompt=safe_prompt,
             usage_out=primary_metadata,
-            deadline_monotonic=time.monotonic() + runtime_settings.provider_overall_deadline_seconds,
+            deadline_monotonic=provider_deadline.absolute_deadline,
         )
         provider_available = True
         safe_content, output_scan, marker_leaked = scan_llm_output(provider_response.content)
@@ -300,7 +310,7 @@ def _run_case(case: dict[str, Any], runtime_settings: Any) -> dict[str, Any]:
                 repaired = call_deepseek_repair(
                     raw_response,
                     usage_out=repair_metadata,
-                    deadline_monotonic=time.monotonic() + runtime_settings.provider_overall_deadline_seconds,
+                    deadline_monotonic=provider_deadline.absolute_deadline,
                 )
                 if not isinstance(repaired, ProviderAnalysisResponse):
                     return ProviderAnalysisResponse(content=str(repaired or ""), metadata={})
@@ -319,11 +329,19 @@ def _run_case(case: dict[str, Any], runtime_settings: Any) -> dict[str, Any]:
 
     except ModelOutputError as exc:
         primary_metadata.update(exc.metadata)
-        fallback_reason = "provider_call_failed"
+        fallback_reason = str(exc.metadata.get("fallback_reason") or "provider_call_failed")
+        deadline_exhausted = bool(exc.metadata.get("deadline_exhausted"))
     except Exception:
         fallback_reason = "provider_call_failed"
+        deadline_exhausted = False
 
     provider_duration_ms = round((time.perf_counter() - provider_started) * 1000, 3)
+    if provider_deadline.expired():
+        deadline_exhausted = True
+        fallback_reason = "provider_deadline_exhausted"
+        if not security_rejected:
+            result = None
+            status = "fallback"
     if security_rejected:
         # A severe output is never repaired or converted to a partial result.
         provider_calls = _safe_int(primary_metadata.get("primary_attempt_count"))
@@ -340,6 +358,7 @@ def _run_case(case: dict[str, Any], runtime_settings: Any) -> dict[str, Any]:
             provider_calls=provider_calls,
             provider_duration_ms=provider_duration_ms,
             end_to_end_ms=round((time.perf_counter() - started) * 1000, 3),
+            deadline_exhausted=deadline_exhausted,
         )
 
     if result is None:
@@ -414,6 +433,7 @@ def _run_case(case: dict[str, Any], runtime_settings: Any) -> dict[str, Any]:
         provider_calls=provider_calls,
         provider_duration_ms=provider_duration_ms,
         end_to_end_ms=round((time.perf_counter() - started) * 1000, 3),
+        deadline_exhausted=deadline_exhausted,
     )
 
 
@@ -430,6 +450,7 @@ def _case_record(
     provider_calls: int,
     provider_duration_ms: float,
     end_to_end_ms: float,
+    deadline_exhausted: bool,
 ) -> dict[str, Any]:
     public_contract_ok = bool(result is not None and _public_contract_ok(result))
     if result is not None and not public_contract_ok:
@@ -448,6 +469,22 @@ def _case_record(
         _safe_int(repair_metadata.get("repair_attempt_count")),
         _safe_int(parse_metadata.get("repair_attempt_count")),
     ))
+    active_provider_durations_ms: list[float] = []
+    for metadata in (primary_metadata, repair_metadata):
+        metadata_durations = 0
+        for value in metadata.get("provider_attempt_durations_ms") or []:
+            try:
+                active_provider_durations_ms.append(round(max(0.0, float(value)), 3))
+                metadata_durations += 1
+            except (TypeError, ValueError, OverflowError):
+                continue
+        if metadata_durations == 0:
+            try:
+                active_provider_durations_ms.append(
+                    round(max(0.0, float(metadata.get("provider_attempt_duration_ms") or 0.0)), 3)
+                )
+            except (TypeError, ValueError, OverflowError):
+                pass
     retry_reason = primary_metadata.get("transient_retry_reason")
     retry_categories = [retry_reason] if isinstance(retry_reason, str) else []
     return {
@@ -459,6 +496,7 @@ def _case_record(
         "retry_count": max(0, primary_attempts - 1),
         "repair_count": repair_attempts,
         "provider_call_count": provider_calls,
+        "provider_attempt_durations_ms": active_provider_durations_ms[:3],
         "empty_content": bool(primary_metadata.get("empty_content")),
         "finish_reason": str(primary_metadata.get("finish_reason") or "unknown"),
         "length_retry_count": int(retry_reason == "finish_length"),
@@ -468,6 +506,8 @@ def _case_record(
         "rejected_field_count": min(100, _safe_int(parse_metadata.get("rejected_field_count"))),
         "accepted_field_count": min(32, _safe_int(parse_metadata.get("accepted_field_count"))),
         "fallback_reason": fallback_reason,
+        "deadline_exhausted": bool(deadline_exhausted),
+        "timeout_categories": list(primary_metadata.get("timeout_categories") or []),
         "job_summary": summary_status,
         "match_reasons": reasons_status,
         "input_tokens": tokens["input_tokens"],
@@ -487,6 +527,7 @@ def _aggregate(records: list[dict[str, Any]], runtime_settings: Any, safe_logs: 
     parse_outcomes: dict[str, int] = {}
     salvage_categories: dict[str, int] = {}
     fallback_reasons: dict[str, int] = {}
+    timeout_categories: dict[str, int] = {}
     for record in records:
         finish = record["finish_reason"]
         finish_reason_counts[finish] = finish_reason_counts.get(finish, 0) + 1
@@ -499,8 +540,15 @@ def _aggregate(records: list[dict[str, Any]], runtime_settings: Any, safe_logs: 
         if record["fallback_reason"]:
             reason = record["fallback_reason"]
             fallback_reasons[reason] = fallback_reasons.get(reason, 0) + 1
+        for category in record.get("timeout_categories") or []:
+            timeout_categories[category] = timeout_categories.get(category, 0) + 1
     provider_latencies = [record["provider_duration_ms"] for record in records]
     end_to_end_latencies = [record["end_to_end_ms"] for record in records]
+    active_provider_latencies = [
+        duration
+        for record in records
+        for duration in record.get("provider_attempt_durations_ms") or []
+    ]
     return {
         "candidate_execution_count": len(records),
         **state_counts,
@@ -517,6 +565,8 @@ def _aggregate(records: list[dict[str, Any]], runtime_settings: Any, safe_logs: 
         "parse_outcome_counts": parse_outcomes,
         "salvage_action_categories": salvage_categories,
         "fallback_reason_categories": fallback_reasons,
+        "timeout_categories": timeout_categories,
+        "deadline_exhausted_count": sum(record.get("deadline_exhausted", False) for record in records),
         "job_summary_present_count": sum(record["job_summary"] == "present" for record in records),
         "job_summary_unavailable_count": sum(record["job_summary"] == "explicit_unavailable" for record in records),
         "match_reasons_present_count": sum(record["match_reasons"] == "present" for record in records),
@@ -543,6 +593,17 @@ def _aggregate(records: list[dict[str, Any]], runtime_settings: Any, safe_logs: 
         "end_to_end_latency_ms": {
             "median": round(statistics.median(end_to_end_latencies), 3) if end_to_end_latencies else 0.0,
             "p95": _percentile(end_to_end_latencies, 95),
+        },
+        "maximum_provider_duration_ms": max(provider_latencies, default=0.0),
+        "maximum_end_to_end_duration_ms": max(end_to_end_latencies, default=0.0),
+        "maximum_active_provider_operation_lifetime_ms": max(active_provider_latencies, default=0.0),
+        "history_finalization": {
+            "applicable": False,
+            "status": "not_applicable_isolated_runner",
+        },
+        "idempotency": {
+            "applicable": False,
+            "status": "not_applicable_isolated_runner",
         },
         "model_id": runtime_settings.deepseek_model,
         "thinking_enabled": bool(runtime_settings.deepseek_thinking_enabled),
@@ -591,6 +652,12 @@ def main() -> int:
         "retry_count": summary["retry_count"],
         "repair_count": summary["repair_count"],
         "maximum_provider_calls": summary["maximum_provider_calls"],
+        "deadline_exhausted_count": summary["deadline_exhausted_count"],
+        "timeout_categories": summary["timeout_categories"],
+        "maximum_provider_duration_ms": summary["maximum_provider_duration_ms"],
+        "maximum_end_to_end_duration_ms": summary["maximum_end_to_end_duration_ms"],
+        "history_finalization": summary["history_finalization"]["status"],
+        "idempotency": summary["idempotency"]["status"],
         "safe_log_inspection_passed": summary["safe_log_inspection_passed"],
     }, sort_keys=True))
     return 0

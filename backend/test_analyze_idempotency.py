@@ -448,7 +448,18 @@ class AnalyzeIdempotencyTest(unittest.TestCase):
         db.close()
 
     def test_sdk_transport_retries_are_zero_for_primary_and_repair(self):
-        with patch.dict(os.environ, {"DEEPSEEK_API_KEY": "test-only-key"}):
+        with patch.dict(
+            os.environ,
+            {
+                "DEEPSEEK_API_KEY": "test-only-key",
+                "HTTP_PROXY": "",
+                "HTTPS_PROXY": "",
+                "ALL_PROXY": "",
+                "http_proxy": "",
+                "https_proxy": "",
+                "all_proxy": "",
+            },
+        ):
             with patch("legacy_application.OpenAI") as openai:
                 openai.return_value.chat.completions.create.side_effect = RuntimeError("offline")
                 with self.assertRaises(ModelOutputError):
@@ -721,6 +732,74 @@ class AnalyzeEndpointIdempotencyTest(unittest.TestCase):
         self.assertEqual(replay.json(), first.json())
         self.assertEqual(replay.headers["Idempotency-Replayed"], "true")
         self.assertEqual(provider.call_count, 1)
+
+    def test_detected_client_disconnect_finalizes_fallback_once_without_provider(self):
+        key = "42345679-1234-4123-8123-123456789abc"
+        with patch.object(
+            legacy_application,
+            "_request_client_disconnected",
+            new=AsyncMock(return_value=True),
+        ), patch("legacy_application.call_deepseek_raw") as provider:
+            response = self.request(key, save=False)
+            replay = self.request(key, save=False)
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["analysis_status"], "fallback")
+        self.assertEqual(replay.status_code, 200, replay.text)
+        self.assertEqual(replay.headers["Idempotency-Replayed"], "true")
+        self.assertEqual(replay.json(), response.json())
+        provider.assert_not_called()
+        db = session_factory()()
+        record = db.scalar(select(AnalyzeIdempotencyRecord))
+        self.assertEqual(record.status, "completed")
+        self.assertIsNotNone(record.response_body)
+        db.close()
+
+    def test_disconnect_after_provider_returns_still_finalizes_one_result(self):
+        key = "42345679-1234-4123-8123-123456789abd"
+        disconnected = AsyncMock(side_effect=[False, True])
+        with patch.object(
+            legacy_application,
+            "_request_client_disconnected",
+            new=disconnected,
+        ), patch(
+            "legacy_application.call_deepseek_raw",
+            return_value=self.provider_response(),
+        ) as provider:
+            response = self.request(key, save=False)
+            replay = self.request(key, save=False)
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["analysis_status"], "complete")
+        self.assertTrue(response.json()["model_completion"]["client_disconnected"])
+        self.assertEqual(replay.status_code, 200, replay.text)
+        self.assertEqual(replay.headers["Idempotency-Replayed"], "true")
+        self.assertEqual(replay.json(), response.json())
+        self.assertEqual(disconnected.await_count, 2)
+        provider.assert_called_once()
+        db = session_factory()()
+        record = db.scalar(select(AnalyzeIdempotencyRecord))
+        self.assertEqual(record.status, "completed")
+        db.close()
+
+    def test_provider_deadline_exhaustion_returns_fallback_before_any_attempt(self):
+        key = "42345680-1234-4123-8123-123456789abc"
+        with patch.dict(
+            os.environ,
+            {
+                "PROVIDER_OVERALL_DEADLINE_SECONDS": "10",
+                "REQUEST_TIMEOUT_SECONDS": "5",
+                "DEEPSEEK_API_KEY": "test-only-key",
+            },
+        ), patch("legacy_application.OpenAI") as openai:
+            response = self.request(key, save=False)
+        self.assertEqual(response.status_code, 200, response.text)
+        body = response.json()
+        self.assertEqual(body["analysis_status"], "fallback")
+        self.assertEqual(
+            body["model_completion"]["fallback_reason"],
+            "provider_deadline_exhausted",
+        )
+        self.assertTrue(body["model_completion"]["deadline_exhausted"])
+        openai.assert_not_called()
 
     def test_primary_and_explicit_repair_are_each_called_at_most_once(self):
         from analysis_contract import ProviderAnalysisResponse

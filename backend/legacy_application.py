@@ -8,6 +8,7 @@ from io import BytesIO
 from pathlib import Path
 from typing import Any
 
+import httpx
 from docx import Document
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, Form, Header, HTTPException, Query, Request, UploadFile
@@ -136,6 +137,11 @@ from monitoring_service import (
     list_traces,
     monitoring_status,
     persist_analysis_metrics_best_effort,
+)
+from provider_deadline import (
+    ANALYZE_TOTAL_SAFETY_DEADLINE_SECONDS,
+    DeadlineHttpxClient,
+    ProviderDeadline,
 )
 from evaluation_service import (
     evaluation_status,
@@ -1225,6 +1231,16 @@ def enforce_analysis_grounding(
 
 def provider_retry_reason(exc: Exception | ModelOutputError) -> str | None:
     """Return a fixed retry category without inspecting or logging exception text."""
+    cause = getattr(exc, "__cause__", None)
+    timeout_source = cause if isinstance(cause, httpx.TimeoutException) else exc
+    if isinstance(timeout_source, httpx.ConnectTimeout):
+        return "connect_timeout"
+    if isinstance(timeout_source, httpx.WriteTimeout):
+        return "write_timeout"
+    if isinstance(timeout_source, httpx.PoolTimeout):
+        return "pool_timeout"
+    if isinstance(timeout_source, httpx.ReadTimeout):
+        return "read_timeout"
     if isinstance(exc, APITimeoutError):
         return "read_timeout"
     if isinstance(exc, APIConnectionError):
@@ -1280,6 +1296,157 @@ def _provider_metadata_base(runtime_settings: Any, *, attempt_count: int = 0) ->
     }
 
 
+def _provider_observation_metadata(
+    metadata: dict[str, Any],
+    *,
+    deadline: ProviderDeadline,
+    phase_started: float,
+    attempt_durations_ms: list[float],
+    timeout_categories: list[str],
+    retry_started: bool = False,
+    repair_started: bool = False,
+    deadline_exhausted: bool | None = None,
+    fallback_selected: bool = False,
+    attempt_count: int | None = None,
+) -> dict[str, Any]:
+    """Merge only bounded Provider timing categories into safe metadata."""
+    categories = list(dict.fromkeys(timeout_categories))[:4]
+    return safe_model_metadata({
+        **metadata,
+        "provider_attempt_durations_ms": attempt_durations_ms[:3],
+        "provider_attempt_duration_ms": attempt_durations_ms[-1] if attempt_durations_ms else 0.0,
+        "timeout_categories": categories,
+        "timeout_category": categories[-1] if categories else None,
+        "retry_started": retry_started,
+        "repair_started": repair_started,
+        "deadline_exhausted": deadline.expired() if deadline_exhausted is None else deadline_exhausted,
+        "remaining_deadline_bucket": deadline.remaining_bucket(),
+        "fallback_selected": fallback_selected,
+        "provider_phase_duration_ms": round((time.monotonic() - phase_started) * 1000, 3),
+        "primary_attempt_count": attempt_count
+        if attempt_count is not None
+        else metadata.get("primary_attempt_count", 0),
+    })
+
+
+def _provider_deadline_error(
+    runtime_settings: Any,
+    *,
+    deadline: ProviderDeadline,
+    phase_started: float,
+    metadata: dict[str, Any] | None = None,
+    attempt_durations_ms: list[float] | None = None,
+    timeout_categories: list[str] | None = None,
+    retry_started: bool = False,
+    repair_started: bool = False,
+    attempt_count: int = 0,
+) -> ModelOutputError:
+    observation = _provider_observation_metadata(
+        {
+            **_provider_metadata_base(runtime_settings, attempt_count=attempt_count),
+            **(metadata or {}),
+            "primary_attempt_count": attempt_count,
+            "result_state": "fallback",
+            "fallback_reason": "provider_deadline_exhausted",
+            "deadline_exhausted": True,
+        },
+        deadline=deadline,
+        phase_started=phase_started,
+        attempt_durations_ms=attempt_durations_ms or [],
+        timeout_categories=timeout_categories or [],
+        retry_started=retry_started,
+        repair_started=repair_started,
+        deadline_exhausted=True,
+        fallback_selected=True,
+    )
+    return ModelOutputError(MODEL_PROVIDER_ERROR, metadata=observation)
+
+
+def _build_provider_client(
+    runtime_settings: Any,
+    *,
+    deadline: ProviderDeadline,
+    kind: str,
+) -> tuple[OpenAI, DeadlineHttpxClient, Any]:
+    timeout = deadline.call_timeout(
+        configured_timeout_seconds=runtime_settings.request_timeout_seconds,
+        kind=kind,
+    )
+    if timeout is None:
+        raise RuntimeError("provider deadline has no safe call budget")
+    http_client = DeadlineHttpxClient(
+        deadline_monotonic=deadline.absolute_deadline,
+        timeout=timeout.timeout,
+    )
+    try:
+        client = OpenAI(
+            api_key=runtime_settings.deepseek_api_key,
+            base_url=DEEPSEEK_BASE_URL,
+            timeout=timeout.timeout,
+            max_retries=0,
+            http_client=http_client,
+        )
+    except BaseException:
+        http_client.close()
+        raise
+    return client, http_client, timeout
+
+
+def _close_provider_clients(client: Any, http_client: DeadlineHttpxClient) -> None:
+    try:
+        close = getattr(client, "close", None)
+        if callable(close):
+            close()
+    finally:
+        http_client.close()
+
+
+def _public_model_completion(metadata: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: metadata.get(key)
+        for key in (
+            "finish_reason",
+            "response_length",
+            "reached_token_limit",
+            "latency_ms",
+            "model_id",
+            "thinking_enabled",
+            "response_mode",
+            "primary_attempt_count",
+            "repair_attempt_count",
+            "empty_content",
+            "transient_retry_reason",
+            "parse_outcome",
+            "salvage_action_categories",
+            "rejected_field_count",
+            "accepted_field_count",
+            "timeout_category",
+            "timeout_categories",
+            "provider_attempt_durations_ms",
+            "provider_attempt_duration_ms",
+            "remaining_deadline_bucket",
+            "deadline_exhausted",
+            "retry_started",
+            "repair_started",
+            "fallback_selected",
+            "history_finalized",
+            "idempotency_finalized",
+            "client_disconnected",
+            "result_state",
+            "fallback_reason",
+        )
+        if key in metadata
+    }
+
+
+async def _request_client_disconnected(request: Request) -> bool:
+    """Best-effort safe disconnect check at async boundaries."""
+    try:
+        return bool(await request.is_disconnected())
+    except Exception:
+        return False
+
+
 def call_deepseek_raw(
     resume_text: str,
     job_description: str,
@@ -1291,6 +1458,7 @@ def call_deepseek_raw(
     """Run at most two bounded primary calls, with one stable transient retry."""
     runtime_settings = load_config(validate_production=False)
     base_metadata = _provider_metadata_base(runtime_settings)
+    phase_started = time.monotonic()
     if runtime_settings.mock_provider_enabled:
         if runtime_settings.app_env == "production":
             raise HTTPException(status_code=500, detail="Mock provider is unavailable in production.")
@@ -1315,6 +1483,10 @@ def call_deepseek_raw(
             "response_length": len(content),
             "latency_ms": 0,
             "primary_attempt_count": 1,
+            "provider_attempt_durations_ms": [0.0],
+            "retry_started": False,
+            "repair_started": False,
+            "remaining_deadline_bucket": "gt_60s",
         })
         if usage_out is not None:
             usage_out.update(metadata)
@@ -1331,35 +1503,63 @@ def call_deepseek_raw(
         job_description=job_description,
         rag_chunks=rag_chunks or [],
     )
-    deadline = deadline_monotonic or (
-        time.monotonic() + runtime_settings.provider_overall_deadline_seconds
+    deadline = ProviderDeadline(
+        deadline_monotonic
+        or (time.monotonic() + runtime_settings.provider_overall_deadline_seconds)
     )
     retry_reason: str | None = None
     last_error: ModelOutputError | None = None
+    attempt_durations_ms: list[float] = []
+    timeout_categories: list[str] = []
+    retry_started = False
     for attempt in range(1, MAX_PRIMARY_PROVIDER_CALLS + 1):
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            break
-        client = OpenAI(
-            api_key=runtime_settings.deepseek_api_key,
-            base_url=DEEPSEEK_BASE_URL,
-            timeout=min(runtime_settings.request_timeout_seconds, max(0.1, remaining)),
-            max_retries=0,
+        attempt_timeout = deadline.call_timeout(
+            configured_timeout_seconds=runtime_settings.request_timeout_seconds,
+            kind="primary" if attempt == 1 else "retry",
         )
+        if attempt_timeout is None:
+            if last_error is not None:
+                raise _provider_deadline_error(
+                    runtime_settings,
+                    deadline=deadline,
+                    phase_started=phase_started,
+                    metadata=last_error.metadata,
+                    attempt_durations_ms=attempt_durations_ms,
+                    timeout_categories=timeout_categories,
+                    retry_started=retry_started,
+                    attempt_count=attempt - 1,
+                ) from last_error
+            raise _provider_deadline_error(
+                runtime_settings,
+                deadline=deadline,
+                phase_started=phase_started,
+                attempt_count=attempt - 1,
+            )
+        if attempt > 1:
+            retry_started = True
+        http_client: DeadlineHttpxClient | None = None
+        client: Any | None = None
         max_tokens = (
             runtime_settings.model_length_retry_output_tokens
             if retry_reason == "finish_length"
             else runtime_settings.model_max_output_tokens
         )
-        started = time.perf_counter()
         metadata_seed = {
             **base_metadata,
             "primary_attempt_count": attempt,
             "transient_retry_reason": retry_reason,
+            "remaining_deadline_bucket": attempt_timeout.remaining_bucket,
         }
+        started = time.monotonic()
+        attempt_duration_recorded = False
         try:
+            client, http_client, _timeout = _build_provider_client(
+                runtime_settings,
+                deadline=deadline,
+                kind="primary" if attempt == 1 else "retry",
+            )
             logger.info(
-                "DeepSeek call started attempt=%s model=%s thinking_enabled=%s response_mode=json_object max_tokens=%s",
+                "DeepSeek call started attempt=%s model=%s thinking_enabled=%s response_mode=json_object max_tokens=%s timeout_contract=connect_read_write_pool",
                 attempt,
                 runtime_settings.deepseek_model,
                 runtime_settings.deepseek_thinking_enabled,
@@ -1382,13 +1582,36 @@ def call_deepseek_raw(
             response = adapt_provider_completion(
                 completion,
                 max_output_tokens=max_tokens,
-                latency_ms=round((time.perf_counter() - started) * 1000, 3),
+                latency_ms=round((time.monotonic() - started) * 1000, 3),
             )
+            attempt_duration_ms = round((time.monotonic() - started) * 1000, 3)
+            attempt_durations_ms.append(attempt_duration_ms)
+            attempt_duration_recorded = True
+            if deadline.expired():
+                raise _provider_deadline_error(
+                    runtime_settings,
+                    deadline=deadline,
+                    phase_started=phase_started,
+                    metadata=response.metadata,
+                    attempt_durations_ms=attempt_durations_ms,
+                    timeout_categories=timeout_categories,
+                    retry_started=retry_started,
+                    attempt_count=attempt,
+                )
             metadata = safe_model_metadata({
                 **response.metadata,
                 **metadata_seed,
                 "primary_attempt_count": attempt,
             })
+            metadata = _provider_observation_metadata(
+                metadata,
+                deadline=deadline,
+                phase_started=phase_started,
+                attempt_durations_ms=attempt_durations_ms,
+                timeout_categories=timeout_categories,
+                retry_started=retry_started,
+                attempt_count=attempt,
+            )
             response = ProviderAnalysisResponse(content=response.content, metadata=metadata)
             if usage_out is not None:
                 usage_out.update(metadata)
@@ -1403,12 +1626,27 @@ def call_deepseek_raw(
             return response
         except ModelOutputError as exc:
             reason = provider_retry_reason(exc)
+            attempt_duration_ms = round((time.monotonic() - started) * 1000, 3)
+            if not attempt_duration_recorded:
+                attempt_durations_ms.append(attempt_duration_ms)
+            if reason in {"connect_timeout", "read_timeout", "write_timeout", "pool_timeout"}:
+                timeout_categories.append(reason)
             metadata = safe_model_metadata({
                 **exc.metadata,
                 **metadata_seed,
                 "primary_attempt_count": attempt,
                 "empty_content": exc.error_code == MODEL_OUTPUT_EMPTY,
             })
+            metadata = _provider_observation_metadata(
+                metadata,
+                deadline=deadline,
+                phase_started=phase_started,
+                attempt_durations_ms=attempt_durations_ms,
+                timeout_categories=timeout_categories,
+                retry_started=retry_started,
+                deadline_exhausted=deadline.expired(),
+                attempt_count=attempt,
+            )
             last_error = ModelOutputError(exc.error_code, metadata=metadata)
             if usage_out is not None:
                 usage_out.update(metadata)
@@ -1420,44 +1658,84 @@ def call_deepseek_raw(
                 metadata.get("output_tokens"),
                 metadata.get("latency_ms"),
             )
+            if deadline.expired():
+                break
             if not reason or attempt >= MAX_PRIMARY_PROVIDER_CALLS:
                 raise last_error from exc
             retry_reason = reason
         except Exception as exc:
             reason = provider_retry_reason(exc)
-            latency_ms = round((time.perf_counter() - started) * 1000, 3)
+            latency_ms = round((time.monotonic() - started) * 1000, 3)
+            attempt_durations_ms.append(latency_ms)
+            if reason in {"connect_timeout", "read_timeout", "write_timeout", "pool_timeout"}:
+                timeout_categories.append(reason)
             metadata = safe_model_metadata({
                 **metadata_seed,
                 "latency_ms": latency_ms,
                 "primary_attempt_count": attempt,
             })
+            metadata = _provider_observation_metadata(
+                metadata,
+                deadline=deadline,
+                phase_started=phase_started,
+                attempt_durations_ms=attempt_durations_ms,
+                timeout_categories=timeout_categories,
+                retry_started=retry_started,
+                deadline_exhausted=deadline.expired(),
+                attempt_count=attempt,
+            )
             last_error = ModelOutputError(MODEL_PROVIDER_ERROR, metadata=metadata)
             if usage_out is not None:
                 usage_out.update(metadata)
             logger.warning(
-                "DeepSeek call failed attempt=%s error_code=%s error_type=%s latency_ms=%s",
+                "DeepSeek call failed attempt=%s error_code=%s retry_category=%s latency_ms=%s",
                 attempt,
                 MODEL_PROVIDER_ERROR,
-                type(exc).__name__,
+                reason or "provider_call_failed",
                 latency_ms,
             )
+            if deadline.expired():
+                break
             if not reason or attempt >= MAX_PRIMARY_PROVIDER_CALLS:
                 raise last_error from exc
             retry_reason = reason
 
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
+        finally:
+            if client is not None and http_client is not None:
+                _close_provider_clients(client, http_client)
+
+        retry_timeout = deadline.call_timeout(
+            configured_timeout_seconds=runtime_settings.request_timeout_seconds,
+            kind="retry",
+        )
+        remaining = deadline.remaining_seconds()
+        if retry_timeout is None or remaining <= 0:
             break
-        time.sleep(min(runtime_settings.provider_retry_backoff_seconds, remaining))
+        backoff = min(runtime_settings.provider_retry_backoff_seconds, max(0.0, remaining))
+        if backoff > 0:
+            time.sleep(backoff)
 
     if last_error is not None:
+        if deadline.expired() or not deadline.can_start(
+            configured_timeout_seconds=runtime_settings.request_timeout_seconds,
+            kind="retry",
+        ):
+            raise _provider_deadline_error(
+                runtime_settings,
+                deadline=deadline,
+                phase_started=phase_started,
+                metadata=last_error.metadata,
+                attempt_durations_ms=attempt_durations_ms,
+                timeout_categories=timeout_categories,
+                retry_started=retry_started,
+                attempt_count=min(MAX_PRIMARY_PROVIDER_CALLS, len(attempt_durations_ms)),
+            ) from last_error
         raise last_error
-    raise ModelOutputError(
-        MODEL_PROVIDER_ERROR,
-        metadata=safe_model_metadata({
-            **base_metadata,
-            "primary_attempt_count": MAX_PRIMARY_PROVIDER_CALLS,
-        }),
+    raise _provider_deadline_error(
+        runtime_settings,
+        deadline=deadline,
+        phase_started=phase_started,
+        attempt_count=min(MAX_PRIMARY_PROVIDER_CALLS, len(attempt_durations_ms)),
     )
 
 
@@ -1469,30 +1747,25 @@ def call_deepseek_repair(
 ) -> ProviderAnalysisResponse:
     """Make the single allowed, bounded format-only repair request."""
     runtime_settings = load_config(validate_production=False)
+    phase_started = time.monotonic()
     if not runtime_settings.deepseek_api_key:
         raise ModelOutputError(MODEL_PROVIDER_ERROR)
-    deadline = deadline_monotonic or (
-        time.monotonic() + runtime_settings.provider_overall_deadline_seconds
+    deadline = ProviderDeadline(
+        deadline_monotonic
+        or (time.monotonic() + runtime_settings.provider_overall_deadline_seconds)
     )
-    remaining = deadline - time.monotonic()
-    if remaining <= 0.05:
-        raise ModelOutputError(
-            MODEL_PROVIDER_ERROR,
-            metadata=safe_model_metadata({
-                **_provider_metadata_base(runtime_settings),
-                "repair_attempt_count": 0,
-                "fallback_reason": "provider_deadline",
-            }),
+    attempt_timeout = deadline.call_timeout(
+        configured_timeout_seconds=runtime_settings.request_timeout_seconds,
+        kind="repair",
+    )
+    if attempt_timeout is None:
+        raise _provider_deadline_error(
+            runtime_settings,
+            deadline=deadline,
+            phase_started=phase_started,
+            metadata={"repair_attempt_count": 0, "repair_started": False},
+            repair_started=False,
         )
-    client = OpenAI(
-        api_key=runtime_settings.deepseek_api_key,
-        base_url=DEEPSEEK_BASE_URL,
-        timeout=min(
-            runtime_settings.request_timeout_seconds,
-            max(0.1, remaining),
-        ),
-        max_retries=0,
-    )
     repair_tokens = runtime_settings.model_repair_output_tokens
     repair_prompt = (
         "Convert the model text below into one concise JSON object. Preserve only explicit analysis; "
@@ -1502,8 +1775,17 @@ def call_deepseek_repair(
         "do not use Markdown fences or prose outside it.\n\n"
         + str(raw_response or "")[:12_000]
     )
-    started = time.perf_counter()
+    started = time.monotonic()
+    attempt_durations_ms: list[float] = []
+    timeout_categories: list[str] = []
+    client: Any | None = None
+    http_client: DeadlineHttpxClient | None = None
     try:
+        client, http_client, _timeout = _build_provider_client(
+            runtime_settings,
+            deadline=deadline,
+            kind="repair",
+        )
         options = provider_request_options(runtime_settings, max_tokens=repair_tokens)
         completion = client.chat.completions.create(
             **options,
@@ -1513,26 +1795,88 @@ def call_deepseek_repair(
             ],
         )
     except Exception as exc:
+        latency_ms = round((time.monotonic() - started) * 1000, 3)
+        attempt_durations_ms.append(latency_ms)
+        reason = provider_retry_reason(exc)
+        if reason in {"connect_timeout", "read_timeout", "write_timeout", "pool_timeout"}:
+            timeout_categories.append(reason)
         metadata = safe_model_metadata({
             **_provider_metadata_base(runtime_settings),
             "repair_attempt_count": 1,
-            "latency_ms": (time.perf_counter() - started) * 1000,
+            "latency_ms": latency_ms,
+            "repair_started": True,
+            "timeout_category": reason,
         })
+        metadata = _provider_observation_metadata(
+            metadata,
+            deadline=deadline,
+            phase_started=phase_started,
+            attempt_durations_ms=attempt_durations_ms,
+            timeout_categories=timeout_categories,
+            repair_started=True,
+            deadline_exhausted=deadline.expired(),
+        )
         if usage_out is not None:
             usage_out.update(metadata)
+        if deadline.expired():
+            raise _provider_deadline_error(
+                runtime_settings,
+                deadline=deadline,
+                phase_started=phase_started,
+                metadata=metadata,
+                attempt_durations_ms=attempt_durations_ms,
+                timeout_categories=timeout_categories,
+                repair_started=True,
+            ) from exc
         raise ModelOutputError(MODEL_PROVIDER_ERROR, metadata=metadata) from exc
+    finally:
+        if client is not None and http_client is not None:
+            _close_provider_clients(client, http_client)
     try:
         response = adapt_provider_completion(
             completion,
             max_output_tokens=repair_tokens,
-            latency_ms=round((time.perf_counter() - started) * 1000, 3),
+            latency_ms=round((time.monotonic() - started) * 1000, 3),
         )
+        attempt_durations_ms.append(round((time.monotonic() - started) * 1000, 3))
+        if deadline.expired():
+            raise _provider_deadline_error(
+                runtime_settings,
+                deadline=deadline,
+                phase_started=phase_started,
+                metadata=response.metadata,
+                attempt_durations_ms=attempt_durations_ms,
+                timeout_categories=timeout_categories,
+                repair_started=True,
+            )
     except ModelOutputError as exc:
+        if not attempt_durations_ms:
+            attempt_durations_ms.append(round((time.monotonic() - started) * 1000, 3))
+        if deadline.expired() or exc.metadata.get("deadline_exhausted"):
+            raise _provider_deadline_error(
+                runtime_settings,
+                deadline=deadline,
+                phase_started=phase_started,
+                metadata=exc.metadata,
+                attempt_durations_ms=attempt_durations_ms,
+                timeout_categories=timeout_categories,
+                repair_started=True,
+            ) from exc
         metadata = safe_model_metadata({
             **exc.metadata,
             **_provider_metadata_base(runtime_settings),
             "repair_attempt_count": 1,
+            "repair_started": True,
         })
+        metadata = _provider_observation_metadata(
+            metadata,
+            deadline=deadline,
+            phase_started=phase_started,
+            attempt_durations_ms=attempt_durations_ms,
+            timeout_categories=timeout_categories,
+            repair_started=True,
+            deadline_exhausted=deadline.expired(),
+        )
         if usage_out is not None:
             usage_out.update(metadata)
         raise ModelOutputError(exc.error_code, metadata=metadata) from exc
@@ -1542,7 +1886,19 @@ def call_deepseek_repair(
             **response.metadata,
             **_provider_metadata_base(runtime_settings),
             "repair_attempt_count": 1,
+            "repair_started": True,
         }),
+    )
+    response = ProviderAnalysisResponse(
+        content=response.content,
+        metadata=_provider_observation_metadata(
+            response.metadata,
+            deadline=deadline,
+            phase_started=phase_started,
+            attempt_durations_ms=attempt_durations_ms,
+            timeout_categories=timeout_categories,
+            repair_started=True,
+        ),
     )
     if usage_out is not None:
         usage_out.update(response.metadata)
@@ -1621,6 +1977,13 @@ def analyze_with_deepseek(
     job_description: str,
     rag_chunks: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
+    provider_phase_started = time.monotonic()
+    provider_deadline = ProviderDeadline.for_phase(
+        phase_started_monotonic=provider_phase_started,
+        configured_deadline_seconds=load_config(
+            validate_production=False
+        ).provider_overall_deadline_seconds,
+    )
     safe_prompt = build_safe_analysis_prompt(
         resume_text=resume_text,
         job_description=job_description,
@@ -1631,8 +1994,15 @@ def analyze_with_deepseek(
         job_description,
         rag_chunks or [],
         analysis_prompt=safe_prompt,
+        deadline_monotonic=provider_deadline.absolute_deadline,
     )
-    result, status, warnings = model_response_to_result(provider_response.content)
+    result, status, warnings = model_response_to_result(
+        provider_response.content,
+        repairer=lambda raw_response: call_deepseek_repair(
+            raw_response,
+            deadline_monotonic=provider_deadline.absolute_deadline,
+        ),
+    )
     validate_model_evidence_references(
         result,
         resume_text=resume_text,
@@ -2785,6 +3155,10 @@ async def analyze(
     resume_version_id: str | None = Form(None),
 ) -> dict[str, Any]:
     logger.info("Received analysis request")
+    analysis_started_monotonic = time.monotonic()
+    analysis_safety_deadline = (
+        analysis_started_monotonic + ANALYZE_TOTAL_SAFETY_DEADLINE_SECONDS
+    )
     try:
         clean_idempotency_key = validate_idempotency_key(idempotency_key)
     except IdempotencyError as exc:
@@ -3288,10 +3662,29 @@ async def analyze(
     analysis_status = "complete"
     analysis_warnings: list[str] = list(input_warnings)
     provider_available = True
-    provider_deadline = time.monotonic() + load_config(
-        validate_production=False
-    ).provider_overall_deadline_seconds
+    provider_phase_started_monotonic = time.monotonic()
+    runtime_settings = load_config(validate_production=False)
+    provider_budget = ProviderDeadline.for_phase(
+        phase_started_monotonic=provider_phase_started_monotonic,
+        configured_deadline_seconds=runtime_settings.provider_overall_deadline_seconds,
+        request_safety_deadline=analysis_safety_deadline,
+    )
+    provider_deadline = provider_budget.absolute_deadline
+    client_disconnected = await _request_client_disconnected(request)
     try:
+        if client_disconnected:
+            raise ModelOutputError(
+                MODEL_PROVIDER_ERROR,
+                metadata=safe_model_metadata({
+                    **_provider_metadata_base(runtime_settings),
+                    "client_disconnected": True,
+                    "fallback_reason": "client_disconnected",
+                    "deadline_exhausted": False,
+                    "fallback_selected": True,
+                    "remaining_deadline_bucket": provider_budget.remaining_bucket(),
+                    "provider_phase_duration_ms": 0.0,
+                }),
+            )
         if idempotency_service is not None and idempotency_claim is not None:
             if execution_binding is None:
                 raise IdempotencyError(
@@ -3321,6 +3714,13 @@ async def analyze(
     except Exception as exc:
         provider_available = False
         workflow.add_warning()
+        provider_deadline_exhausted = bool(
+            provider_budget.expired()
+            or (
+                isinstance(exc, ModelOutputError)
+                and exc.metadata.get("deadline_exhausted")
+            )
+        )
         if isinstance(exc, ModelOutputError):
             context.model_metadata = safe_model_metadata({
                 **exc.metadata,
@@ -3328,7 +3728,17 @@ async def analyze(
                 "thinking_enabled": settings.deepseek_thinking_enabled,
                 "response_mode": "json_object",
                 "result_state": "fallback",
-                "fallback_reason": "provider_call_failed",
+                "fallback_reason": (
+                    "client_disconnected"
+                    if exc.metadata.get("client_disconnected")
+                    else (
+                        "provider_deadline_exhausted"
+                        if provider_deadline_exhausted
+                        else "provider_call_failed"
+                    )
+                ),
+                "deadline_exhausted": provider_deadline_exhausted,
+                "fallback_selected": True,
             })
         else:
             context.model_metadata = safe_model_metadata({
@@ -3336,7 +3746,13 @@ async def analyze(
                 "thinking_enabled": settings.deepseek_thinking_enabled,
                 "response_mode": "json_object",
                 "result_state": "fallback",
-                "fallback_reason": "provider_call_failed",
+                "fallback_reason": (
+                    "provider_deadline_exhausted"
+                    if provider_deadline_exhausted
+                    else "provider_call_failed"
+                ),
+                "deadline_exhausted": provider_deadline_exhausted,
+                "fallback_selected": True,
             })
         analysis_status = "fallback"
         analysis_warnings.append(
@@ -3347,8 +3763,8 @@ async def analyze(
             "Provider was unavailable; continuing with deterministic local analysis.",
         )
         logger.warning(
-            "DeepSeek analysis unavailable; local fallback selected error_type=%s",
-            type(exc).__name__,
+            "DeepSeek analysis unavailable; local fallback selected fallback_category=%s",
+            context.model_metadata.get("fallback_reason") or "provider_call_failed",
         )
 
     if provider_available:
@@ -3489,10 +3905,23 @@ async def analyze(
             context.json_parse_success = False
             workflow.add_warning()
             analysis_status = "fallback"
+            parse_deadline_exhausted = bool(
+                provider_budget.expired()
+                or (
+                    isinstance(exc, ModelOutputError)
+                    and exc.metadata.get("deadline_exhausted")
+                )
+            )
             context.model_metadata = safe_model_metadata({
                 **context.model_metadata,
                 "result_state": "fallback",
-                "fallback_reason": "minimum_safe_contract_failed",
+                "fallback_reason": (
+                    "provider_deadline_exhausted"
+                    if parse_deadline_exhausted
+                    else "minimum_safe_contract_failed"
+                ),
+                "deadline_exhausted": parse_deadline_exhausted,
+                "fallback_selected": True,
             })
             analysis_warnings.append(
                 "AI response could not be fully parsed. A local fallback analysis is shown."
@@ -3511,7 +3940,10 @@ async def analyze(
                 "validate_structured_output",
                 "Deterministic fallback output has the stable analysis structure.",
             )
-            logger.warning("DeepSeek response fallback selected error_type=%s", type(exc).__name__)
+            logger.warning(
+                "DeepSeek response fallback selected fallback_category=%s",
+                context.model_metadata.get("fallback_reason") or "minimum_safe_contract_failed",
+            )
     else:
         context.json_parse_success = False
         result = local_fallback_result(
@@ -3526,6 +3958,40 @@ async def analyze(
         workflow.complete_step(
             "validate_structured_output", "Deterministic fallback output has the stable analysis structure."
         )
+
+    if provider_budget.expired() and analysis_status != "fallback":
+        analysis_status = "fallback"
+        result = local_fallback_result(
+            context.sanitized_resume_text,
+            context.sanitized_job_text,
+            context.retrieved_chunks,
+        )
+        workflow.add_warning()
+        analysis_warnings.append(
+            "AI response could not be fully parsed. A local fallback analysis is shown."
+        )
+        context.model_metadata = safe_model_metadata({
+            **context.model_metadata,
+            "result_state": "fallback",
+            "fallback_reason": "provider_deadline_exhausted",
+            "deadline_exhausted": True,
+            "fallback_selected": True,
+        })
+
+    context.model_metadata = safe_model_metadata({
+        **context.model_metadata,
+        "provider_phase_duration_ms": round(
+            (time.monotonic() - provider_phase_started_monotonic) * 1000,
+            3,
+        ),
+        "deadline_exhausted": bool(
+            context.model_metadata.get("deadline_exhausted") or provider_budget.expired()
+        ),
+        "fallback_selected": analysis_status == "fallback",
+        "result_state": analysis_status,
+        "remaining_deadline_bucket": provider_budget.remaining_bucket(),
+    })
+    provider_phase_completed_monotonic = time.monotonic()
 
     workflow.start_step("validate_evidence_references", "Validate Evidence References")
     try:
@@ -3738,6 +4204,32 @@ async def analyze(
             "Save to history was disabled for this analysis.",
         )
 
+    client_disconnected = client_disconnected or await _request_client_disconnected(request)
+    history_finalized = (
+        (not save_to_history)
+        or context.application_id is not None
+        or (idempotency_service is not None and idempotency_claim is not None)
+    )
+    idempotency_finalized = bool(
+        idempotency_service is not None and idempotency_claim is not None
+    )
+    context.model_metadata = safe_model_metadata({
+        **context.model_metadata,
+        "history_finalized": history_finalized,
+        "idempotency_finalized": idempotency_finalized,
+        "client_disconnected": client_disconnected,
+        "provider_phase_duration_ms": round(
+            (provider_phase_completed_monotonic - provider_phase_started_monotonic) * 1000,
+            3,
+        ),
+        "total_analyze_duration_ms": round(
+            (time.monotonic() - analysis_started_monotonic) * 1000,
+            3,
+        ),
+        "fallback_selected": analysis_status == "fallback",
+        "result_state": analysis_status,
+    })
+
     workflow.start_step("finalize_result", "Finalize Result")
     try:
         result["workflow_id"] = context.workflow_id
@@ -3756,27 +4248,7 @@ async def analyze(
             key: normalize_int(context.model_metadata.get(key))
             for key in ("input_tokens", "output_tokens", "total_tokens")
         }
-        result["model_completion"] = {
-            key: context.model_metadata.get(key)
-            for key in (
-                "finish_reason",
-                "response_length",
-                "reached_token_limit",
-                "latency_ms",
-                "model_id",
-                "thinking_enabled",
-                "response_mode",
-                "primary_attempt_count",
-                "repair_attempt_count",
-                "empty_content",
-                "transient_retry_reason",
-                "parse_outcome",
-                "salvage_action_categories",
-                "rejected_field_count",
-                "accepted_field_count",
-            )
-            if key in context.model_metadata
-        }
+        result["model_completion"] = _public_model_completion(context.model_metadata)
         workflow.complete_step(
             "finalize_result",
             "Final API response prepared with workflow audit trail.",
@@ -3827,6 +4299,20 @@ async def analyze(
             workflow_duration_ms=result["workflow_duration_ms"],
             workflow_duration_us=result["workflow_duration_us"],
         )
+
+    logger.info(
+        "Analyze timing complete total_analyze_duration_ms=%s provider_phase_duration_ms=%s deadline_exhausted=%s retry_started=%s repair_started=%s fallback_selected=%s history_finalized=%s idempotency_finalized=%s client_disconnected=%s result_state=%s",
+        context.model_metadata.get("total_analyze_duration_ms"),
+        context.model_metadata.get("provider_phase_duration_ms"),
+        context.model_metadata.get("deadline_exhausted", False),
+        context.model_metadata.get("retry_started", False),
+        context.model_metadata.get("repair_started", False),
+        context.model_metadata.get("fallback_selected", False),
+        history_finalized,
+        idempotency_finalized,
+        client_disconnected,
+        result.get("analysis_status") or analysis_status,
+    )
 
     record_analysis_observation(
         workflow,

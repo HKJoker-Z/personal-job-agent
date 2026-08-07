@@ -37,6 +37,8 @@ MAX_PROVIDER_METADATA_LATENCY_MS = 300_000
 SAFE_RETRY_REASONS = {
     "connect_timeout",
     "read_timeout",
+    "write_timeout",
+    "pool_timeout",
     "http_429",
     "http_5xx",
     "resource_limit",
@@ -45,6 +47,13 @@ SAFE_RETRY_REASONS = {
 }
 SAFE_PARSE_OUTCOMES = {"canonical", "local_format_repair", "format_repair_call", "invalid", "empty"}
 SAFE_RESULT_STATES = {"complete", "repaired", "partial", "fallback"}
+SAFE_TIMEOUT_CATEGORIES = {
+    "connect_timeout",
+    "read_timeout",
+    "write_timeout",
+    "pool_timeout",
+}
+SAFE_DEADLINE_BUCKETS = {"gt_60s", "31_60s", "11_30s", "1_10s", "exhausted"}
 
 CANONICAL_ANALYSIS_FIELDS = (
     "matched_skills",
@@ -927,6 +936,57 @@ def safe_model_metadata(value: dict[str, Any]) -> dict[str, Any]:
     retry_reason = value.get("transient_retry_reason")
     if isinstance(retry_reason, str) and retry_reason in SAFE_RETRY_REASONS:
         metadata["transient_retry_reason"] = retry_reason
+    timeout_category = value.get("timeout_category")
+    if isinstance(timeout_category, str) and timeout_category in SAFE_TIMEOUT_CATEGORIES:
+        metadata["timeout_category"] = timeout_category
+    timeout_categories = value.get("timeout_categories")
+    if isinstance(timeout_categories, (list, tuple, set)):
+        metadata["timeout_categories"] = [
+            category
+            for category in timeout_categories
+            if isinstance(category, str) and category in SAFE_TIMEOUT_CATEGORIES
+        ][:4]
+    attempt_durations = value.get("provider_attempt_durations_ms")
+    if isinstance(attempt_durations, (list, tuple)):
+        bounded_durations: list[float] = []
+        for duration in attempt_durations[:3]:
+            try:
+                bounded_durations.append(
+                    round(
+                        min(max(float(duration or 0), 0), MAX_PROVIDER_METADATA_LATENCY_MS),
+                        3,
+                    )
+                )
+            except (TypeError, ValueError):
+                continue
+        metadata["provider_attempt_durations_ms"] = bounded_durations
+    for key in (
+        "deadline_exhausted",
+        "retry_started",
+        "repair_started",
+        "fallback_selected",
+        "history_finalized",
+        "idempotency_finalized",
+        "client_disconnected",
+    ):
+        if key in value:
+            metadata[key] = bool(value.get(key))
+    remaining_bucket = value.get("remaining_deadline_bucket")
+    if isinstance(remaining_bucket, str) and remaining_bucket in SAFE_DEADLINE_BUCKETS:
+        metadata["remaining_deadline_bucket"] = remaining_bucket
+    for key in (
+        "provider_attempt_duration_ms",
+        "provider_phase_duration_ms",
+        "total_analyze_duration_ms",
+    ):
+        if key in value:
+            try:
+                metadata[key] = round(
+                    min(max(float(value.get(key) or 0), 0), MAX_PROVIDER_METADATA_LATENCY_MS),
+                    3,
+                )
+            except (TypeError, ValueError):
+                metadata[key] = 0.0
     parse_outcome = value.get("parse_outcome")
     if isinstance(parse_outcome, str) and parse_outcome in SAFE_PARSE_OUTCOMES:
         metadata["parse_outcome"] = parse_outcome

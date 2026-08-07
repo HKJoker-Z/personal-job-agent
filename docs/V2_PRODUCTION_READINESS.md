@@ -17,7 +17,24 @@ established Edge public port, and private Java networking. Release validation
 must not generate Analyze traffic, inspect user content, call an external LLM,
 or add/run a migration.
 
+Before a future Production Candidate, Provider deadline enforcement must be
+validated in isolation. The synchronous Analyze path has a 130-second
+monotonic Provider deadline, a 30-second fallback/finalization reserve, and a
+175-second application safety deadline inside the unchanged 180-second client
+bound. Primary and repair calls derive their connect/read/write/pool timeout
+components from the remaining absolute deadline; SDK retries remain disabled,
+application retry/repair counts remain unchanged, and the response-body stream
+is subject to the same total deadline. Candidate validation must confirm that
+deadline exhaustion selects the deterministic `fallback` state, finalizes
+History/idempotency at most once, and leaves no Provider operation active past
+the deadline.
+
 Stop promotion on any failed required check, unexpected version/schema/mode,
 floating deployment reference, image/source-label mismatch, unhealthy service,
 restart/OOM event, exposed Java port, secret finding, topology drift, or loss of
 rollback readiness.
+
+Operator rollback for this deadline-only change is to restore the prior
+application image and compose/configuration revision. No Java source,
+Java policy/dictionary, Alembic revision, or database downgrade is part of the
+change.
