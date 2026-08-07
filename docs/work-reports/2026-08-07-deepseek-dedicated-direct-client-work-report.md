@@ -398,8 +398,7 @@ and the production compose file. The full local Compose smoke reached the
 frontend image build but could not complete because the isolated Docker build
 could not fetch npm packages and returned `ECONNRESET`; no application
 assertion failed and the smoke cleanup removed its isolated resources. The
-already-run frontend tests/build and the PR's required container checks remain
-the authoritative follow-up checks.
+GitHub `docker-smoke-v2` and `container-smoke` checks subsequently passed.
 
 ## 25. PostgreSQL validation
 
@@ -475,16 +474,43 @@ The evidence commit adds this report and updates
 
 Implementation commit:
 
-- `e1ceec3` — `feat: isolate DeepSeek provider networking`.
+- `e1ceec3` — `feat: isolate DeepSeek provider networking`;
+- `e1ceec32b4b988811db326f79781c2c1c3924aba` — full implementation commit;
+- `bd293250395b29daacc228b8ee872e3ed01b5588` — report and Work Report index
+  commit, `docs: record DeepSeek direct client validation`.
 
-The report/index documentation commit and final PR head will be recorded
-after the report is committed and the PR is created.
+The final metadata update to this report is the next documentation commit on
+the PR branch.
 
 ## 31. Pull request
 
 PR title: `Fix: Isolate DeepSeek from environment proxies`
 
-PR URL: to be recorded after PR creation in the final report update.
+PR URL: https://github.com/HKJoker-Z/personal-job-agent/pull/57
+
+All required GitHub checks passed:
+
+- `backend-postgres`;
+- `backend-tests`;
+- `complete-backend-tests`;
+- `compose-validation`;
+- `container-smoke`;
+- `docker-build`;
+- `docker-smoke-v2`;
+- `frontend-build`;
+- `isolated-candidate`;
+- `local-mode-production-assets`;
+- `normalization-only-no-database-smoke`;
+- `postgres-16-integration`;
+- `postgres16-backup-restore`;
+- `production-assets-and-java`;
+- `production-runtime-regression`;
+- `repository-safety`;
+- `script-validation`;
+- `verify`.
+
+`publish-application-image` and `publish-integrated-backend-image` were
+skipped by the explicit no-release policy.
 
 The PR will remain open. It must not be merged automatically, deployed,
 tagged, or released.
