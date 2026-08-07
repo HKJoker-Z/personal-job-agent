@@ -20,6 +20,7 @@ mkdir -p "$artifact_dir"
 trap 'if [[ "$cleanup_artifact_dir" == "1" ]]; then rm -rf "$artifact_dir"; fi' EXIT
 
 export APP_ENV=development
+export DEEPSEEK_NETWORK_MODE=direct
 # The host shell may expose a SOCKS ALL_PROXY without socksio installed in the
 # pinned OpenAI/httpx environment.  Clear it only inside this disposable
 # candidate process; production proxy configuration is not changed.

@@ -33,6 +33,26 @@ isolated operator experiment or test. The request does not expose
 History, monitoring, or repair prompts. Sampling controls are not used to
 control thinking mode.
 
+## DeepSeek network mode
+
+The DeepSeek Provider client is the only Backend client that reads
+`DEEPSEEK_NETWORK_MODE`:
+
+- `direct` constructs the installed HTTPX client with `trust_env=False`. It
+  ignores uppercase and lowercase `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, and
+  `NO_PROXY` variables while retaining system DNS and normal TLS certificate
+  verification.
+- `environment_proxy` constructs the same deadline-aware client with
+  `trust_env=True`, preserving the existing approved HTTPX environment-proxy
+  behavior. This is the configuration-only rollback and compatibility path.
+
+Neither mode mutates `os.environ`, and the setting does not affect Job URL
+acquisition, SSRF-safe fetches, Java normalization, Project Knowledge, the
+Frontend, Worker/Outbox networking, or other Backend HTTP clients. The
+configuration parser rejects unknown values. For backward compatibility, an
+unset variable resolves to `environment_proxy`; the later production
+candidate explicitly sets `DEEPSEEK_NETWORK_MODE=direct`.
+
 ## Token budget and retry contract
 
 The previous Analyze candidate was `1200` output tokens. The current bounded
@@ -43,9 +63,10 @@ the compact JSON contract and its evidence arrays, but they are not a claim of
 better latency or Provider success.
 
 There is one primary call, followed by at most one application-level retry for
-connect/read timeout, HTTP 429, HTTP 5xx, documented resource exhaustion,
-empty content, or `finish_reason=length`. The length retry is the only retry
-that increases the output budget. Backoff is bounded by
+the exact bounded timeout categories, an attempt deadline, transport failure,
+HTTP 429, HTTP 5xx, documented resource exhaustion, empty content, or
+`finish_reason=length`. The length retry is the only retry that increases the
+output budget. Backoff is bounded by
 `PROVIDER_RETRY_BACKOFF_SECONDS`, and the overall Provider deadline is bounded
 by `PROVIDER_OVERALL_DEADLINE_SECONDS`. The deadline is one absolute
 monotonic-clock deadline shared by both primary attempts and the optional
@@ -60,6 +81,16 @@ contract with a five-second delivery margin). A primary attempt uses a maximum
 write 10 seconds, pool 5 seconds, and a read/total-body limit derived from the
 remaining absolute deadline. The retry reserves the configured 0.25-second
 backoff; repair reserves five seconds before the finalization reserve.
+
+The stable Provider categories are `connect_timeout`, `read_timeout`,
+`write_timeout`, `pool_timeout`, `provider_attempt_deadline_exhausted`,
+`provider_phase_deadline_exhausted`, `transient_http_429`,
+`transient_http_5xx`, `transport_error`, and
+`unknown_bounded_provider_error`. The adapter walks only typed SDK/HTTPX
+causes and explicit status codes. In particular, the SDK's broad
+`APIConnectionError` is not treated as `connect_timeout`; a concrete HTTPX
+transport cause is required. The effective attempt budget and effective
+connect timeout are recorded only as bounded numeric metadata.
 
 HTTPX read timeouts are per-read-operation, so the synchronous client also
 wraps the response byte stream with the same absolute deadline. A Provider
@@ -136,9 +167,10 @@ to repair.
 Structured observations are bounded to model ID, thinking boolean, JSON mode,
 attempt counts, finish reason, empty-content flag, fixed retry category, parse
 outcome, fixed salvage categories, accepted/rejected field counts, state,
-fallback category, timeout category, remaining-deadline bucket, deadline
-exhaustion, retry/repair/fallback flags, finalization flags, client-disconnect
-flag, returned token usage, bounded attempt durations, and duration. Prompts,
+fallback category, exact timeout and Provider-error categories, effective
+bounded timeout values, remaining-deadline bucket, deadline exhaustion,
+retry/repair/fallback flags, finalization flags, client-disconnect flag,
+returned token usage, bounded attempt durations, and duration. Prompts,
 Resume/JD text, Provider bodies, reasoning content, credentials, arbitrary
 exception text, request IDs, and content hashes are not recorded. Existing
 monitoring tables are reused; no migration is required for this metadata.
@@ -160,11 +192,10 @@ finalizing a takeover.
 
 ## Rollback and deferred experiments
 
-Rollback is configuration-only: restore the previous operator values for
-`DEEPSEEK_MODEL`, `AGENT_MODEL_MAX_OUTPUT_TOKENS`, and the new retry/repair
-variables, or set the model path to the previously approved bounded candidate.
-No database downgrade is needed. The application version remains `2.0.5` in
-this change; the provisional follow-up release is `v2.0.6`.
+Rollback is configuration-only: set
+`DEEPSEEK_NETWORK_MODE=environment_proxy`. No database downgrade is needed.
+The application version remains `2.0.5` in this change; no release or version
+bump is part of the implementation phase.
 
 Strict Function Calling is deferred as a candidate experiment. Multi-call
 response splitting is also deferred because it changes cost, ordering, and

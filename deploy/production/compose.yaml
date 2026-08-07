@@ -18,6 +18,7 @@ x-app-env: &app-env
   ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:?allowed origin is required}
   TRUSTED_HOSTS: ${TRUSTED_HOSTS:?trusted hosts are required}
   DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:?provider key is required}
+  DEEPSEEK_NETWORK_MODE: ${DEEPSEEK_NETWORK_MODE:-environment_proxy}
   MOCK_PROVIDER_ENABLED: "false"
   REDIS_URL: redis://:${REDIS_PASSWORD:?Redis password is required}@redis:6379/0
   REDIS_QUEUE_NAMESPACE: personal-job-agent-v2

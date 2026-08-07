@@ -32,7 +32,7 @@ import httpx
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
 BACKEND_DIR = ROOT_DIR / "backend"
-ORIGIN_SOURCE = BACKEND_DIR / "legacy_application.py"
+ORIGIN_SOURCE = BACKEND_DIR / "deepseek_client.py"
 DEFAULT_ATTEMPTS = 20
 PREFLIGHT_TOTAL_SECONDS = 8.0
 PREFLIGHT_CONNECT_SECONDS = 3.0
@@ -45,6 +45,12 @@ PATHS = ("A", "B", "C")
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
+from deepseek_client import (  # noqa: E402
+    DEEPSEEK_NETWORK_MODE_DIRECT,
+    DEEPSEEK_NETWORK_MODE_ENVIRONMENT_PROXY,
+    build_deepseek_client,
+    build_deepseek_http_client,
+)
 from provider_deadline import DeadlineHttpxClient  # noqa: E402
 
 
@@ -181,10 +187,12 @@ def _configure_path(path: str, hostname: str, *, container_mode: bool) -> dict[s
     if path not in PATHS:
         raise CandidateBlocked("network_path_invalid")
     original_presence = _proxy_presence()
-    for name in ("ALL_PROXY", "all_proxy"):
-        # This is the same candidate-only protection used by the existing
-        # runner.  It does not modify the host or any production process.
-        os.environ[name] = ""
+    all_proxy_cleared = path in {"A", "B"}
+    if all_proxy_cleared:
+        for name in ("ALL_PROXY", "all_proxy"):
+            # This is the same candidate-only protection used by the existing
+            # runner.  It does not modify the host or any production process.
+            os.environ[name] = ""
     rewritten = False
     if path in {"A", "B"}:
         for name in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"):
@@ -203,7 +211,7 @@ def _configure_path(path: str, hostname: str, *, container_mode: bool) -> dict[s
             no_proxy_appended = no_proxy_appended or changed
     return {
         "original_proxy_presence": original_presence,
-        "all_proxy_cleared_for_candidate": True,
+        "all_proxy_cleared_for_candidate": all_proxy_cleared,
         "container_loopback_proxy_rewritten": rewritten,
         "selective_no_proxy_appended": no_proxy_appended,
     }
@@ -381,10 +389,14 @@ def _one_preflight(origin: SplitResult, path: str, *, container_mode: bool) -> d
             write=PREFLIGHT_WRITE_SECONDS,
             pool=PREFLIGHT_POOL_SECONDS,
         )
-        client = DeadlineHttpxClient(
+        client = build_deepseek_http_client(
+            network_mode=(
+                DEEPSEEK_NETWORK_MODE_ENVIRONMENT_PROXY
+                if trust_env
+                else DEEPSEEK_NETWORK_MODE_DIRECT
+            ),
             deadline_monotonic=deadline,
             timeout=timeout,
-            trust_env=trust_env,
             follow_redirects=False,
         )
         proxy_selected = _transport_selected(client, origin)
@@ -507,25 +519,19 @@ def _candidate_build_provider_client(
     )
     if timeout is None:
         raise RuntimeError("candidate_provider_deadline_no_safe_call_budget")
-    from legacy_application import DEEPSEEK_BASE_URL, OpenAI
+    from legacy_application import OpenAI
 
-    http_client = DeadlineHttpxClient(
-        deadline_monotonic=deadline.absolute_deadline,
-        timeout=timeout.timeout,
-        trust_env=trust_env,
+    return build_deepseek_client(
+        runtime_settings,
+        deadline=deadline,
+        kind=kind,
+        network_mode=(
+            DEEPSEEK_NETWORK_MODE_ENVIRONMENT_PROXY
+            if trust_env
+            else DEEPSEEK_NETWORK_MODE_DIRECT
+        ),
+        client_class=OpenAI,
     )
-    try:
-        client = OpenAI(
-            api_key=runtime_settings.deepseek_api_key,
-            base_url=DEEPSEEK_BASE_URL,
-            timeout=timeout.timeout,
-            max_retries=0,
-            http_client=http_client,
-        )
-    except BaseException:
-        http_client.close()
-        raise
-    return client, http_client, timeout
 
 
 def _authenticated(path: str, output_path: Path) -> dict[str, Any]:

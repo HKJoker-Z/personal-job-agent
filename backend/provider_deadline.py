@@ -44,6 +44,14 @@ class ProviderAttemptTimeout:
     remaining_bucket: str
 
 
+class ProviderAttemptDeadlineExceeded(httpx.ReadTimeout):
+    """The bounded total for one Provider attempt expired."""
+
+
+class ProviderPhaseDeadlineExceeded(httpx.ReadTimeout):
+    """The shared absolute Provider phase deadline expired."""
+
+
 class ProviderDeadline:
     """An absolute monotonic deadline shared by primary and repair calls."""
 
@@ -150,10 +158,27 @@ class _DeadlineSyncByteStream(httpx.SyncByteStream):
         stream: httpx.SyncByteStream,
         deadline_monotonic: float,
         request: httpx.Request,
+        attempt_deadline_monotonic: float | None = None,
     ) -> None:
         self._stream = stream
         self._deadline_monotonic = deadline_monotonic
+        self._attempt_deadline_monotonic = attempt_deadline_monotonic
         self._request = request
+
+    def _active_deadline(self) -> tuple[float, type[httpx.ReadTimeout]]:
+        if (
+            self._attempt_deadline_monotonic is not None
+            and self._attempt_deadline_monotonic <= self._deadline_monotonic
+        ):
+            return self._attempt_deadline_monotonic, ProviderAttemptDeadlineExceeded
+        return self._deadline_monotonic, ProviderPhaseDeadlineExceeded
+
+    def _raise_deadline(self) -> None:
+        _deadline, exception_type = self._active_deadline()
+        raise exception_type(
+            "Provider deadline exhausted",
+            request=self._request,
+        )
 
     def _read_next(self, iterator: object) -> tuple[str, object]:
         """Read one transport chunk without allowing a blocking read past deadline."""
@@ -172,14 +197,12 @@ class _DeadlineSyncByteStream(httpx.SyncByteStream):
 
         worker = threading.Thread(target=read_chunk, daemon=True)
         worker.start()
-        remaining = max(0.0, self._deadline_monotonic - time.monotonic())
+        deadline, _exception_type = self._active_deadline()
+        remaining = max(0.0, deadline - time.monotonic())
         if not completed.wait(remaining):
             self.close()
             completed.wait(0.2)
-            raise httpx.ReadTimeout(
-                "Provider response deadline exhausted",
-                request=self._request,
-            )
+            self._raise_deadline()
         kind, value = outcome[0]
         if kind == "error":
             raise value  # type: ignore[misc]
@@ -188,12 +211,10 @@ class _DeadlineSyncByteStream(httpx.SyncByteStream):
     def __iter__(self):
         iterator = iter(self._stream)
         while True:
-            if time.monotonic() >= self._deadline_monotonic:
+            deadline, _exception_type = self._active_deadline()
+            if time.monotonic() >= deadline:
                 self.close()
-                raise httpx.ReadTimeout(
-                    "Provider response deadline exhausted",
-                    request=self._request,
-                )
+                self._raise_deadline()
             kind, chunk = self._read_next(iterator)
             if kind == "stop":
                 return
@@ -214,9 +235,35 @@ class DeadlineHttpxClient(httpx.Client):
     proxy behavior (``trust_env=True`` by default).
     """
 
-    def __init__(self, *, deadline_monotonic: float, **kwargs: object) -> None:
+    def __init__(
+        self,
+        *,
+        deadline_monotonic: float,
+        attempt_deadline_monotonic: float | None = None,
+        **kwargs: object,
+    ) -> None:
         self._deadline_monotonic = float(deadline_monotonic)
+        self._attempt_deadline_monotonic = (
+            None
+            if attempt_deadline_monotonic is None
+            else float(attempt_deadline_monotonic)
+        )
         super().__init__(**kwargs)
+
+    def _active_deadline(self) -> tuple[float, type[httpx.ReadTimeout]]:
+        if (
+            self._attempt_deadline_monotonic is not None
+            and self._attempt_deadline_monotonic <= self._deadline_monotonic
+        ):
+            return self._attempt_deadline_monotonic, ProviderAttemptDeadlineExceeded
+        return self._deadline_monotonic, ProviderPhaseDeadlineExceeded
+
+    def _raise_deadline(self, *, request: httpx.Request) -> None:
+        _deadline, exception_type = self._active_deadline()
+        raise exception_type(
+            "Provider deadline exhausted",
+            request=request,
+        )
 
     def _send_until_deadline(
         self,
@@ -243,7 +290,8 @@ class DeadlineHttpxClient(httpx.Client):
 
         worker = threading.Thread(target=send_request, daemon=True)
         worker.start()
-        remaining = max(0.0, self._deadline_monotonic - time.monotonic())
+        deadline, _exception_type = self._active_deadline()
+        remaining = max(0.0, deadline - time.monotonic())
         if not completed.wait(remaining):
             cancelled.set()
             try:
@@ -251,10 +299,7 @@ class DeadlineHttpxClient(httpx.Client):
             except Exception:
                 pass
             completed.wait(0.2)
-            raise httpx.ReadTimeout(
-                "Provider request deadline exhausted",
-                request=request,
-            )
+            self._raise_deadline(request=request)
         kind, value = outcome[0]
         if kind == "error":
             raise value  # type: ignore[misc]
@@ -268,14 +313,13 @@ class DeadlineHttpxClient(httpx.Client):
         auth: object = httpx.USE_CLIENT_DEFAULT,
         follow_redirects: object = httpx.USE_CLIENT_DEFAULT,
     ) -> httpx.Response:
-        if time.monotonic() >= self._deadline_monotonic:
-            raise httpx.ReadTimeout(
-                "Provider request deadline exhausted",
-                request=request,
-            )
+        deadline, _exception_type = self._active_deadline()
+        if time.monotonic() >= deadline:
+            self._raise_deadline(request=request)
         timeout_extensions = request.extensions.get("timeout")
         if isinstance(timeout_extensions, dict):
-            remaining = max(0.0, self._deadline_monotonic - time.monotonic())
+            deadline, _exception_type = self._active_deadline()
+            remaining = max(0.0, deadline - time.monotonic())
             request.extensions["timeout"] = {
                 key: min(max(float(value), 0.0), remaining)
                 for key, value in timeout_extensions.items()
@@ -293,6 +337,7 @@ class DeadlineHttpxClient(httpx.Client):
             response.stream,
             self._deadline_monotonic,
             request,
+            self._attempt_deadline_monotonic,
         )
         if not stream:
             try:

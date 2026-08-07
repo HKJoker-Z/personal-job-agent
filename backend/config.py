@@ -21,6 +21,7 @@ DEFAULT_SEED_PATH = Path("/app/seed/PROJECT_KNOWLEDGE.md")
 ALLOWED_APP_ENVS = ("development", "production", "test")
 ALLOWED_LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
 ALLOWED_JD_NORMALIZATION_MODES = ("local", "shadow", "java")
+ALLOWED_DEEPSEEK_NETWORK_MODES = ("direct", "environment_proxy")
 VERSION_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$")
 MODEL_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$")
 JAVA_API_KEY_MINIMUM_BYTES = 32
@@ -31,6 +32,21 @@ MAX_PROVIDER_OUTPUT_TOKENS = 5_000
 
 class ConfigError(RuntimeError):
     """A safe configuration error that never embeds configured secret values."""
+
+
+def parse_deepseek_network_mode(value: str | None) -> str:
+    """Validate the DeepSeek-only transport selection.
+
+    Existing deployments historically used HTTPX environment-proxy behavior,
+    so the implicit compatibility default remains ``environment_proxy``. A
+    production candidate explicitly sets ``DEEPSEEK_NETWORK_MODE=direct``.
+    """
+    mode = (value or "environment_proxy").strip().lower() or "environment_proxy"
+    if mode not in ALLOWED_DEEPSEEK_NETWORK_MODES:
+        raise ConfigError(
+            "DEEPSEEK_NETWORK_MODE must be direct or environment_proxy."
+        )
+    return mode
 
 
 def parse_bool(name: str, value: str | None, default: bool) -> bool:
@@ -136,6 +152,7 @@ class AppConfig:
     deepseek_api_key: str
     deepseek_model: str
     deepseek_thinking_enabled: bool
+    deepseek_network_mode: str
     allowed_origins: tuple[str, ...]
     trusted_hosts: tuple[str, ...]
     max_upload_size_mb: int
@@ -342,6 +359,9 @@ def load_config(*, validate_production: bool = True) -> AppConfig:
             os.getenv("DEEPSEEK_THINKING_ENABLED"),
             False,
         ),
+        deepseek_network_mode=parse_deepseek_network_mode(
+            os.getenv("DEEPSEEK_NETWORK_MODE")
+        ),
         allowed_origins=allowed_origins,
         trusted_hosts=trusted_hosts,
         max_upload_size_mb=parse_int("MAX_UPLOAD_SIZE_MB", os.getenv("MAX_UPLOAD_SIZE_MB"), 10, 1, 32),
@@ -442,6 +462,7 @@ def safe_config_status(config: AppConfig) -> dict[str, object]:
         "request_timeout_seconds": config.request_timeout_seconds,
         "deepseek_model": config.deepseek_model,
         "deepseek_thinking_enabled": config.deepseek_thinking_enabled,
+        "deepseek_network_mode": config.deepseek_network_mode,
         "model_max_output_tokens": config.model_max_output_tokens,
         "model_length_retry_output_tokens": config.model_length_retry_output_tokens,
         "model_repair_output_tokens": config.model_repair_output_tokens,

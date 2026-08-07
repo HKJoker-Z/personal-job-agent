@@ -58,7 +58,11 @@ class DeepSeekDirectConnectivityCandidateTest(unittest.TestCase):
 
     def test_path_c_ignores_environment_proxy_for_its_client_only(self):
         candidate._configure_path("C", self.origin.hostname, container_mode=False)
-        direct_client = httpx.Client(trust_env=False)
+        direct_client = candidate.build_deepseek_http_client(
+            network_mode=candidate.DEEPSEEK_NETWORK_MODE_DIRECT,
+            deadline_monotonic=10**10,
+            timeout=httpx.Timeout(1),
+        )
         try:
             self.assertFalse(candidate._transport_selected(direct_client, self.origin))
         finally:
@@ -136,12 +140,14 @@ class DeepSeekDirectConnectivityCandidateTest(unittest.TestCase):
         fake_deadline = SimpleNamespace(
             call_timeout=lambda **_kwargs: SimpleNamespace(
                 timeout=httpx.Timeout(connect=1, read=2, write=1, pool=1),
+                budget_seconds=2.0,
             ),
             absolute_deadline=9999999999.0,
         )
         runtime = SimpleNamespace(
             request_timeout_seconds=60,
             deepseek_api_key="synthetic-test-key",
+            deepseek_network_mode="direct",
         )
         with patch.dict(os.environ, {"APP_ENV": "test", "APP_DATABASE_PATH": str(Path(tempfile.gettempdir()) / "pja-direct-builder-test.sqlite")}):
             with patch("legacy_application.OpenAI") as openai:

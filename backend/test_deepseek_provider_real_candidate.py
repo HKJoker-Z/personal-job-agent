@@ -43,6 +43,7 @@ def runtime_settings():
         deepseek_api_key="synthetic-test-key",
         deepseek_model="deepseek-v4-pro",
         deepseek_thinking_enabled=False,
+        deepseek_network_mode="direct",
         model_max_output_tokens=1600,
         model_length_retry_output_tokens=2400,
         model_repair_output_tokens=1000,

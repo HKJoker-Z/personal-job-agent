@@ -8,7 +8,6 @@ from io import BytesIO
 from pathlib import Path
 from typing import Any
 
-import httpx
 from docx import Document
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, Form, Header, HTTPException, Query, Request, UploadFile
@@ -16,13 +15,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
-from openai import (
-    APIConnectionError,
-    APITimeoutError,
-    InternalServerError,
-    OpenAI,
-    RateLimitError,
-)
+from openai import OpenAI
 from pydantic import BaseModel, ValidationError
 from pypdf import PdfReader
 
@@ -72,6 +65,7 @@ from app.analyze.normalization_runtime import select_effective_normalization
 from app.jobs.acquisition import SafeJobUrlFetcher, UnsafeJobUrl
 from app.materials.grounding import EvidenceSource, validate_claims, validation_summary
 from config import APP_VERSION, load_config
+from deepseek_client import DEEPSEEK_BASE_URL, build_deepseek_client
 from database import (
     ALLOWED_APPLICATION_STATUSES,
     ALLOWED_KNOWLEDGE_CATEGORIES,
@@ -143,6 +137,11 @@ from provider_deadline import (
     DeadlineHttpxClient,
     ProviderDeadline,
 )
+from provider_errors import (
+    COMPONENT_TIMEOUT_CATEGORIES,
+    classify_provider_exception,
+    retry_category,
+)
 from evaluation_service import (
     evaluation_status,
     get_evaluation_run,
@@ -163,7 +162,6 @@ if (os.getenv("APP_ENV", "development").strip().lower() or "development") == "de
 settings = load_config()
 
 APP_NAME = "personal-job-agent"
-DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 DEEPSEEK_MODEL = settings.deepseek_model
 MAX_PROVIDER_CALLS_PER_ANALYZE = 3
 MAX_PRIMARY_PROVIDER_CALLS = MAX_PROVIDER_CALLS_PER_ANALYZE - 1
@@ -1230,41 +1228,21 @@ def enforce_analysis_grounding(
 
 
 def provider_retry_reason(exc: Exception | ModelOutputError) -> str | None:
-    """Return a fixed retry category without inspecting or logging exception text."""
-    cause = getattr(exc, "__cause__", None)
-    timeout_source = cause if isinstance(cause, httpx.TimeoutException) else exc
-    if isinstance(timeout_source, httpx.ConnectTimeout):
-        return "connect_timeout"
-    if isinstance(timeout_source, httpx.WriteTimeout):
-        return "write_timeout"
-    if isinstance(timeout_source, httpx.PoolTimeout):
-        return "pool_timeout"
-    if isinstance(timeout_source, httpx.ReadTimeout):
-        return "read_timeout"
-    if isinstance(exc, APITimeoutError):
-        return "read_timeout"
-    if isinstance(exc, APIConnectionError):
-        return "connect_timeout"
-    if isinstance(exc, RateLimitError):
-        return "http_429"
-    if isinstance(exc, InternalServerError):
-        return "http_5xx"
-    status_code = getattr(exc, "status_code", None)
-    if status_code == 429:
-        return "http_429"
-    if isinstance(status_code, int) and 500 <= status_code <= 599:
-        return "http_5xx"
-    if isinstance(exc, TimeoutError):
-        return "read_timeout"
-    if isinstance(exc, ConnectionError):
-        return "connect_timeout"
+    """Return a retryable category without inspecting exception text."""
     if isinstance(exc, ModelOutputError):
         return {
             MODEL_OUTPUT_EMPTY: "empty_content",
             MODEL_OUTPUT_TRUNCATED: "finish_length",
             MODEL_OUTPUT_RESOURCE_LIMIT: "resource_limit",
         }.get(exc.error_code)
-    return None
+    return retry_category(classify_provider_exception(exc), exception=exc)
+
+
+def provider_error_category(exc: Exception | ModelOutputError) -> str | None:
+    """Return the exact bounded SDK/HTTPX category, when one is observable."""
+    if isinstance(exc, ModelOutputError):
+        return None
+    return classify_provider_exception(exc)
 
 
 def provider_request_options(runtime_settings: Any, *, max_tokens: int) -> dict[str, Any]:
@@ -1303,6 +1281,7 @@ def _provider_observation_metadata(
     phase_started: float,
     attempt_durations_ms: list[float],
     timeout_categories: list[str],
+    provider_error_categories: list[str] | None = None,
     retry_started: bool = False,
     repair_started: bool = False,
     deadline_exhausted: bool | None = None,
@@ -1311,12 +1290,15 @@ def _provider_observation_metadata(
 ) -> dict[str, Any]:
     """Merge only bounded Provider timing categories into safe metadata."""
     categories = list(dict.fromkeys(timeout_categories))[:4]
+    provider_categories = list(dict.fromkeys(provider_error_categories or []))[:4]
     return safe_model_metadata({
         **metadata,
         "provider_attempt_durations_ms": attempt_durations_ms[:3],
         "provider_attempt_duration_ms": attempt_durations_ms[-1] if attempt_durations_ms else 0.0,
         "timeout_categories": categories,
         "timeout_category": categories[-1] if categories else None,
+        "provider_error_categories": provider_categories,
+        "provider_error_category": provider_categories[-1] if provider_categories else None,
         "retry_started": retry_started,
         "repair_started": repair_started,
         "deadline_exhausted": deadline.expired() if deadline_exhausted is None else deadline_exhausted,
@@ -1337,10 +1319,15 @@ def _provider_deadline_error(
     metadata: dict[str, Any] | None = None,
     attempt_durations_ms: list[float] | None = None,
     timeout_categories: list[str] | None = None,
+    provider_error_categories: list[str] | None = None,
+    deadline_category: str = "provider_phase_deadline_exhausted",
     retry_started: bool = False,
     repair_started: bool = False,
     attempt_count: int = 0,
 ) -> ModelOutputError:
+    observed_provider_categories = list(dict.fromkeys(provider_error_categories or []))
+    if deadline_category not in observed_provider_categories:
+        observed_provider_categories.append(deadline_category)
     observation = _provider_observation_metadata(
         {
             **_provider_metadata_base(runtime_settings, attempt_count=attempt_count),
@@ -1354,6 +1341,7 @@ def _provider_deadline_error(
         phase_started=phase_started,
         attempt_durations_ms=attempt_durations_ms or [],
         timeout_categories=timeout_categories or [],
+        provider_error_categories=observed_provider_categories,
         retry_started=retry_started,
         repair_started=repair_started,
         deadline_exhausted=True,
@@ -1368,28 +1356,12 @@ def _build_provider_client(
     deadline: ProviderDeadline,
     kind: str,
 ) -> tuple[OpenAI, DeadlineHttpxClient, Any]:
-    timeout = deadline.call_timeout(
-        configured_timeout_seconds=runtime_settings.request_timeout_seconds,
+    return build_deepseek_client(
+        runtime_settings,
+        deadline=deadline,
         kind=kind,
+        client_class=OpenAI,
     )
-    if timeout is None:
-        raise RuntimeError("provider deadline has no safe call budget")
-    http_client = DeadlineHttpxClient(
-        deadline_monotonic=deadline.absolute_deadline,
-        timeout=timeout.timeout,
-    )
-    try:
-        client = OpenAI(
-            api_key=runtime_settings.deepseek_api_key,
-            base_url=DEEPSEEK_BASE_URL,
-            timeout=timeout.timeout,
-            max_retries=0,
-            http_client=http_client,
-        )
-    except BaseException:
-        http_client.close()
-        raise
-    return client, http_client, timeout
 
 
 def _close_provider_clients(client: Any, http_client: DeadlineHttpxClient) -> None:
@@ -1511,6 +1483,7 @@ def call_deepseek_raw(
     last_error: ModelOutputError | None = None
     attempt_durations_ms: list[float] = []
     timeout_categories: list[str] = []
+    provider_error_categories: list[str] = []
     retry_started = False
     for attempt in range(1, MAX_PRIMARY_PROVIDER_CALLS + 1):
         attempt_timeout = deadline.call_timeout(
@@ -1526,6 +1499,7 @@ def call_deepseek_raw(
                     metadata=last_error.metadata,
                     attempt_durations_ms=attempt_durations_ms,
                     timeout_categories=timeout_categories,
+                    provider_error_categories=provider_error_categories,
                     retry_started=retry_started,
                     attempt_count=attempt - 1,
                 ) from last_error
@@ -1549,6 +1523,10 @@ def call_deepseek_raw(
             "primary_attempt_count": attempt,
             "transient_retry_reason": retry_reason,
             "remaining_deadline_bucket": attempt_timeout.remaining_bucket,
+            "effective_attempt_budget_seconds": attempt_timeout.budget_seconds,
+            "effective_connect_timeout_seconds": round(
+                float(attempt_timeout.timeout.connect), 3
+            ),
         }
         started = time.monotonic()
         attempt_duration_recorded = False
@@ -1595,6 +1573,7 @@ def call_deepseek_raw(
                     metadata=response.metadata,
                     attempt_durations_ms=attempt_durations_ms,
                     timeout_categories=timeout_categories,
+                    provider_error_categories=provider_error_categories,
                     retry_started=retry_started,
                     attempt_count=attempt,
                 )
@@ -1609,6 +1588,7 @@ def call_deepseek_raw(
                 phase_started=phase_started,
                 attempt_durations_ms=attempt_durations_ms,
                 timeout_categories=timeout_categories,
+                provider_error_categories=provider_error_categories,
                 retry_started=retry_started,
                 attempt_count=attempt,
             )
@@ -1643,6 +1623,7 @@ def call_deepseek_raw(
                 phase_started=phase_started,
                 attempt_durations_ms=attempt_durations_ms,
                 timeout_categories=timeout_categories,
+                provider_error_categories=provider_error_categories,
                 retry_started=retry_started,
                 deadline_exhausted=deadline.expired(),
                 attempt_count=attempt,
@@ -1664,15 +1645,19 @@ def call_deepseek_raw(
                 raise last_error from exc
             retry_reason = reason
         except Exception as exc:
+            category = provider_error_category(exc)
             reason = provider_retry_reason(exc)
             latency_ms = round((time.monotonic() - started) * 1000, 3)
             attempt_durations_ms.append(latency_ms)
-            if reason in {"connect_timeout", "read_timeout", "write_timeout", "pool_timeout"}:
-                timeout_categories.append(reason)
+            if category:
+                provider_error_categories.append(category)
+            if category in COMPONENT_TIMEOUT_CATEGORIES:
+                timeout_categories.append(category)
             metadata = safe_model_metadata({
                 **metadata_seed,
                 "latency_ms": latency_ms,
                 "primary_attempt_count": attempt,
+                "provider_error_category": category,
             })
             metadata = _provider_observation_metadata(
                 metadata,
@@ -1680,6 +1665,7 @@ def call_deepseek_raw(
                 phase_started=phase_started,
                 attempt_durations_ms=attempt_durations_ms,
                 timeout_categories=timeout_categories,
+                provider_error_categories=provider_error_categories,
                 retry_started=retry_started,
                 deadline_exhausted=deadline.expired(),
                 attempt_count=attempt,
@@ -1727,6 +1713,7 @@ def call_deepseek_raw(
                 metadata=last_error.metadata,
                 attempt_durations_ms=attempt_durations_ms,
                 timeout_categories=timeout_categories,
+                provider_error_categories=provider_error_categories,
                 retry_started=retry_started,
                 attempt_count=min(MAX_PRIMARY_PROVIDER_CALLS, len(attempt_durations_ms)),
             ) from last_error
@@ -1735,6 +1722,7 @@ def call_deepseek_raw(
         runtime_settings,
         deadline=deadline,
         phase_started=phase_started,
+        provider_error_categories=provider_error_categories,
         attempt_count=min(MAX_PRIMARY_PROVIDER_CALLS, len(attempt_durations_ms)),
     )
 
@@ -1778,6 +1766,7 @@ def call_deepseek_repair(
     started = time.monotonic()
     attempt_durations_ms: list[float] = []
     timeout_categories: list[str] = []
+    provider_error_categories: list[str] = []
     client: Any | None = None
     http_client: DeadlineHttpxClient | None = None
     try:
@@ -1797,15 +1786,23 @@ def call_deepseek_repair(
     except Exception as exc:
         latency_ms = round((time.monotonic() - started) * 1000, 3)
         attempt_durations_ms.append(latency_ms)
+        category = provider_error_category(exc)
         reason = provider_retry_reason(exc)
-        if reason in {"connect_timeout", "read_timeout", "write_timeout", "pool_timeout"}:
-            timeout_categories.append(reason)
+        if category:
+            provider_error_categories.append(category)
+        if category in COMPONENT_TIMEOUT_CATEGORIES:
+            timeout_categories.append(category)
         metadata = safe_model_metadata({
             **_provider_metadata_base(runtime_settings),
             "repair_attempt_count": 1,
             "latency_ms": latency_ms,
             "repair_started": True,
             "timeout_category": reason,
+            "provider_error_category": category,
+            "effective_attempt_budget_seconds": attempt_timeout.budget_seconds,
+            "effective_connect_timeout_seconds": round(
+                float(attempt_timeout.timeout.connect), 3
+            ),
         })
         metadata = _provider_observation_metadata(
             metadata,
@@ -1813,6 +1810,7 @@ def call_deepseek_repair(
             phase_started=phase_started,
             attempt_durations_ms=attempt_durations_ms,
             timeout_categories=timeout_categories,
+            provider_error_categories=provider_error_categories,
             repair_started=True,
             deadline_exhausted=deadline.expired(),
         )
@@ -1826,6 +1824,8 @@ def call_deepseek_repair(
                 metadata=metadata,
                 attempt_durations_ms=attempt_durations_ms,
                 timeout_categories=timeout_categories,
+                provider_error_categories=provider_error_categories,
+                deadline_category=category or "provider_phase_deadline_exhausted",
                 repair_started=True,
             ) from exc
         raise ModelOutputError(MODEL_PROVIDER_ERROR, metadata=metadata) from exc
@@ -1847,6 +1847,7 @@ def call_deepseek_repair(
                 metadata=response.metadata,
                 attempt_durations_ms=attempt_durations_ms,
                 timeout_categories=timeout_categories,
+                provider_error_categories=provider_error_categories,
                 repair_started=True,
             )
     except ModelOutputError as exc:
@@ -1860,6 +1861,7 @@ def call_deepseek_repair(
                 metadata=exc.metadata,
                 attempt_durations_ms=attempt_durations_ms,
                 timeout_categories=timeout_categories,
+                provider_error_categories=provider_error_categories,
                 repair_started=True,
             ) from exc
         metadata = safe_model_metadata({
@@ -1874,6 +1876,7 @@ def call_deepseek_repair(
             phase_started=phase_started,
             attempt_durations_ms=attempt_durations_ms,
             timeout_categories=timeout_categories,
+            provider_error_categories=provider_error_categories,
             repair_started=True,
             deadline_exhausted=deadline.expired(),
         )
@@ -1897,6 +1900,7 @@ def call_deepseek_repair(
             phase_started=phase_started,
             attempt_durations_ms=attempt_durations_ms,
             timeout_categories=timeout_categories,
+            provider_error_categories=provider_error_categories,
             repair_started=True,
         ),
     )

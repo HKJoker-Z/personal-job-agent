@@ -153,6 +153,8 @@ def _validate_candidate_environment() -> Any:
     runtime_settings = load_config(validate_production=False)
     if runtime_settings.app_env == "production":
         raise CandidateBlocked("production_environment_forbidden")
+    if getattr(runtime_settings, "deepseek_network_mode", None) != "direct":
+        raise CandidateBlocked("direct_network_mode_required")
     if not runtime_settings.deepseek_api_key:
         raise CandidateBlocked("approved_deepseek_secret_unavailable")
     if not runtime_settings.deepseek_model.strip():
@@ -508,6 +510,9 @@ def _case_record(
         "fallback_reason": fallback_reason,
         "deadline_exhausted": bool(deadline_exhausted),
         "timeout_categories": list(primary_metadata.get("timeout_categories") or []),
+        "provider_error_categories": list(
+            primary_metadata.get("provider_error_categories") or []
+        ),
         "job_summary": summary_status,
         "match_reasons": reasons_status,
         "input_tokens": tokens["input_tokens"],
@@ -528,6 +533,7 @@ def _aggregate(records: list[dict[str, Any]], runtime_settings: Any, safe_logs: 
     salvage_categories: dict[str, int] = {}
     fallback_reasons: dict[str, int] = {}
     timeout_categories: dict[str, int] = {}
+    provider_error_categories: dict[str, int] = {}
     for record in records:
         finish = record["finish_reason"]
         finish_reason_counts[finish] = finish_reason_counts.get(finish, 0) + 1
@@ -542,6 +548,8 @@ def _aggregate(records: list[dict[str, Any]], runtime_settings: Any, safe_logs: 
             fallback_reasons[reason] = fallback_reasons.get(reason, 0) + 1
         for category in record.get("timeout_categories") or []:
             timeout_categories[category] = timeout_categories.get(category, 0) + 1
+        for category in record.get("provider_error_categories") or []:
+            provider_error_categories[category] = provider_error_categories.get(category, 0) + 1
     provider_latencies = [record["provider_duration_ms"] for record in records]
     end_to_end_latencies = [record["end_to_end_ms"] for record in records]
     active_provider_latencies = [
@@ -566,6 +574,7 @@ def _aggregate(records: list[dict[str, Any]], runtime_settings: Any, safe_logs: 
         "salvage_action_categories": salvage_categories,
         "fallback_reason_categories": fallback_reasons,
         "timeout_categories": timeout_categories,
+        "provider_error_categories": provider_error_categories,
         "deadline_exhausted_count": sum(record.get("deadline_exhausted", False) for record in records),
         "job_summary_present_count": sum(record["job_summary"] == "present" for record in records),
         "job_summary_unavailable_count": sum(record["job_summary"] == "explicit_unavailable" for record in records),
@@ -654,6 +663,7 @@ def main() -> int:
         "maximum_provider_calls": summary["maximum_provider_calls"],
         "deadline_exhausted_count": summary["deadline_exhausted_count"],
         "timeout_categories": summary["timeout_categories"],
+        "provider_error_categories": summary["provider_error_categories"],
         "maximum_provider_duration_ms": summary["maximum_provider_duration_ms"],
         "maximum_end_to_end_duration_ms": summary["maximum_end_to_end_duration_ms"],
         "history_finalization": summary["history_finalization"]["status"],

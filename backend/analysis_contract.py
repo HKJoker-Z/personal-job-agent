@@ -39,8 +39,11 @@ SAFE_RETRY_REASONS = {
     "read_timeout",
     "write_timeout",
     "pool_timeout",
-    "http_429",
-    "http_5xx",
+    "provider_attempt_deadline_exhausted",
+    "transient_http_429",
+    "transient_http_5xx",
+    "transport_error",
+    "unknown_bounded_provider_error",
     "resource_limit",
     "empty_content",
     "finish_length",
@@ -52,6 +55,15 @@ SAFE_TIMEOUT_CATEGORIES = {
     "read_timeout",
     "write_timeout",
     "pool_timeout",
+}
+SAFE_PROVIDER_ERROR_CATEGORIES = {
+    *SAFE_TIMEOUT_CATEGORIES,
+    "provider_attempt_deadline_exhausted",
+    "provider_phase_deadline_exhausted",
+    "transient_http_429",
+    "transient_http_5xx",
+    "transport_error",
+    "unknown_bounded_provider_error",
 }
 SAFE_DEADLINE_BUCKETS = {"gt_60s", "31_60s", "11_30s", "1_10s", "exhausted"}
 
@@ -946,6 +958,19 @@ def safe_model_metadata(value: dict[str, Any]) -> dict[str, Any]:
             for category in timeout_categories
             if isinstance(category, str) and category in SAFE_TIMEOUT_CATEGORIES
         ][:4]
+    provider_error_category = value.get("provider_error_category")
+    if (
+        isinstance(provider_error_category, str)
+        and provider_error_category in SAFE_PROVIDER_ERROR_CATEGORIES
+    ):
+        metadata["provider_error_category"] = provider_error_category
+    provider_error_categories = value.get("provider_error_categories")
+    if isinstance(provider_error_categories, (list, tuple, set)):
+        metadata["provider_error_categories"] = [
+            category
+            for category in provider_error_categories
+            if isinstance(category, str) and category in SAFE_PROVIDER_ERROR_CATEGORIES
+        ][:4]
     attempt_durations = value.get("provider_attempt_durations_ms")
     if isinstance(attempt_durations, (list, tuple)):
         bounded_durations: list[float] = []
@@ -978,6 +1003,8 @@ def safe_model_metadata(value: dict[str, Any]) -> dict[str, Any]:
         "provider_attempt_duration_ms",
         "provider_phase_duration_ms",
         "total_analyze_duration_ms",
+        "effective_attempt_budget_seconds",
+        "effective_connect_timeout_seconds",
     ):
         if key in value:
             try:

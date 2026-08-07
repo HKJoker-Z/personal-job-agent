@@ -90,6 +90,19 @@ class ConfigTest(unittest.TestCase):
         with self.assertRaisesRegex(ConfigError, "DEEPSEEK_MODEL"):
             self.load({"DEEPSEEK_MODEL": "   "})
 
+    def test_deepseek_network_mode_is_validated_with_compatibility_default(self):
+        self.assertEqual(self.load().deepseek_network_mode, "environment_proxy")
+        self.assertEqual(
+            self.load({"DEEPSEEK_NETWORK_MODE": "direct"}).deepseek_network_mode,
+            "direct",
+        )
+        self.assertEqual(
+            self.load({"DEEPSEEK_NETWORK_MODE": "ENVIRONMENT_PROXY"}).deepseek_network_mode,
+            "environment_proxy",
+        )
+        with self.assertRaisesRegex(ConfigError, "DEEPSEEK_NETWORK_MODE"):
+            self.load({"DEEPSEEK_NETWORK_MODE": "proxy_url"})
+
     def test_retry_and_repair_output_budgets_are_bounded(self):
         config = self.load()
         self.assertEqual(config.model_max_output_tokens, 1600)
