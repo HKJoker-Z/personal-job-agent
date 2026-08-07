@@ -368,11 +368,17 @@ artifact was not accepted as a code result. The sanitized rerun passed. The
 candidate changes are under `backend/candidates` and do not alter shared
 production networking.
 
-At the starting head, PR #56 checks were green, including backend tests,
-complete backend tests, PostgreSQL integration, frontend build, Java
-verification/production checks, Compose validation, Docker smoke, repository
-safety, and candidate checks. Final PR checks after this report is pushed are
-recorded in the delivery update and must remain green before review/merge.
+At the final pushed head `180ceb99380ce25dca35032ceba13af89e9ecc8b`, PR #56
+was open, non-draft, and mergeable. All 20 reported checks completed with no
+failures: `backend-tests`, `complete-backend-tests`, `verify`,
+`isolated-candidate`, `production-assets-and-java`, `frontend-build`,
+`postgres-16-integration`, `container-smoke`, `backend-postgres`,
+`local-mode-production-assets`, `normalization-only-no-database-smoke`,
+`docker-build`, `postgres16-backup-restore`, `compose-validation`,
+`production-runtime-regression`, `script-validation`, `repository-safety`,
+and `docker-smoke-v2` succeeded. `publish-application-image` and
+`publish-integrated-backend-image` were intentionally skipped. No workflow
+published an image or called a real LLM.
 
 ## 23. Changed files
 
@@ -396,6 +402,7 @@ Logical commits created on the existing PR branch:
 
 - `a68fbb5` — `test: add direct provider connectivity harness`.
 - `b922232` — `test: cover direct provider transport isolation`.
+- `180ceb9` — `docs: record direct connectivity candidate evidence`.
 - The report/index delivery commit is the final report-bearing head shown by
   GitHub after push; it is intentionally not rewritten or squashed.
 
