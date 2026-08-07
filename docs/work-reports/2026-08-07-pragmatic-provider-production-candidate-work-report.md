@@ -355,8 +355,10 @@ Source and delivery commits:
 - PR #58 implementation head: `da1ab24beb36fd20b67aba77f2c0c14f277aa2c7`;
 - PR #58 normal merge: `7b834dd469892d2798661dca14f2f906e7b339cf`;
 - report branch: `ops/pragmatic-provider-production-candidate`;
-- report commit and report PR URL: recorded in the final metadata commit after
-  PR creation.
+- initial report commit: `ab213edec1db24c3253a3eb70e9d7147cf6db3b7`;
+- report PR: https://github.com/HKJoker-Z/personal-job-agent/pull/59;
+- subsequent report metadata commit: the final documentation commit on the
+  report branch is recorded in the PR head and remains documentation-only.
 
 ## 14. Next prerequisite and risks
 
