@@ -157,7 +157,7 @@ Deployed runtime image summary:
 | Frontend | `sha256:70df317280ad5acd5e2916a0de65844b1add1bb54636cdeec1f793c8c93b174b` | healthy | 0 | false |
 | Edge | `sha256:70df317280ad5acd5e2916a0de65844b1add1bb54636cdeec1f793c8c93b174b` | healthy | 0 | false |
 | Java | `sha256:57e3e68c96ca629e4216e4cb19d55c0d9a52ad9bfb2d49c289fdc94f61f0d47f` | healthy | 0 | false |
-| PostgreSQL | `sha256:7c688148e5e1560d0e86df7ba8ae5a05a2386aaec1e2ad8e6d11bdf10504b1fb7` | healthy | 0 | false |
+| PostgreSQL | `sha256:7c688148e5e1560d86df7ba8ae5a05a2386aaec1e2ad8e6d11bdf10504b1fb7` | healthy | 0 | false |
 | Redis | `sha256:c1e88455c85225310bbea54816e9c3f4b5295815e6dbf80c34d40afc6df28275` | healthy | 0 | false |
 
 ## 6. Controlled production cohort
@@ -358,8 +358,8 @@ Source and delivery commits:
 - initial report commit: `ab213edec1db24c3253a3eb70e9d7147cf6db3b7`;
 - report PR: https://github.com/HKJoker-Z/personal-job-agent/pull/59;
 - report metadata commit: `88722ec00cf92979669537cb0e745891319e2bcb`;
-- this finalization commit is documentation-only and is the report-branch
-  follow-up to that metadata commit.
+- report finalization commit: `d0657a6166d04491467e66a514b72d899ae96c3c`;
+- the subsequent digest-correction commit is documentation-only.
 
 ## 14. Next prerequisite and risks
 
