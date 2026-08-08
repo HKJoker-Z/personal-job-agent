@@ -1,7 +1,8 @@
-# Version 2.0.5 deployment and rollback
+# Version 2.0.6 deployment and rollback
 
-Version 2.0.5 promotes the reviewed application version metadata after the
-Java-authoritative production rollout reached Phase IVD-B GO. It keeps Alembic
+Version 2.0.6 promotes the reviewed Provider-deadline and Analyze-resilience
+source after the Java-authoritative production rollout reached Phase IVD-B GO.
+It keeps Alembic
 `20260730_07`, normalization mode `java`, the existing private Java service,
 HTTPS, Mihomo, `pja-br0`, routing preference 8999, and the established public
 ports and networks.
@@ -11,11 +12,11 @@ ports and networks.
 Publish Backend and Frontend from the exact release source commit with
 `.github/workflows/release-images.yml`. Use only the resulting
 `sha-<full-commit>` images and record immutable registry digests plus OCI source,
-revision, and Version `2.0.5` labels. Do not rebuild the unchanged Java image and
+revision, and Version `2.0.6` labels. Do not rebuild the unchanged Java image and
 do not create the release tag before production acceptance.
 
 Record the previous Backend and Frontend digests. Production must use immutable
-`@sha256` references and `RELEASE_VERSION=2.0.5`; a mutable tag is never a
+`@sha256` references and `RELEASE_VERSION=2.0.6`; a mutable tag is never a
 deployment input.
 
 ## Preflight
@@ -49,19 +50,20 @@ Edge/Nginx. Preserve the Java project, digest, key, private network, policy
 
 ## Acceptance
 
-Require public Version `2.0.5`, readiness `ready`, Alembic `20260730_07`, mode
+Require public Version `2.0.6`, readiness `ready`, Alembic `20260730_07`, mode
 `java`, and exact reviewed Backend/Worker/Outbox and Frontend digests. Require
 healthy application and Java services, restart zero, OOM false, unchanged public
 ports/networks, no Java host port, no unexpected Java failure/fallback/config
 warning during cutover, and no secret in bounded inspection, logs, or image
 metadata. Perform no business request.
 
-Only after this GO may the annotated `v2.0.5` tag and GitHub Release be created
-on the exact release source commit.
+Only after this GO, and outside this release-preparation phase, may the
+annotated `v2.0.6` tag and GitHub Release be created on the exact release source
+commit. Until then production remains Version `2.0.5`.
 
 ## Rollback
 
-For an application-image failure, restore the recorded Version 2.0.4 Backend
+For an application-image failure, restore the recorded Version 2.0.5 Backend
 digest consistently to Backend, Worker, and Outbox and restore the prior
 Frontend digest. Keep Alembic `20260730_07`, Java, its key/network, all volumes,
 and all data.
