@@ -240,7 +240,7 @@ version, tag, publish, or release Version 2.0.6.
   Session, or raw exception string was retained in evidence.
 - Version 2.0.6 was not tagged, published, or released.
 - The production candidate was not redeployed for collector validation.
-- PR: pending final push and check completion.
+- PR: https://github.com/HKJoker-Z/personal-job-agent/pull/60.
 
 ## 12. Risks
 
