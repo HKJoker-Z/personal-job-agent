@@ -6,6 +6,8 @@ reviewable in Git history.
 
 | Date | Report |
 |---|---|
+| 2026-08-07 | [Production Candidate Evidence Completion (GO)](2026-08-07-production-candidate-evidence-completion-work-report.md) |
+| 2026-08-07 | [Pragmatic Provider Production Candidate (NO-GO)](2026-08-07-pragmatic-provider-production-candidate-work-report.md) |
 | 2026-08-07 | [Pragmatic DeepSeek Provider Acceptance](2026-08-07-pragmatic-provider-acceptance-work-report.md) |
 | 2026-08-07 | [DeepSeek Direct Connectivity Candidate](2026-08-07-deepseek-direct-connectivity-candidate-work-report.md) |
 | 2026-08-07 | [Provider Deadline Enforcement](2026-08-07-provider-deadline-enforcement-work-report.md) |
