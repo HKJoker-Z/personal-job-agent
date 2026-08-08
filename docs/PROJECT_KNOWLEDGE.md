@@ -61,7 +61,8 @@ retry, repair, response-body handling, and finalization reserve. It preserves
 deterministic fallback, accepts a smaller shallow narrative Provider contract,
 salvages valid peer fields into `partial`, and keeps Backend-authoritative score,
 skills, evidence, RAG metadata, Job Summary, Match Reasons, History, and public
-serialization. No Java logic or Alembic migration changed.
+serialization. The directly used PDF parser is `pypdf` 6.15.0. No Java logic
+or Alembic migration changed.
 
 ## Prior Version 2.0.4 Changes
 

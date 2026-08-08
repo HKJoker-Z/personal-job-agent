@@ -23,6 +23,8 @@ topology and Alembic head `20260730_07`.
 - Improves Provider monitoring and bounded error categorization while keeping
   raw prompts, Resume/JD text, Provider bodies, credentials, and reasoning out
   of operational metadata.
+- Updates the directly used PDF parser to `pypdf` 6.15.0 after dependency
+  auditing identified fixed malformed-PDF denial-of-service conditions.
 - Hardens the production-candidate collector and records bounded operational
   evidence without inspecting production/user content.
 
