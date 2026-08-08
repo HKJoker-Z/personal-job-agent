@@ -626,7 +626,7 @@ fictional, and separate from ordinary CI.
 | FastAPI API and Pydantic contracts | REST API design, validation, safe error boundaries |
 | SQLAlchemy 2 repositories and ownership | relational modeling, transactions, IDOR prevention |
 | PostgreSQL 16 | production relational database design and full-text search |
-| Alembic `20260721_05` | forward/backward schema migration and data backfill |
+| Alembic `20260730_07` | forward/backward schema migration and data backfill |
 | Redis and Dramatiq | asynchronous processing, transient queue transport, worker health |
 | Transactional Outbox | reliable event delivery, recovery, idempotency, dead-letter handling |
 | React and Vite | authenticated frontend application and responsive navigation |
@@ -659,7 +659,7 @@ fictional, and separate from ordinary CI.
 - Implemented PostgreSQL 16 Backup Restore gates with custom archive, immutable
   tools, manifest checksums, empty target, inventory, and owner mapping.
 - Deployed immutable GHCR images behind HTTPS Nginx with private data services,
-  candidate staging, health assertions, and Version 2.0.3 rollback assets.
+  candidate staging, health assertions, and reviewed release rollback assets.
 - Built GitHub Actions checks for Python, PostgreSQL, React, Docker Compose,
   repository safety, Mock LLM, and isolated recovery rehearsal.
 

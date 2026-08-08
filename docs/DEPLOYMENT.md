@@ -23,7 +23,7 @@ deployment input.
 
 Immediately before mutation require:
 
-- public Version exactly `2.0.4` and readiness `ready`;
+- public Version exactly `2.0.5` and readiness `ready`;
 - Alembic exactly `20260730_07` and mode exactly `java`;
 - the recorded Backend and Java digests;
 - healthy Backend and Java, restart count zero, and OOM false;

@@ -307,11 +307,11 @@ keys, sequences, indexes, and ownership. Restore runs only against a validated
 empty target and compares the complete post-restore inventory, with explicit
 owner mapping where required.
 
-Rollback restores the recorded Version 2.0.3 immutable image digests and saved
-Compose/runtime configuration while preserving PostgreSQL/Redis volumes,
-Resume files, backups, and Project Knowledge. The additive Version 2.0.4 ledger
-is retained during ordinary image rollback; schema downgrade is reserved for a
-separately diagnosed incompatibility after Analyze traffic is stopped. See
+Rollback restores the recorded Version 2.0.5 immutable application image
+digests and saved Compose/runtime configuration while preserving
+PostgreSQL/Redis volumes, Resume files, backups, and Project Knowledge. The
+schema remains at Alembic `20260730_07`; no downgrade is required for ordinary
+application rollback. See
 [Deployment](docs/DEPLOYMENT.md) and
 [Version 2 Backup and Restore](docs/V2_BACKUP_AND_RESTORE.md).
 
@@ -441,9 +441,9 @@ the repository evidence. Version 1.6 and later link to formal releases.
 | [v2.0.1](docs/V2_0_1_RELEASE_NOTES.md) | Unified navigation, Remember Me, Project Knowledge PostgreSQL RAG, deployment fixes, and removal of Jobs/Rankings/Applications/Approvals/Tasks from the public workflow. |
 | [v2.0.2](docs/V2_0_2_RELEASE_NOTES.md) | PostgreSQL 16 client/server Backup/Restore compatibility gates and complete inventory validation. |
 | [v2.0.3](docs/V2_0_3_RELEASE_NOTES.md) | Resilient DeepSeek parsing/repair/fallback and safe upload with automatic Primary Resume selection. |
+| [v2.0.4](docs/V2_0_4_RELEASE_NOTES.md) | Portfolio architecture material, Request ID/error contracts, monitoring SQL optimization, and PostgreSQL-backed Analyze idempotency. |
 | [v2.0.5](docs/V2_0_5_RELEASE_NOTES.md) | Private stateless Java normalization, deterministic Shadow, Java-authoritative execution binding, second-scan security, safe local fallback, and production rollout evidence. |
 | [2.0.6 release candidate](docs/V2_0_6_RELEASE_NOTES.md) | Bounded Provider deadlines, pragmatic shallow output acceptance, deterministic fallback preservation, field-level salvage, and production-candidate hard-gate evidence. |
-| [v2.0.4](docs/V2_0_4_RELEASE_NOTES.md) | Portfolio architecture material, Request ID/error contracts, monitoring SQL optimization, and PostgreSQL-backed Analyze idempotency. |
 
 ## Known Limitations
 
