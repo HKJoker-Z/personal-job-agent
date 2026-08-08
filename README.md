@@ -13,20 +13,22 @@ applications, contact employers, or guarantee an Applicant Tracking System
 
 | Item | Current state |
 | --- | --- |
-| Stable release | **2.0.5** — Production Java Normalization Integration |
+| Release candidate | **2.0.6** — Bounded Provider deadlines and resilient synchronous Analyze |
+| Public production baseline | **2.0.5** until Version 2.0.6 publication |
 | Production schema | Alembic `20260730_07` (`head`) |
 | Production database | PostgreSQL 16 |
 | Runtime topology | HTTPS Edge, Frontend, Backend, private Java normalization, PostgreSQL, Redis, Worker, and Outbox Dispatcher |
 
-Version 2.0.5 completes the bounded production integration of a private,
-stateless Java normalization-only service. FastAPI retains the public Analyze,
-security, idempotency, retrieval, provider, scoring, History, and monitoring
-boundaries. The release supports explicit `local`, deterministic-sampled
-`shadow`, and Java-authoritative `java` modes; production uses `java` with safe
+Version 2.0.6 carries forward the private, stateless Java normalization-only
+production integration and adds bounded Provider deadlines, pragmatic shallow
+Provider acceptance, deterministic fallback preservation, and field-level
+salvage for resilient synchronous Analyze completion. FastAPI remains
+authoritative for security, idempotency, retrieval, scoring, History, and
+monitoring. Production remains in `java` normalization mode with safe
 `fallback_local` containment and an authoritative second security scan.
 
-See the [Version 2.0.5 release notes](docs/V2_0_5_RELEASE_NOTES.md) for upgrade
-and rollback details.
+See the [Version 2.0.6 release notes](docs/V2_0_6_RELEASE_NOTES.md) for the
+prepared upgrade and rollback details.
 
 ## Core Features
 
@@ -305,11 +307,11 @@ keys, sequences, indexes, and ownership. Restore runs only against a validated
 empty target and compares the complete post-restore inventory, with explicit
 owner mapping where required.
 
-Rollback restores the recorded Version 2.0.3 immutable image digests and saved
-Compose/runtime configuration while preserving PostgreSQL/Redis volumes,
-Resume files, backups, and Project Knowledge. The additive Version 2.0.4 ledger
-is retained during ordinary image rollback; schema downgrade is reserved for a
-separately diagnosed incompatibility after Analyze traffic is stopped. See
+Rollback restores the recorded Version 2.0.5 immutable application image
+digests and saved Compose/runtime configuration while preserving
+PostgreSQL/Redis volumes, Resume files, backups, and Project Knowledge. The
+schema remains at Alembic `20260730_07`; no downgrade is required for ordinary
+application rollback. See
 [Deployment](docs/DEPLOYMENT.md) and
 [Version 2 Backup and Restore](docs/V2_BACKUP_AND_RESTORE.md).
 
@@ -359,7 +361,7 @@ Mock LLM, persistence, and Backup/Restore together. It uses unique temporary
 resources and removes them after completion:
 
 ```bash
-PJA_SMOKE_MILESTONE=2.0.1 PJA_APP_VERSION=2.0.5 \
+PJA_SMOKE_MILESTONE=2.0.6 PJA_APP_VERSION=2.0.6 \
   scripts/docker-smoke-v2.sh
 ```
 
@@ -413,7 +415,7 @@ The test and CI layers cover:
 - Strict PostgreSQL 16 Backup/Restore, full inventory comparison, and negative
   PostgreSQL 17 client gates before writes.
 
-CI and Version 2.0.5 release validation do not call DeepSeek. Provider behavior
+CI and Version 2.0.6 release validation do not call DeepSeek. Provider behavior
 is covered with deterministic mocks and the isolated Mock LLM. Test counts are
 deliberately not fixed here because they change as regressions are added.
 
@@ -439,8 +441,9 @@ the repository evidence. Version 1.6 and later link to formal releases.
 | [v2.0.1](docs/V2_0_1_RELEASE_NOTES.md) | Unified navigation, Remember Me, Project Knowledge PostgreSQL RAG, deployment fixes, and removal of Jobs/Rankings/Applications/Approvals/Tasks from the public workflow. |
 | [v2.0.2](docs/V2_0_2_RELEASE_NOTES.md) | PostgreSQL 16 client/server Backup/Restore compatibility gates and complete inventory validation. |
 | [v2.0.3](docs/V2_0_3_RELEASE_NOTES.md) | Resilient DeepSeek parsing/repair/fallback and safe upload with automatic Primary Resume selection. |
-| [v2.0.5](docs/V2_0_5_RELEASE_NOTES.md) | Private stateless Java normalization, deterministic Shadow, Java-authoritative execution binding, second-scan security, safe local fallback, and production rollout evidence. |
 | [v2.0.4](docs/V2_0_4_RELEASE_NOTES.md) | Portfolio architecture material, Request ID/error contracts, monitoring SQL optimization, and PostgreSQL-backed Analyze idempotency. |
+| [v2.0.5](docs/V2_0_5_RELEASE_NOTES.md) | Private stateless Java normalization, deterministic Shadow, Java-authoritative execution binding, second-scan security, safe local fallback, and production rollout evidence. |
+| [2.0.6 release candidate](docs/V2_0_6_RELEASE_NOTES.md) | Bounded Provider deadlines, pragmatic shallow output acceptance, deterministic fallback preservation, field-level salvage, and production-candidate hard-gate evidence. |
 
 ## Known Limitations
 
@@ -465,7 +468,7 @@ the repository evidence. Version 1.6 and later link to formal releases.
 
 - Repository: [HKJoker-Z/personal-job-agent](https://github.com/HKJoker-Z/personal-job-agent)
 - Default branch: `main`
-- Status: Version 2.0.5 is the current stable production release.
+- Status: Version 2.0.6 is the prepared release candidate; public production remains Version 2.0.5 until publication.
 - License: no license file is currently included. Public source visibility does
   not itself grant reuse rights; normal copyright rules apply.
 
@@ -479,6 +482,7 @@ the repository evidence. Version 1.6 and later link to formal releases.
 - [Version 2.0.4 architecture](docs/V2_0_4_ARCHITECTURE.md)
 - [Version 2.0.4 API](docs/V2_0_4_API.md)
 - [Version 2.0.5 release notes](docs/V2_0_5_RELEASE_NOTES.md)
+- [Version 2.0.6 release notes](docs/V2_0_6_RELEASE_NOTES.md)
 - [Authentication and Remember Me](docs/V2_AUTHENTICATION.md)
 - [Project Knowledge RAG](docs/V2_RAG.md)
 - [Development](docs/V2_DEVELOPMENT.md)

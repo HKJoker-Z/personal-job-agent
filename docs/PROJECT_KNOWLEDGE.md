@@ -3,9 +3,9 @@
 ## Project Overview
 
 Personal Job Agent is a private, administrator-led web application for
-evidence-grounded Resume and Job Description analysis. The current stable and
-production version is **2.0.5**. The current Alembic schema revision is
-`20260730_07` (`head`).
+evidence-grounded Resume and Job Description analysis. The prepared source
+release candidate is **2.0.6**; public production remains **2.0.5** until
+publication. The current Alembic schema revision is `20260730_07` (`head`).
 
 The application uses a React/Vite frontend, a FastAPI/Python backend,
 SQLAlchemy 2, PostgreSQL 16, Redis, Dramatiq, a Transactional Outbox, Nginx,
@@ -18,12 +18,13 @@ AI output is advisory and requires human review. Personal Job Agent does not
 automatically submit applications, send email, contact employers, or guarantee
 Applicant Tracking System (ATS), interview, or hiring outcomes.
 
-## Current Version 2.0.5 Changes
+## Current Version 2.0.6 Source Changes
 
-Version 2.0.5 completes the bounded production integration of a private,
-stateless Spring Boot normalization-only service. FastAPI remains the only
-public application and owns security, idempotency, Project Knowledge retrieval,
-provider interaction, scoring, History, monitoring, and all persistence.
+Version 2.0.6 carries forward the bounded production integration of a private,
+stateless Spring Boot normalization-only service and the merged Provider
+deadline/acceptance work. FastAPI remains the only public application and owns
+security, idempotency, Project Knowledge retrieval, Provider interaction,
+scoring, History, monitoring, and all persistence.
 
 The integration has explicit `local`, `shadow`, and `java` modes. Shadow
 sampling is deterministic from the existing Analyze input fingerprint and does
@@ -39,17 +40,29 @@ History, and result finalization. Production runs in `java` mode with policy
 `jd-normalization-v1`, dictionary `skills-v1`, private Java networking, and no
 Java host port. Alembic remains `20260730_07`.
 
-Production rollout evidence covered four Java-authoritative requests: 4/4 Java
+Java production evidence covered four Java-authoritative requests: 4/4 Java
 success, Request ID match, accepted second scan, pre-Provider execution binding,
 and Java execution source, with no Java failure, local fallback, duplicate
-Provider/History side effect, or Java-caused public failure. The existing
-Provider path separately contained one call failure and two output rejections;
-these non-Java observations do not represent a Java failure or a performance
-claim.
+Provider/History side effect, or Java-caused public failure. The carried-forward
+controlled Provider candidate completed 10/10 authorized synthetic executions:
+6 complete, 1 partial, and 3 fallback, with HTTP 200 public JSON, zero deadline
+exhaustion, maximum two Provider calls, zero security/serialization defects,
+History/idempotency finalized 10/10, and no duplicate History. Provider
+acceptance was 7/10 and quality was recorded as **DEGRADED**; that percentage is
+monitored separately from hard correctness and is not a release hard gate.
 
-The release also updates `python-dotenv` to 1.2.2, `requests` to 2.33.0, and
-`urllib3` to 2.7.0 after the production dependency scan identified advisories
-with patched releases. No public API contract changes with these updates.
+The supplemental deterministic replay evidence confirmed fallback completion,
+stable Job Summary and Match Reasons, exactly-once History reuse, completed
+idempotency recognition, zero replay Provider-call delta, no duplicate History,
+and approximately 17.876 ms replay duration.
+
+The source enforces one bounded absolute Provider deadline across primary,
+retry, repair, response-body handling, and finalization reserve. It preserves
+deterministic fallback, accepts a smaller shallow narrative Provider contract,
+salvages valid peer fields into `partial`, and keeps Backend-authoritative score,
+skills, evidence, RAG metadata, Job Summary, Match Reasons, History, and public
+serialization. The directly used PDF parser is `pypdf` 6.15.0. No Java logic
+or Alembic migration changed.
 
 ## Prior Version 2.0.4 Changes
 
@@ -171,13 +184,16 @@ monitoring, and Evaluation; Version 2 domains use SQLAlchemy services.
 
 ## Frontend Stack and Routes
 
-React 19.2.7, React Router 7.18.1, Vite 8.1.3, semantic HTML, and project-owned
+React 19.2.7, React Router 7.18.2, Vite 8.1.3, semantic HTML, and project-owned
 CSS implement the frontend. One `AppLayout` supplies responsive desktop,
 mobile, and iPad navigation. Routes cover Login, Dashboard, Analyze, History,
 Resumes, Profile, Project Knowledge, Agent Runs, Account, and administrator
 Monitoring/Evaluation. The authenticated `/architecture` route renders a static,
 read-only system overview without an API or external network request. Retired
 workflow routes render Feature Removed and do not appear in navigation.
+The locked React Router patch addresses the current RSC-mode advisory; this
+client-only Vite SPA does not use unstable React Server Components or server
+route actions.
 
 ## Resume Management
 
@@ -237,19 +253,30 @@ and JD enter `USER_PROVIDED_RESUME` and `UNTRUSTED_JOB_DESCRIPTION`.
 
 ### DeepSeek and structured output
 
-One main DeepSeek request asks for matched/missing/unknown skills, concise
-assessments, evidence references, unsupported-claim candidates, and
-recommendations. DeepSeek does not own final scoring, sources, History identity,
-or audit metadata.
+One bounded DeepSeek request asks only for shallow narrative material:
+`job_summary`, `match_reasons`, `recommendations`, and
+`resume_improvements`. The active contract bounds the summary and each list;
+legacy compact skill/dimension/evidence fields remain compatibility input but
+are not authoritative in the active Analyze path. DeepSeek does not own final
+skills, scoring, sources, History identity, security, or audit metadata.
+
+The Backend remains authoritative for normalized JD data, deterministic skills
+and evidence, ATS overlap, RAG metadata, final score, security decisions,
+deterministic fallback, Job Summary/Match Reasons completion, and public
+serialization.
 
 Parsing proceeds in this order:
 
 1. Standard JSON parsing.
 2. Balanced-object extraction from fences or prose.
 3. Wrapper/trailing-comma normalization.
-4. Pydantic aliases, defaults, safe coercion, bounds, and ignored extras.
-5. At most one format-only repair if local parsing is unusable.
-6. Deterministic fallback if provider/repair remains unusable.
+4. Pydantic aliases, defaults, safe coercion, bounds, peer-field salvage, and
+   ignored extras.
+5. Evidence-reference and unsupported-claim cleanup; useful content becomes
+   `partial` when bounded repair was needed.
+6. At most one format-only repair if local parsing cannot recover useful data.
+7. Deterministic fallback if Provider/repair remains unusable or output
+   security requires rejection.
 
 No parser evaluates model text as code.
 
@@ -299,11 +326,13 @@ content was removed. Valid fields remain available.
 The provider timed out, returned a provider error, emitted unusable/truncated
 output, or could not be recovered by the one repair. The backend performs a
 deterministic curated keyword/synonym comparison and returns the stable result
-shape with local scoring, recommendations, and available RAG evidence.
+shape with local scoring, recommendations, stable Job Summary and Match Reasons,
+and available RAG evidence.
 
 Fallback is more basic than full AI analysis. The system guarantees a stable
 fallback structure for covered failures, not a successful DeepSeek call or a
-complete model analysis every time.
+complete model analysis every time. It is a supported availability state, not
+an HTTP error state.
 
 ## Project Knowledge RAG
 
@@ -400,8 +429,9 @@ Request IDs remain observational metadata and are never used for
 authentication, authorization, ownership, or idempotency. Analyze accepts an
 optional user-scoped `Idempotency-Key`; PostgreSQL owns the request fingerprint,
 claim/lease state, execution binding, and completed response. Both
-OpenAI-compatible clients use `max_retries=0`; the workflow permits at most one
-primary Provider call and one explicit format-only repair call.
+OpenAI-compatible clients use `max_retries=0`; the workflow permits at most two
+bounded primary Provider calls (one stable transient retry) and one explicit
+format-only repair call.
 
 ## AI Reliability
 
@@ -410,11 +440,14 @@ trailing commas, unexpected aliases, nulls, optional-field omissions, scalar
 values where a list was requested, numeric strings, truncated output, or no
 usable response. Network timeouts and provider 5xx errors are also possible.
 
-Version 2.0.5 treats these as expected reliability conditions. It uses bounded
-local parsing first, tolerates non-critical schema differences, requests one
-format-only repair only when necessary, and selects local fallback when the
-model path is unusable. Non-critical omissions no longer force the entire
-analysis to fail.
+Version 2.0.6 treats these as expected reliability conditions. It uses one
+monotonic Provider deadline with a 30-second fallback/finalization reserve,
+derives bounded connect/read/write/pool timeouts from remaining time, and keeps
+SDK retries disabled. It performs bounded local parsing first, tolerates
+non-critical schema differences, requests one format-only repair only when
+necessary, salvages valid peer fields into `partial`, and selects deterministic
+local fallback when the model path is unusable. Non-critical omissions no
+longer force the entire analysis to fail.
 
 DeepSeek provides compact judgments; the backend remains authoritative for
 evidence validation, scoring, RAG source metadata, status, warnings, workflow
@@ -471,7 +504,7 @@ timing cases without DeepSeek. Pass rate is regression evidence, not model
 accuracy or hiring probability.
 
 History separately supports cover-letter DOCX and analysis-report PDF export.
-Version 2.0.5 does not provide OpenTelemetry export, Prometheus, Grafana,
+Version 2.0.6 does not provide OpenTelemetry export, Prometheus, Grafana,
 Langfuse, or distributed tracing.
 
 Worker and Outbox health are part of readiness. Worker heartbeat, stale-worker
@@ -515,19 +548,20 @@ inventory with explicit owner mapping where authorized.
 
 Version 2.0.1 was not deployed after restore rehearsal exposed a PostgreSQL
 17.10 archive incompatible with PostgreSQL 16. Version 2.0.2 added these strict
-gates; Version 2.0.5 retains them.
+gates; Version 2.0.6 retains them.
 
 ### Candidate, health, and rollback
 
-Release validation checks exact Version 2.0.5 health/readiness, Alembic
+Release validation checks exact Version 2.0.6 health/readiness, Alembic
 `20260730_07`, mode `java`, reviewed immutable image digests, healthy/private
 dependencies, stable restarts/OOM state, and unchanged public ports without
-generating Analyze traffic.
+generating Analyze traffic. Production remains on the Version 2.0.5 baseline
+until the separate publication phase.
 
 Readiness checks database/schema, files, Project Knowledge/search, Redis, Worker,
 disk, auth initialization, and LLM configuration without calling DeepSeek.
 
-Image rollback restores the recorded Version 2.0.4 application digests without
+Image rollback restores the recorded Version 2.0.5 application digests without
 deleting volumes, Resume files, backups, or knowledge. Emergency mode rollback
 recreates only Backend in `local`. Alembic remains `20260730_07`; no schema
 downgrade or Java deletion is needed.
@@ -592,7 +626,7 @@ fictional, and separate from ordinary CI.
 | FastAPI API and Pydantic contracts | REST API design, validation, safe error boundaries |
 | SQLAlchemy 2 repositories and ownership | relational modeling, transactions, IDOR prevention |
 | PostgreSQL 16 | production relational database design and full-text search |
-| Alembic `20260721_05` | forward/backward schema migration and data backfill |
+| Alembic `20260730_07` | forward/backward schema migration and data backfill |
 | Redis and Dramatiq | asynchronous processing, transient queue transport, worker health |
 | Transactional Outbox | reliable event delivery, recovery, idempotency, dead-letter handling |
 | React and Vite | authenticated frontend application and responsive navigation |
@@ -625,7 +659,7 @@ fictional, and separate from ordinary CI.
 - Implemented PostgreSQL 16 Backup Restore gates with custom archive, immutable
   tools, manifest checksums, empty target, inventory, and owner mapping.
 - Deployed immutable GHCR images behind HTTPS Nginx with private data services,
-  candidate staging, health assertions, and Version 2.0.3 rollback assets.
+  candidate staging, health assertions, and reviewed release rollback assets.
 - Built GitHub Actions checks for Python, PostgreSQL, React, Docker Compose,
   repository safety, Mock LLM, and isolated recovery rehearsal.
 
@@ -664,7 +698,7 @@ later, closing the database-commit versus Redis-send gap.
 
 ### How can an upgrade be rolled back?
 
-Record Version 2.0.4 application digests/config, deploy reviewed Version 2.0.5
+Record Version 2.0.5 application digests/config, deploy reviewed Version 2.0.6
 digests, and preserve Alembic `20260730_07`. Rollback restores the old
 application images/config; an urgent Java-boundary rollback recreates only
 Backend in `local` mode.
@@ -685,7 +719,7 @@ Resume without a stale reference.
 - PostgreSQL full-text RAG is lexical, not embedding/vector retrieval, and can
   miss semantic equivalents outside bounded synonyms.
 - Scanned PDFs without selectable text require external OCR; OCR is not in
-  Version 2.0.5.
+  Version 2.0.6.
 - Safe job URL extraction cannot parse every site or client-rendered page.
 - The system does not automatically apply, send email, contact employers, or
   guarantee ATS parsing, ranking, interviews, or hiring.

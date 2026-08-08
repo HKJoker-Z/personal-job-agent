@@ -1,6 +1,6 @@
-# Version 2.0.5 production readiness
+# Version 2.0.6 production readiness
 
-Version 2.0.5 is production-ready only after the immutable-image, preflight,
+Version 2.0.6 is production-ready only after the immutable-image, preflight,
 cutover, health, rollback, tag, release, Project Knowledge, and final-report
 gates in [Deployment](DEPLOYMENT.md) pass.
 
@@ -17,8 +17,8 @@ established Edge public port, and private Java networking. Release validation
 must not generate Analyze traffic, inspect user content, call an external LLM,
 or add/run a migration.
 
-Before a future Production Candidate, Provider deadline enforcement must be
-validated in isolation. The synchronous Analyze path has a 130-second
+The prepared source includes the validated Provider deadline enforcement. The
+synchronous Analyze path has a 130-second
 monotonic Provider deadline, a 30-second fallback/finalization reserve, and a
 175-second application safety deadline inside the unchanged 180-second client
 bound. Primary and repair calls derive their connect/read/write/pool timeout
@@ -34,7 +34,7 @@ floating deployment reference, image/source-label mismatch, unhealthy service,
 restart/OOM event, exposed Java port, secret finding, topology drift, or loss of
 rollback readiness.
 
-Operator rollback for this deadline-only change is to restore the prior
-application image and compose/configuration revision. No Java source,
+Operator rollback is to restore the Version 2.0.5 application image and
+compose/configuration revision. No Java source,
 Java policy/dictionary, Alembic revision, or database downgrade is part of the
 change.

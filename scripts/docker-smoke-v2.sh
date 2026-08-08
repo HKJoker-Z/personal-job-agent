@@ -8,7 +8,7 @@ fi
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 STAMP="$(date +%s)-$$"
 SMOKE_MILESTONE="${PJA_SMOKE_MILESTONE:-2.0.1}"
-APP_RELEASE_VERSION="${PJA_APP_VERSION:-2.0.5}"
+APP_RELEASE_VERSION="${PJA_APP_VERSION:-2.0.6}"
 REAL_LLM_VALIDATION="${PJA_REAL_LLM_VALIDATION:-0}"
 HOLD_SECONDS="${PJA_SMOKE_HOLD_SECONDS:-0}"
 if [[ "${REAL_LLM_VALIDATION}" != "0" && "${REAL_LLM_VALIDATION}" != "1" ]]; then
@@ -26,7 +26,13 @@ fi
 V202_SCOPE=0
 V203_SCOPE=0
 V204_SCOPE=0
-if [[ "${SMOKE_MILESTONE}" == "2.0.5" || "${SMOKE_MILESTONE}" == "2.0.4" ]]; then
+if [[ "${SMOKE_MILESTONE}" == "2.0.6" ]]; then
+  TEST_PREFIX='pja-v2-final'
+  DEFAULT_HTTP_PORT=18088
+  DEFAULT_POSTGRES_PORT=15438
+  # Jobs, Applications, Tasks, and Agent Runs are retired public features;
+  # the 2.0.6 smoke covers only the supported Profile/Resume/Analyze product.
+elif [[ "${SMOKE_MILESTONE}" == "2.0.5" || "${SMOKE_MILESTONE}" == "2.0.4" ]]; then
   TEST_PREFIX='pja-v2-final'
   DEFAULT_HTTP_PORT=18088
   DEFAULT_POSTGRES_PORT=15438
