@@ -6,7 +6,7 @@ reviewable in Git history.
 
 | Date | Report |
 |---|---|
-| 2026-08-08 | [Version 2.0.6 Release Preparation](2026-08-08-v2.0.6-release-preparation-work-report.md) |
+| 2026-08-08 | [Version 2.0.6 Release Preparation (GO)](2026-08-08-v2.0.6-release-preparation-work-report.md) |
 | 2026-08-07 | [Production Candidate Evidence Completion (GO)](2026-08-07-production-candidate-evidence-completion-work-report.md) |
 | 2026-08-07 | [Pragmatic Provider Production Candidate (NO-GO)](2026-08-07-pragmatic-provider-production-candidate-work-report.md) |
 | 2026-08-07 | [Pragmatic DeepSeek Provider Acceptance](2026-08-07-pragmatic-provider-acceptance-work-report.md) |
