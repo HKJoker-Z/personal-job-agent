@@ -6,6 +6,8 @@ reviewable in Git history.
 
 | Date | Report |
 |---|---|
+| 2026-08-08 | [Version 2.0.6 Production Deployment (RELEASED)](2026-08-08-v2.0.6-production-deployment-work-report.md) |
+| 2026-08-08 | [Version 2.0.6 Final Release (STOPPED before production deployment)](2026-08-08-v2.0.6-release-work-report.md) |
 | 2026-08-08 | [Version 2.0.6 Release Preparation (GO)](2026-08-08-v2.0.6-release-preparation-work-report.md) |
 | 2026-08-07 | [Production Candidate Evidence Completion (GO)](2026-08-07-production-candidate-evidence-completion-work-report.md) |
 | 2026-08-07 | [Pragmatic Provider Production Candidate (NO-GO)](2026-08-07-pragmatic-provider-production-candidate-work-report.md) |
