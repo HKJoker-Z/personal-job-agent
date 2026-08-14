@@ -78,10 +78,12 @@ salvage 主函数略有增长，是因为原先分散在 salvage 与多个 Pydan
 - `npm run test -- --run`：9 test files、70 tests，全部通过。
 - `npm run build`：production Vite build 成功。
 - `PJA_SMOKE_MILESTONE=2.0.6 PJA_APP_VERSION=2.0.6 scripts/docker-smoke-v2.sh`：Version 2.0.6 isolated Mock LLM smoke 通过，覆盖 Alembic current=head、health、auth/CSRF、Profile/Resume/Analyze、RAG/evidence/grounding、restart persistence、backup/restore 和 checksum；isolated Compose 项目已由脚本清理。
+- Phase 2B PR #65 head `d68517e16d019c89c5a4e608e6378caff78350af` 的 CI run `31791194508`：`backend-tests`、`backend-postgres`、`frontend-build`、`docker-build`、`docker-smoke-v2`、`postgres16-backup-restore`、`compose-validation`、`production-runtime-regression`、`script-validation`、`repository-safety` 全部 pass。
+- Phase 2B PR 的 `Java Normalization Candidate` run `31791194513`：`isolated-candidate` pass，清理检查通过。
 
 ## 已知风险与回滚
 
 - legacy 兼容输入仍然存在，因本阶段明确禁止行为变更；旧 alias 的停止支持应另开行为变更评估。
 - `salvage_compact_analysis` 的行跨度增加，原因是 normalization 责任从重复 validators 收敛到单一入口；其调用次数由测试锁定为一次。
-- 当前 PR 未授权合并；需要在 PR 创建后等待并检查 GitHub CI，不能以本地验证替代远端 CI。
+- PR #65 已完成远端 CI，但当前 PR 仍未授权合并，保持 OPEN；本阶段不执行 merge。
 - 若需要回滚 Phase 2B，实现代码可用 `git revert 744af06ec33f6b58517d8d2b50688d8cab23b1b5`；该方式不删除 Phase 2A merge commit，也不影响数据库 schema 或生产环境。
