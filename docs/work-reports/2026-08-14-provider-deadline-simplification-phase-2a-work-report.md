@@ -9,9 +9,10 @@
 - Phase 2A 基线 SHA：`7193cd01b9bf077a818e6ba9b7ee75b70bc0a35a`
 - Phase 2A 运行时实现 SHA：`e5e4ae55d4cf3c0e262960e409eb90bc77573eb9`
 - Phase 2A 分支：`refactor/simplify-provider-deadline-phase-2a`
+- Phase 2A PR：[＃64](https://github.com/HKJoker-Z/personal-job-agent/pull/64)
 - Phase 1 分支：合并时保留，未删除远程分支
 - AGENTS.md：未发现（在仓库及 `/home/lighthouse/project` 项目范围搜索）
-- 当前结论：代码实质减少且本地验证通过；待推送分支、创建 PR 后检查 GitHub CI，不能据此报告生产部署或真实 Provider 验收。
+- 当前结论：代码实质减少，本地验证通过，PR #64 CI 已通过且保持 OPEN；不能据此报告生产部署或真实 Provider 验收。
 
 本报告只涉及 Analyze 的 Provider timeout/deadline 执行链路。没有修改
 History、Project Knowledge、前端、数据库、Java normalization、Redis、Worker、
@@ -115,10 +116,11 @@ non-stream transport 的两个线程层级简化为一个总 deadline worker。
 |---|---:|---:|---:|
 | `backend/test_provider_deadline_enforcement.py` | 406 | 406 | 0 |
 | 测试代码改动 | 0 | 0 | 0 |
-| Work Report 文件 | 0 | 287 | +287 |
+| Work Report 文件 | 0 | 308 | +308 |
 | `docs/work-reports/README.md` | 基线行数 | 基线 + 1 | +1 |
 
-`wc -l` 实测本报告 287 行；本阶段文档新增合计 288 行（报告 287 行、索引 1 行）。
+初版报告为 287 行；补入 PR/CI 真实结果后，`wc -l` 实测最终报告 308 行；本阶段
+文档新增合计 309 行（报告 308 行、索引 1 行）。
 
 测试没有为了数字而删除或改写；已有 transport、retry、repair、fallback 和
 contract 测试直接验证简化后的路径。
@@ -234,13 +236,33 @@ DeepSeek 请求，没有读取或输出真实密钥、Cookie、简历、JD、Pro
 
 ## 6. GitHub 交付状态
 
-本报告写入时尚未推送 Phase 2A 分支；推送后将创建：
+已推送 Phase 2A 分支并创建 [PR #64](https://github.com/HKJoker-Z/personal-job-agent/pull/64)，
+标题为：
 
 `Refactor: Simplify provider deadline execution without behavior changes`
 
-PR。随后必须等待并检查该 PR 的 GitHub CI；Phase 2A PR 不授权合并，因此无论 CI
-结果如何都不合并。由于本报告提交本身可能触发一次 PR CI，最终 handoff 会同时
-核对报告提交后的最新 checks；不把本地结果冒充 GitHub CI 结果。
+PR #64 初次 CI run `31782125364` 的三个 job 在 GitHub `Set up job` 阶段失败，
+没有执行项目步骤；同一 run 的 Compose、PostgreSQL、Docker build、repository
+safety 等其余 job 已成功。经过检查确认不是代码测试失败后，仅执行：
+
+```text
+gh run rerun 31782125364 --failed
+```
+
+重跑后的同一 run `31782125364` 最终为 success，补跑的 backend regression、
+frontend test/build、ShellCheck 全部通过。其余 PR workflows 也全部通过：
+
+- Integrated Backend Production：run `31782125369`，success；
+- JD Normalization Service CI：run `31782125371`，success；
+- Java Normalization Candidate：run `31782125466`，success；
+- Java Normalization Production：run `31782125493`，success。
+
+`gh auth status` 同时报告本地 GitHub token 已失效，`gh pr checks 64` 返回
+HTTP 401；因此 checks 结论使用公开的
+`gh run view <run-id> --json status,conclusion,jobs` 逐个核对，没有重新认证、
+读取 token 或输出任何凭据。PR #64 保持 OPEN，未合并。
+报告更新是文档-only 提交；推送后仍需检查该最终 head 的新 CI，不能把本地结果
+冒充 GitHub CI 结果，也不触发任何 production/release workflow_dispatch。
 
 ## 7. 未执行项目及原因
 
