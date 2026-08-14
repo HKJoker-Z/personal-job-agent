@@ -1,4 +1,4 @@
-"""Application composition for the Version 2 transitional architecture."""
+"""Application factory and composition for the transitional architecture."""
 
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ def _remove_inner_request_logging(app: FastAPI) -> None:
     ]
 
 
-def extend_application(app: FastAPI) -> FastAPI:
+def _compose_application(app: FastAPI) -> FastAPI:
     settings = load_v2_settings()
     _remove_inner_request_logging(app)
     app.include_router(auth.router)
@@ -44,7 +44,13 @@ def extend_application(app: FastAPI) -> FastAPI:
     return app
 
 
+def extend_application(app: FastAPI) -> FastAPI:
+    """Compose the legacy app for compatibility callers and test harnesses."""
+    return _compose_application(app)
+
+
 def create_application() -> FastAPI:
+    """Build the ASGI application used by Uvicorn and production containers."""
     from legacy_application import app as legacy_app
 
-    return extend_application(legacy_app)
+    return _compose_application(legacy_app)
