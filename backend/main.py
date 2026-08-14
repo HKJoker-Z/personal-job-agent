@@ -1,9 +1,13 @@
-"""Compatibility entry point for Uvicorn and existing imports."""
+"""ASGI entry point for the single application factory."""
 
-from legacy_application import *  # noqa: F401,F403
-from legacy_application import app as legacy_app
+from app.application import create_application
+# Keep the small set of existing module-level compatibility exports explicit
+# while callers migrate away from the transitional legacy module.
+from legacy_application import (
+    health_check,
+    project_knowledge_status_data,
+    write_project_knowledge_file,
+)
 
-from app.application import extend_application
 
-
-app = extend_application(legacy_app)
+app = create_application()
