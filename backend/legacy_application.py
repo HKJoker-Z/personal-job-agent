@@ -3216,6 +3216,36 @@ async def delete_application(application_id: str, request: Request) -> dict[str,
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
+def _provider_deadline_exhausted(provider_budget: ProviderDeadline, exc: Exception) -> bool:
+    metadata = exc.metadata if isinstance(exc, ModelOutputError) else {}
+    return bool(provider_budget.expired() or metadata.get("deadline_exhausted"))
+
+
+def _select_provider_fallback(
+    context: WorkflowContext,
+    analysis_warnings: list[str],
+    *,
+    metadata: dict[str, Any],
+    fallback_reason: str,
+    deadline_exhausted: bool,
+) -> dict[str, Any]:
+    context.model_metadata = safe_model_metadata({
+        **metadata,
+        "result_state": "fallback",
+        "fallback_reason": fallback_reason,
+        "deadline_exhausted": deadline_exhausted,
+        "fallback_selected": True,
+    })
+    analysis_warnings.append(
+        "AI response could not be fully parsed. A local fallback analysis is shown."
+    )
+    return local_fallback_result(
+        context.sanitized_resume_text,
+        context.sanitized_job_text,
+        context.retrieved_chunks,
+    )
+
+
 @app.post("/api/analyze")
 async def analyze(
     request: Request,
@@ -3738,7 +3768,6 @@ async def analyze(
     workflow.start_step("run_llm_analysis", "Run LLM Analysis")
     analysis_status = "complete"
     analysis_warnings: list[str] = list(input_warnings)
-    provider_available = True
     provider_phase_started_monotonic = time.monotonic()
     runtime_settings = load_config(validate_production=False)
     provider_budget = ProviderDeadline.for_phase(
@@ -3789,51 +3818,30 @@ async def analyze(
     except IdempotencyError as exc:
         raise idempotency_http_exception(exc) from exc
     except Exception as exc:
-        provider_available = False
         workflow.add_warning()
-        provider_deadline_exhausted = bool(
-            provider_budget.expired()
-            or (
-                isinstance(exc, ModelOutputError)
-                and exc.metadata.get("deadline_exhausted")
+        error_metadata = exc.metadata if isinstance(exc, ModelOutputError) else {}
+        provider_deadline_exhausted = _provider_deadline_exhausted(provider_budget, exc)
+        fallback_reason = (
+            "client_disconnected"
+            if error_metadata.get("client_disconnected")
+            else (
+                "provider_deadline_exhausted"
+                if provider_deadline_exhausted
+                else "provider_call_failed"
             )
         )
-        if isinstance(exc, ModelOutputError):
-            context.model_metadata = safe_model_metadata({
-                **exc.metadata,
-                "model_id": DEEPSEEK_MODEL,
-                "thinking_enabled": settings.deepseek_thinking_enabled,
-                "response_mode": "json_object",
-                "result_state": "fallback",
-                "fallback_reason": (
-                    "client_disconnected"
-                    if exc.metadata.get("client_disconnected")
-                    else (
-                        "provider_deadline_exhausted"
-                        if provider_deadline_exhausted
-                        else "provider_call_failed"
-                    )
-                ),
-                "deadline_exhausted": provider_deadline_exhausted,
-                "fallback_selected": True,
-            })
-        else:
-            context.model_metadata = safe_model_metadata({
-                "model_id": DEEPSEEK_MODEL,
-                "thinking_enabled": settings.deepseek_thinking_enabled,
-                "response_mode": "json_object",
-                "result_state": "fallback",
-                "fallback_reason": (
-                    "provider_deadline_exhausted"
-                    if provider_deadline_exhausted
-                    else "provider_call_failed"
-                ),
-                "deadline_exhausted": provider_deadline_exhausted,
-                "fallback_selected": True,
-            })
         analysis_status = "fallback"
-        analysis_warnings.append(
-            "AI response could not be fully parsed. A local fallback analysis is shown."
+        result = _select_provider_fallback(
+            context,
+            analysis_warnings,
+            metadata={
+                **error_metadata,
+                "model_id": DEEPSEEK_MODEL,
+                "thinking_enabled": settings.deepseek_thinking_enabled,
+                "response_mode": "json_object",
+            },
+            fallback_reason=fallback_reason,
+            deadline_exhausted=provider_deadline_exhausted,
         )
         workflow.complete_step(
             "run_llm_analysis",
@@ -3844,7 +3852,7 @@ async def analyze(
             context.model_metadata.get("fallback_reason") or "provider_call_failed",
         )
 
-    if provider_available:
+    if analysis_status != "fallback":
         workflow.start_step("scan_llm_output", "Scan LLM Output")
         try:
             sanitized_output, output_scan, marker_leaked = scan_llm_output(context.llm_raw_response)
@@ -3891,7 +3899,7 @@ async def analyze(
         )
 
     workflow.start_step("parse_model_json", "Parse Model JSON")
-    if provider_available:
+    if analysis_status != "fallback":
         try:
             parse_metadata: dict[str, Any] = {}
 
@@ -3996,31 +4004,17 @@ async def analyze(
             context.json_parse_success = False
             workflow.add_warning()
             analysis_status = "fallback"
-            parse_deadline_exhausted = bool(
-                provider_budget.expired()
-                or (
-                    isinstance(exc, ModelOutputError)
-                    and exc.metadata.get("deadline_exhausted")
-                )
-            )
-            context.model_metadata = safe_model_metadata({
-                **context.model_metadata,
-                "result_state": "fallback",
-                "fallback_reason": (
+            parse_deadline_exhausted = _provider_deadline_exhausted(provider_budget, exc)
+            result = _select_provider_fallback(
+                context,
+                analysis_warnings,
+                metadata=context.model_metadata,
+                fallback_reason=(
                     "provider_deadline_exhausted"
                     if parse_deadline_exhausted
                     else "minimum_safe_contract_failed"
                 ),
-                "deadline_exhausted": parse_deadline_exhausted,
-                "fallback_selected": True,
-            })
-            analysis_warnings.append(
-                "AI response could not be fully parsed. A local fallback analysis is shown."
-            )
-            result = local_fallback_result(
-                context.sanitized_resume_text,
-                context.sanitized_job_text,
-                context.retrieved_chunks,
+                deadline_exhausted=parse_deadline_exhausted,
             )
             workflow.complete_step(
                 "parse_model_json",
@@ -4037,13 +4031,9 @@ async def analyze(
             )
     else:
         context.json_parse_success = False
-        result = local_fallback_result(
-            context.sanitized_resume_text,
-            context.sanitized_job_text,
-            context.retrieved_chunks,
-        )
         workflow.complete_step(
-            "parse_model_json", "Provider output was unavailable; local fallback required no JSON parsing."
+            "parse_model_json",
+            "Provider output was unavailable; local fallback required no JSON parsing.",
         )
         workflow.start_step("validate_structured_output", "Validate Structured Output")
         workflow.complete_step(
@@ -4052,22 +4042,14 @@ async def analyze(
 
     if provider_budget.expired() and analysis_status != "fallback":
         analysis_status = "fallback"
-        result = local_fallback_result(
-            context.sanitized_resume_text,
-            context.sanitized_job_text,
-            context.retrieved_chunks,
-        )
         workflow.add_warning()
-        analysis_warnings.append(
-            "AI response could not be fully parsed. A local fallback analysis is shown."
+        result = _select_provider_fallback(
+            context,
+            analysis_warnings,
+            metadata=context.model_metadata,
+            fallback_reason="provider_deadline_exhausted",
+            deadline_exhausted=True,
         )
-        context.model_metadata = safe_model_metadata({
-            **context.model_metadata,
-            "result_state": "fallback",
-            "fallback_reason": "provider_deadline_exhausted",
-            "deadline_exhausted": True,
-            "fallback_selected": True,
-        })
 
     context.model_metadata = safe_model_metadata({
         **context.model_metadata,
