@@ -83,6 +83,7 @@
 - `docker build --file backend/Dockerfile ...`、`docker build --file frontend/Dockerfile ...` 及 `scripts/verify-images.sh`：两个镜像构建通过，用户和敏感路径检查通过；只创建本地临时镜像 tag。
 - `PJA_SMOKE_MILESTONE=2.0.6 PJA_APP_VERSION=2.0.6 PJA_TEST_PROJECT=pja-v2-final-refactor-20260814 PJA_TEST_HTTP_PORT=18098 PJA_TEST_POSTGRES_PORT=15448 scripts/docker-smoke-v2.sh`：通过。覆盖 fresh Alembic upgrade/current=head、管理员初始化、登录/Remember Me/Session/CSRF、Project Knowledge/RAG、Analyze（知识库关闭和开启）、DOCX Resume、重启后的数据库和私有文件持久化、备份 manifest/checksum 及恢复验证。
 - 独立临时数据库 API 合约检查：History 详情、状态/备注更新、next-action、PDF/DOCX 导出（`Content-Type` 与 attachment header）、删除及删除后 404：通过。输入均为合成记录。
+- PR #63 的 GitHub CI：backend tests、complete backend tests、PostgreSQL integration、backup/restore、frontend build、Docker build/smoke、Compose、Java/production assets、candidate、security 和 verify 检查均通过；按 PR 策略跳过的 publish 镜像步骤没有作为失败处理。
 
 关键 Analyze 场景由完整测试、V2.0.6 smoke 和对应测试模块共同覆盖：complete/partial/fallback、输入安全阻断、RAG on/off、Stored Resume 与临时 PDF/DOCX、History on/off、首次执行和 completed replay。History 详情/更新/删除/两种导出另由上面的临时 API 合约检查验证。
 
@@ -91,7 +92,7 @@
 - 未使用真实 DeepSeek/API 凭据运行 provider acceptance 或真实 LLM 测试；这会引入外部服务和凭据风险，离线 fixture、mock、fallback 和完整回归已运行。
 - 未重新运行 Java Maven 生产候选测试；本切片没有修改 Java、normalization client 或相关配置，现有后端 Java compatibility 测试包含在 555 测试全套中。
 - 未部署生产、未连接生产数据库、未创建 tag/Release；用户明确禁止这些动作。
-- GitHub CI 需在推送 PR 后由 GitHub 执行，不能由本地命令替代。
+- GitHub CI 不能由本地命令替代；PR #63 已在 GitHub 上完成检查，结果记录在上一节。
 
 ## 兼容性结论
 
