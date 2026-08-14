@@ -116,11 +116,11 @@ non-stream transport 的两个线程层级简化为一个总 deadline worker。
 |---|---:|---:|---:|
 | `backend/test_provider_deadline_enforcement.py` | 406 | 406 | 0 |
 | 测试代码改动 | 0 | 0 | 0 |
-| Work Report 文件 | 0 | 308 | +308 |
+| Work Report 文件 | 0 | 309 | +309 |
 | `docs/work-reports/README.md` | 基线行数 | 基线 + 1 | +1 |
 
-初版报告为 287 行；补入 PR/CI 真实结果后，`wc -l` 实测最终报告 308 行；本阶段
-文档新增合计 309 行（报告 308 行、索引 1 行）。
+初版报告为 287 行；补入 PR/CI 真实结果后，`wc -l` 实测最终报告 309 行；本阶段
+文档新增合计 310 行（报告 309 行、索引 1 行）。
 
 测试没有为了数字而删除或改写；已有 transport、retry、repair、fallback 和
 contract 测试直接验证简化后的路径。
