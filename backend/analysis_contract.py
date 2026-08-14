@@ -7,7 +7,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Annotated
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 
 MODEL_OUTPUT_TRUNCATED = "MODEL_OUTPUT_TRUNCATED"
@@ -60,28 +60,14 @@ SAFE_DEADLINE_BUCKETS = {"gt_60s", "31_60s", "11_30s", "1_10s", "exhausted"}
 # skill/dimension/evidence fields remain accepted as bounded compatibility
 # input for already-created fixtures and operator experiments, but they are
 # not authoritative in the active Analyze path.
-PROVIDER_CANONICAL_FIELDS = (
-    "job_summary",
-    "match_reasons",
-    "recommendations",
-    "resume_improvements",
-)
 PROVIDER_FIELD_ALIASES = {
     "job_summary": ("jobSummary", "summary"),
     "match_reasons": ("matchReasons", "reasons", "match_reason", "matchReason"),
-    "recommendations": ("suggestions", "next_steps", "nextSteps", "concise_recommendations"),
+    "recommendations": ("suggestions", "next_steps", "nextSteps"),
     "resume_improvements": ("resumeImprovements", "resume_suggestions", "improvements"),
 }
+PROVIDER_CANONICAL_FIELDS = tuple(PROVIDER_FIELD_ALIASES)
 
-CANONICAL_ANALYSIS_FIELDS = (
-    "matched_skills",
-    "missing_skills",
-    "unknown_skills",
-    "concise_dimension_assessments",
-    "evidence_references",
-    "unsupported_claim_candidates",
-    "concise_recommendations",
-)
 OPTIONAL_PROVIDER_NARRATIVE_FIELDS = ("job_summary", "match_reason")
 REQUIRED_ANALYSIS_FIELDS = (
     "matched_skills",
@@ -103,6 +89,24 @@ TOP_LEVEL_FIELD_ALIASES = {
     "concise_recommendations": (
         "recommendations", "suggestions", "next_steps", "nextSteps"
     ),
+}
+CANONICAL_ANALYSIS_FIELDS = tuple(TOP_LEVEL_FIELD_ALIASES)
+
+DIMENSION_FIELD_ALIASES = {
+    "skills_match": ("skillsMatch", "skills"),
+    "project_experience": ("projectExperience", "projects"),
+    "education": (),
+    "work_experience": ("workExperience", "experience"),
+    "keyword_match": ("keywordMatch", "keywords"),
+}
+DIMENSION_VALUE_ALIASES = {
+    "score": ("rating", "percentage"),
+    "assessment": ("summary", "reason", "comment"),
+    "evidence_ids": ("evidenceIds", "evidence", "references"),
+}
+EVIDENCE_REFERENCE_ALIASES = {
+    "skill": ("name", "requirement"),
+    "evidence_ids": ("evidenceIds", "evidence", "references"),
 }
 
 SALVAGE_WARNING_MESSAGES = {
@@ -178,19 +182,19 @@ SKILL_CASE = {
 }
 
 
-def _default_for_list(value: Any) -> Any:
-    if value is None:
-        return []
-    if isinstance(value, str):
-        text = value.strip()
-        return [text] if text else []
-    if isinstance(value, (tuple, set)):
-        return list(value)
-    return value
+def _field_keys(field_name: str, aliases: dict[str, tuple[str, ...]]) -> tuple[str, ...]:
+    return (field_name, *aliases[field_name])
 
 
-def _default_for_dict(value: Any) -> Any:
-    return {} if value is None else value
+def _canonical_alias(key: str, aliases: dict[str, tuple[str, ...]]) -> str | None:
+    return next(
+        (
+            field_name
+            for field_name, field_aliases in aliases.items()
+            if key == field_name or key in field_aliases
+        ),
+        None,
+    )
 
 
 def _clean_text(value: Any, maximum: int) -> str:
@@ -198,6 +202,17 @@ def _clean_text(value: Any, maximum: int) -> str:
         return ""
     text = " ".join(str(value).replace("\x00", "").split()).strip()
     return text[:maximum]
+
+
+def _canonical_dimension_name(value: Any) -> str | None:
+    normalized = _clean_text(value, 80).casefold().replace(" ", "_")
+    for field_name in DIMENSION_FIELD_ALIASES:
+        for alias in _field_keys(field_name, DIMENSION_FIELD_ALIASES):
+            # Match the legacy list normalizer's effective aliases.  Its
+            # casefolding made camelCase aliases unreachable in this shape.
+            if alias == alias.casefold().replace(" ", "_") and normalized == alias:
+                return field_name
+    return None
 
 
 def _normalize_skill(value: Any) -> str:
@@ -208,7 +223,7 @@ def _normalize_skill(value: Any) -> str:
 def _dedupe_skills(values: Any, maximum: int) -> list[str]:
     result: list[str] = []
     seen: set[str] = set()
-    for value in _default_for_list(values) if isinstance(_default_for_list(values), list) else []:
+    for value in values if isinstance(values, list) else []:
         text = _normalize_skill(value)
         key = text.casefold()
         if text and key not in seen:
@@ -228,6 +243,30 @@ def _score(value: Any) -> int:
     except (TypeError, ValueError, OverflowError):
         number = 0
     return max(0, min(100, number))
+
+
+def _salvage_score(value: Any, *, actions: list[str], rejected: list[int]) -> int:
+    if value is None:
+        _note_action(actions, "null_field_defaulted")
+        return 0
+    if isinstance(value, str):
+        match = re.search(r"-?\d+(?:\.\d+)?", value)
+        if not match:
+            _note_action(actions, "invalid_field_defaulted")
+            rejected[0] += 1
+            return 0
+        _note_action(actions, "numeric_string_normalized")
+        parsed = float(match.group(0))
+    elif isinstance(value, (int, float)) and not isinstance(value, bool):
+        parsed = float(value)
+    else:
+        _note_action(actions, "invalid_field_defaulted")
+        rejected[0] += 1
+        return 0
+    bounded = _score(parsed)
+    if bounded != parsed:
+        _note_action(actions, "score_clamped")
+    return bounded
 
 
 def _note_action(actions: list[str], code: str) -> None:
@@ -254,6 +293,7 @@ def _salvage_string_list(
     *,
     maximum_items: int,
     maximum_length: int,
+    reject_empty_scalar: bool = False,
     actions: list[str],
     rejected: list[int],
 ) -> list[str]:
@@ -267,6 +307,9 @@ def _salvage_string_list(
             maximum=maximum_length,
             actions=actions,
         )
+        if not clean and reject_empty_scalar:
+            _note_action(actions, "invalid_list_item_removed")
+            rejected[0] += 1
         return [clean] if clean else []
     if not isinstance(value, list):
         _note_action(actions, "invalid_field_defaulted")
@@ -290,7 +333,7 @@ def _salvage_string_list(
                 _note_action(actions, "list_truncated")
                 rejected[0] += len(value) - maximum_items
             break
-    return result
+    return list(dict.fromkeys(result))[:maximum_items]
 
 
 def _salvage_narrative_field(
@@ -322,40 +365,6 @@ def _salvage_narrative_field(
     return clean
 
 
-def _salvage_evidence_ids(
-    value: Any,
-    *,
-    actions: list[str],
-    rejected: list[int],
-) -> list[str]:
-    if value is None:
-        _note_action(actions, "null_field_defaulted")
-        return []
-    if isinstance(value, str):
-        _note_action(actions, "scalar_to_list")
-        values = [value]
-    elif isinstance(value, list):
-        values = value
-    else:
-        _note_action(actions, "invalid_field_defaulted")
-        rejected[0] += 1
-        return []
-    result: list[str] = []
-    for item in values:
-        clean = _clean_salvage_string(item, maximum=80, actions=actions)
-        if clean is None or not clean:
-            _note_action(actions, "invalid_list_item_removed")
-            rejected[0] += 1
-            continue
-        result.append(clean)
-        if len(result) >= 5:
-            if len(values) > 5:
-                _note_action(actions, "list_truncated")
-                rejected[0] += len(values) - 5
-            break
-    return list(dict.fromkeys(result))
-
-
 def _salvage_dimension_value(
     value: Any,
     *,
@@ -365,22 +374,18 @@ def _salvage_dimension_value(
     if value is None:
         _note_action(actions, "null_field_defaulted")
         return {}
-    if isinstance(value, (str, int, float)) and not isinstance(value, bool):
-        return value
+    if isinstance(value, str):
+        return {"assessment": _clean_text(value, 240)}
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return {"score": _score(value)}
     if not isinstance(value, dict):
         _note_action(actions, "invalid_field_defaulted")
         rejected[0] += 1
         return {}
 
-    aliases = {
-        "score": "score", "rating": "score", "percentage": "score",
-        "assessment": "assessment", "summary": "assessment", "reason": "assessment", "comment": "assessment",
-        "evidence_ids": "evidence_ids", "evidenceIds": "evidence_ids",
-        "evidence": "evidence_ids", "references": "evidence_ids",
-    }
     normalized: dict[str, Any] = {}
     for key, nested in value.items():
-        canonical = aliases.get(key)
+        canonical = _canonical_alias(key, DIMENSION_VALUE_ALIASES)
         if canonical is None:
             _note_action(actions, "unknown_nested_field_ignored")
             rejected[0] += 1
@@ -391,30 +396,11 @@ def _salvage_dimension_value(
             _note_action(actions, "field_alias_normalized")
             continue
         if canonical == "score":
-            if nested is None:
-                _note_action(actions, "null_field_defaulted")
-                normalized[canonical] = 0
-                continue
-            if isinstance(nested, str):
-                match = re.search(r"-?\d+(?:\.\d+)?", nested)
-                if not match:
-                    _note_action(actions, "invalid_field_defaulted")
-                    rejected[0] += 1
-                    normalized[canonical] = 0
-                    continue
-                _note_action(actions, "numeric_string_normalized")
-                parsed = float(match.group(0))
-            elif isinstance(nested, (int, float)) and not isinstance(nested, bool):
-                parsed = float(nested)
-            else:
-                _note_action(actions, "invalid_field_defaulted")
-                rejected[0] += 1
-                normalized[canonical] = 0
-                continue
-            bounded = max(0, min(100, round(parsed)))
-            if bounded != parsed:
-                _note_action(actions, "score_clamped")
-            normalized[canonical] = bounded
+            normalized[canonical] = _salvage_score(
+                nested,
+                actions=actions,
+                rejected=rejected,
+            )
         elif canonical == "assessment":
             if nested is None:
                 _note_action(actions, "null_field_defaulted")
@@ -428,8 +414,11 @@ def _salvage_dimension_value(
                 else:
                     normalized[canonical] = clean
         else:
-            normalized[canonical] = _salvage_evidence_ids(
+            normalized[canonical] = _salvage_string_list(
                 nested,
+                maximum_items=5,
+                maximum_length=80,
+                reject_empty_scalar=True,
                 actions=actions,
                 rejected=rejected,
             )
@@ -442,13 +431,6 @@ def _salvage_dimensions(
     actions: list[str],
     rejected: list[int],
 ) -> dict[str, Any]:
-    aliases = {
-        "skills_match": "skills_match", "skillsMatch": "skills_match", "skills": "skills_match",
-        "project_experience": "project_experience", "projectExperience": "project_experience", "projects": "project_experience",
-        "education": "education",
-        "work_experience": "work_experience", "workExperience": "work_experience", "experience": "work_experience",
-        "keyword_match": "keyword_match", "keywordMatch": "keyword_match", "keywords": "keyword_match",
-    }
     if value is None:
         _note_action(actions, "null_field_defaulted")
         return {}
@@ -459,8 +441,9 @@ def _salvage_dimensions(
                 _note_action(actions, "invalid_list_item_removed")
                 rejected[0] += 1
                 continue
-            name = _clean_text(item.get("dimension") or item.get("name") or item.get("key"), 80)
-            canonical = aliases.get(name.casefold().replace(" ", "_"))
+            canonical = _canonical_dimension_name(
+                item.get("dimension") or item.get("name") or item.get("key")
+            )
             if canonical is None:
                 _note_action(actions, "invalid_list_item_removed")
                 rejected[0] += 1
@@ -478,7 +461,7 @@ def _salvage_dimensions(
         return {}
     normalized = {}
     for key, nested in value.items():
-        canonical = aliases.get(key)
+        canonical = _canonical_alias(key, DIMENSION_FIELD_ALIASES)
         if canonical is None:
             _note_action(actions, "unknown_nested_field_ignored")
             rejected[0] += 1
@@ -520,11 +503,6 @@ def _salvage_evidence_references(
         return []
 
     result: list[dict[str, Any]] = []
-    aliases = {
-        "skill": "skill", "name": "skill", "requirement": "skill",
-        "evidence_ids": "evidence_ids", "evidenceIds": "evidence_ids",
-        "evidence": "evidence_ids", "references": "evidence_ids",
-    }
     for item in values:
         if not isinstance(item, dict):
             _note_action(actions, "invalid_list_item_removed")
@@ -532,7 +510,7 @@ def _salvage_evidence_references(
             continue
         normalized: dict[str, Any] = {}
         for key, nested in item.items():
-            canonical = aliases.get(key)
+            canonical = _canonical_alias(key, EVIDENCE_REFERENCE_ALIASES)
             if canonical is None:
                 _note_action(actions, "unknown_nested_field_ignored")
                 rejected[0] += 1
@@ -542,7 +520,12 @@ def _salvage_evidence_references(
             if canonical in normalized:
                 continue
             if canonical == "skill":
-                clean = _clean_salvage_string(nested, maximum=80, actions=actions)
+                clean_source = _clean_salvage_string(
+                    nested,
+                    maximum=80,
+                    actions=actions,
+                )
+                clean = _normalize_skill(clean_source) if clean_source is not None else ""
                 if clean is None or not clean:
                     _note_action(actions, "invalid_list_item_removed")
                     rejected[0] += 1
@@ -550,8 +533,11 @@ def _salvage_evidence_references(
                     break
                 normalized[canonical] = clean
             else:
-                normalized[canonical] = _salvage_evidence_ids(
+                normalized[canonical] = _salvage_string_list(
                     nested,
+                    maximum_items=5,
+                    maximum_length=80,
+                    reject_empty_scalar=True,
                     actions=actions,
                     rejected=rejected,
                 )
@@ -588,17 +574,11 @@ def salvage_compact_analysis(data: dict[str, Any]) -> SalvagedCompactAnalysis:
 
     legacy_present = any(
         key in data
-        for key in (
-            "matched_skills", "matchedSkills", "matches",
-            "missing_skills", "missingSkills", "gaps",
-            "unknown_skills", "unknownSkills", "unknowns",
-            "concise_dimension_assessments", "dimension_assessments",
-            "dimensionAssessments", "assessments", "dimensions",
-            "evidence_references", "evidenceReferences", "evidence_mapping", "evidenceMapping",
-            "unsupported_claim_candidates", "unsupportedCandidates", "unsupported_claims",
-            "concise_recommendations",
-        )
+        for field_name in CANONICAL_ANALYSIS_FIELDS
+        if field_name != "concise_recommendations"
+        for key in _field_keys(field_name, TOP_LEVEL_FIELD_ALIASES)
     )
+    legacy_present = legacy_present or "concise_recommendations" in data
 
     # Normalize the active four-field contract first.  A legacy response is
     # allowed to remain complete for compatibility; a new response that omits
@@ -606,9 +586,18 @@ def salvage_compact_analysis(data: dict[str, Any]) -> SalvagedCompactAnalysis:
     active_action_start = len(actions)
     for field_name in PROVIDER_CANONICAL_FIELDS:
         source_key = field_name if field_name in data else next(
-            (alias for alias in PROVIDER_FIELD_ALIASES[field_name] if alias in data),
+            (alias for alias in _field_keys(field_name, PROVIDER_FIELD_ALIASES) if alias in data),
             None,
         )
+        if (
+            source_key is None
+            and field_name == "recommendations"
+            and "concise_recommendations" in data
+        ):
+            # This legacy name overlaps the compatibility field below and is
+            # therefore handled here without making it a Pydantic alias for
+            # two fields.
+            source_key = "concise_recommendations"
         list_field = field_name != "job_summary"
         if source_key is None:
             if not legacy_present:
@@ -625,12 +614,16 @@ def salvage_compact_analysis(data: dict[str, Any]) -> SalvagedCompactAnalysis:
                 "recommendations": 5,
                 "resume_improvements": 4,
             }.get(field_name, 1),
-            maximum_length={
-                "job_summary": 480,
-                "match_reasons": 180,
-                "recommendations": 180,
-                "resume_improvements": 220,
-            }[field_name],
+            maximum_length=(
+                320
+                if field_name == "job_summary" and source_key == field_name
+                else {
+                    "job_summary": 480,
+                    "match_reasons": 180,
+                    "recommendations": 180,
+                    "resume_improvements": 220,
+                }[field_name]
+            ),
             actions=actions,
             rejected=rejected,
         )
@@ -640,7 +633,7 @@ def salvage_compact_analysis(data: dict[str, Any]) -> SalvagedCompactAnalysis:
     if legacy_present:
         for field_name in CANONICAL_ANALYSIS_FIELDS:
             source_key = field_name if field_name in data else next(
-                (alias for alias in TOP_LEVEL_FIELD_ALIASES[field_name] if alias in data),
+                (alias for alias in _field_keys(field_name, TOP_LEVEL_FIELD_ALIASES) if alias in data),
                 None,
             )
             if source_key is None:
@@ -658,12 +651,16 @@ def salvage_compact_analysis(data: dict[str, Any]) -> SalvagedCompactAnalysis:
             if field_name in {
                 "matched_skills", "missing_skills", "unknown_skills"
             }:
-                normalized[field_name] = _salvage_string_list(
+                skills = _salvage_string_list(
                     value,
                     maximum_items=12 if field_name != "unknown_skills" else 10,
                     maximum_length=80,
                     actions=actions,
                     rejected=rejected,
+                )
+                normalized[field_name] = _dedupe_skills(
+                    skills,
+                    12 if field_name != "unknown_skills" else 10,
                 )
             elif field_name == "concise_recommendations":
                 normalized[field_name] = _salvage_string_list(
@@ -700,6 +697,11 @@ def salvage_compact_analysis(data: dict[str, Any]) -> SalvagedCompactAnalysis:
     # valid Provider narrative is preserved rather than silently replaced.
     for field_name in OPTIONAL_PROVIDER_NARRATIVE_FIELDS:
         if field_name not in data:
+            continue
+        if field_name in PROVIDER_CANONICAL_FIELDS and not legacy_present:
+            if not isinstance(data[field_name], str):
+                _note_action(actions, "invalid_field_defaulted")
+                rejected[0] += 1
             continue
         clean = _clean_salvage_string(
             data[field_name],
@@ -767,118 +769,56 @@ def compact_has_meaningful_analysis(compact: "CompactAnalysisOutput") -> bool:
 class CompactDimensionAssessment(BaseModel):
     model_config = ConfigDict(extra="ignore", str_strip_whitespace=True, populate_by_name=True)
 
-    score: int = Field(default=0, validation_alias=AliasChoices("score", "rating", "percentage"))
+    score: int = Field(
+        default=0,
+        validation_alias=AliasChoices(*_field_keys("score", DIMENSION_VALUE_ALIASES)),
+    )
     assessment: ConciseAssessment = Field(
-        default="", validation_alias=AliasChoices("assessment", "summary", "reason", "comment")
+        default="",
+        validation_alias=AliasChoices(*_field_keys("assessment", DIMENSION_VALUE_ALIASES)),
     )
     evidence_ids: list[EvidenceId] = Field(
-        default_factory=list, validation_alias=AliasChoices("evidence_ids", "evidenceIds", "evidence", "references")
+        default_factory=list,
+        validation_alias=AliasChoices(*_field_keys("evidence_ids", DIMENSION_VALUE_ALIASES)),
     )
-
-    @model_validator(mode="before")
-    @classmethod
-    def accept_concise_scalar(cls, value: Any) -> Any:
-        if isinstance(value, str):
-            return {"assessment": value}
-        if isinstance(value, (int, float)) and not isinstance(value, bool):
-            return {"score": value}
-        return value
-
-    @field_validator("score", mode="before")
-    @classmethod
-    def normalize_score(cls, value: Any) -> int:
-        return _score(value)
-
-    @field_validator("assessment", mode="before")
-    @classmethod
-    def normalize_assessment(cls, value: Any) -> str:
-        return _clean_text(value, 240)
-
-    @field_validator("evidence_ids", mode="before")
-    @classmethod
-    def normalize_evidence(cls, value: Any) -> Any:
-        return _default_for_list(value)
-
-    @field_validator("evidence_ids", mode="after")
-    @classmethod
-    def clean_evidence(cls, value: list[str]) -> list[str]:
-        return list(dict.fromkeys(_clean_text(item, 80) for item in value if _clean_text(item, 80)))[:5]
-
-
-def _empty_dimension() -> CompactDimensionAssessment:
-    return CompactDimensionAssessment()
 
 
 class CompactDimensionAssessments(BaseModel):
     model_config = ConfigDict(extra="ignore", populate_by_name=True)
 
     skills_match: CompactDimensionAssessment = Field(
-        default_factory=_empty_dimension, validation_alias=AliasChoices("skills_match", "skillsMatch", "skills")
+        default_factory=CompactDimensionAssessment,
+        validation_alias=AliasChoices(*_field_keys("skills_match", DIMENSION_FIELD_ALIASES)),
     )
     project_experience: CompactDimensionAssessment = Field(
-        default_factory=_empty_dimension,
-        validation_alias=AliasChoices("project_experience", "projectExperience", "projects"),
+        default_factory=CompactDimensionAssessment,
+        validation_alias=AliasChoices(*_field_keys("project_experience", DIMENSION_FIELD_ALIASES)),
     )
-    education: CompactDimensionAssessment = Field(default_factory=_empty_dimension)
+    education: CompactDimensionAssessment = Field(
+        default_factory=CompactDimensionAssessment,
+        validation_alias=AliasChoices(*_field_keys("education", DIMENSION_FIELD_ALIASES)),
+    )
     work_experience: CompactDimensionAssessment = Field(
-        default_factory=_empty_dimension,
-        validation_alias=AliasChoices("work_experience", "workExperience", "experience"),
+        default_factory=CompactDimensionAssessment,
+        validation_alias=AliasChoices(*_field_keys("work_experience", DIMENSION_FIELD_ALIASES)),
     )
     keyword_match: CompactDimensionAssessment = Field(
-        default_factory=_empty_dimension,
-        validation_alias=AliasChoices("keyword_match", "keywordMatch", "keywords"),
+        default_factory=CompactDimensionAssessment,
+        validation_alias=AliasChoices(*_field_keys("keyword_match", DIMENSION_FIELD_ALIASES)),
     )
-
-    @model_validator(mode="before")
-    @classmethod
-    def accept_named_dimension_list(cls, value: Any) -> Any:
-        if not isinstance(value, list):
-            return value
-        result: dict[str, Any] = {}
-        aliases = {
-            "skills": "skills_match", "skills_match": "skills_match",
-            "projects": "project_experience", "project_experience": "project_experience",
-            "education": "education", "experience": "work_experience",
-            "work_experience": "work_experience", "keywords": "keyword_match",
-            "keyword_match": "keyword_match",
-        }
-        for item in value:
-            if not isinstance(item, dict):
-                continue
-            name = _clean_text(
-                item.get("dimension") or item.get("name") or item.get("key"), 80
-            ).casefold().replace(" ", "_")
-            canonical = aliases.get(name)
-            if canonical:
-                result[canonical] = {
-                    key: nested for key, nested in item.items()
-                    if key not in {"dimension", "name", "key"}
-                }
-        return result
 
 
 class CompactEvidenceReference(BaseModel):
     model_config = ConfigDict(extra="ignore", str_strip_whitespace=True, populate_by_name=True)
 
-    skill: ConciseSkill = Field(default="", validation_alias=AliasChoices("skill", "name", "requirement"))
-    evidence_ids: list[EvidenceId] = Field(
-        default_factory=list, validation_alias=AliasChoices("evidence_ids", "evidenceIds", "evidence", "references")
+    skill: ConciseSkill = Field(
+        default="",
+        validation_alias=AliasChoices(*_field_keys("skill", EVIDENCE_REFERENCE_ALIASES)),
     )
-
-    @field_validator("skill", mode="before")
-    @classmethod
-    def clean_skill(cls, value: Any) -> str:
-        return _normalize_skill(value)
-
-    @field_validator("evidence_ids", mode="before")
-    @classmethod
-    def normalize_evidence(cls, value: Any) -> Any:
-        return _default_for_list(value)
-
-    @field_validator("evidence_ids", mode="after")
-    @classmethod
-    def clean_evidence(cls, value: list[str]) -> list[str]:
-        return list(dict.fromkeys(_clean_text(item, 80) for item in value if _clean_text(item, 80)))[:5]
+    evidence_ids: list[EvidenceId] = Field(
+        default_factory=list,
+        validation_alias=AliasChoices(*_field_keys("evidence_ids", EVIDENCE_REFERENCE_ALIASES)),
+    )
 
 
 class CompactAnalysisOutput(BaseModel):
@@ -887,141 +827,50 @@ class CompactAnalysisOutput(BaseModel):
     model_config = ConfigDict(extra="ignore", str_strip_whitespace=True, populate_by_name=True)
 
     job_summary: Annotated[str, Field(max_length=480)] = Field(
-        default="", validation_alias=AliasChoices("job_summary", "jobSummary", "summary")
+        default="",
+        validation_alias=AliasChoices(*_field_keys("job_summary", PROVIDER_FIELD_ALIASES)),
     )
     match_reasons: list[ConciseRecommendation] = Field(
         default_factory=list,
-        validation_alias=AliasChoices("match_reasons", "matchReasons", "reasons", "match_reason", "matchReason"),
+        validation_alias=AliasChoices(*_field_keys("match_reasons", PROVIDER_FIELD_ALIASES)),
     )
     recommendations: list[ConciseRecommendation] = Field(
         default_factory=list,
-        validation_alias=AliasChoices("recommendations", "suggestions", "next_steps", "nextSteps"),
+        validation_alias=AliasChoices(*_field_keys("recommendations", PROVIDER_FIELD_ALIASES)),
     )
     resume_improvements: list[Annotated[str, Field(max_length=220)]] = Field(
         default_factory=list,
-        validation_alias=AliasChoices("resume_improvements", "resumeImprovements", "resume_suggestions", "improvements"),
+        validation_alias=AliasChoices(*_field_keys("resume_improvements", PROVIDER_FIELD_ALIASES)),
     )
 
     matched_skills: list[ConciseSkill] = Field(
-        default_factory=list, validation_alias=AliasChoices("matched_skills", "matchedSkills", "matches")
+        default_factory=list,
+        validation_alias=AliasChoices(*_field_keys("matched_skills", TOP_LEVEL_FIELD_ALIASES)),
     )
     missing_skills: list[ConciseSkill] = Field(
-        default_factory=list, validation_alias=AliasChoices("missing_skills", "missingSkills", "gaps")
+        default_factory=list,
+        validation_alias=AliasChoices(*_field_keys("missing_skills", TOP_LEVEL_FIELD_ALIASES)),
     )
     unknown_skills: list[ConciseSkill] = Field(
-        default_factory=list, validation_alias=AliasChoices("unknown_skills", "unknownSkills", "unknowns")
+        default_factory=list,
+        validation_alias=AliasChoices(*_field_keys("unknown_skills", TOP_LEVEL_FIELD_ALIASES)),
     )
     concise_dimension_assessments: CompactDimensionAssessments = Field(
         default_factory=CompactDimensionAssessments,
-        validation_alias=AliasChoices(
-            "concise_dimension_assessments", "dimension_assessments", "dimensionAssessments", "assessments", "dimensions"
-        ),
+        validation_alias=AliasChoices(*_field_keys("concise_dimension_assessments", TOP_LEVEL_FIELD_ALIASES)),
     )
     evidence_references: list[CompactEvidenceReference] = Field(
         default_factory=list,
-        validation_alias=AliasChoices("evidence_references", "evidenceReferences", "evidence_mapping", "evidenceMapping"),
+        validation_alias=AliasChoices(*_field_keys("evidence_references", TOP_LEVEL_FIELD_ALIASES)),
     )
     unsupported_claim_candidates: list[ConciseClaim] = Field(
         default_factory=list,
-        validation_alias=AliasChoices("unsupported_claim_candidates", "unsupportedCandidates", "unsupported_claims"),
+        validation_alias=AliasChoices(*_field_keys("unsupported_claim_candidates", TOP_LEVEL_FIELD_ALIASES)),
     )
     concise_recommendations: list[ConciseRecommendation] = Field(
         default_factory=list,
-        validation_alias=AliasChoices("concise_recommendations", "recommendations", "suggestions", "next_steps", "nextSteps"),
+        validation_alias=AliasChoices(*_field_keys("concise_recommendations", TOP_LEVEL_FIELD_ALIASES)),
     )
-
-    @field_validator(
-        "matched_skills", "missing_skills", "unknown_skills",
-        "unsupported_claim_candidates", "concise_recommendations", mode="before"
-    )
-    @classmethod
-    def list_defaults(cls, value: Any) -> Any:
-        return _default_for_list(value)
-
-    @field_validator("job_summary", mode="before")
-    @classmethod
-    def clean_job_summary(cls, value: Any) -> str:
-        return _clean_text(value, 480)
-
-    @field_validator("match_reasons", "recommendations", "resume_improvements", mode="before")
-    @classmethod
-    def narrative_list_defaults(cls, value: Any) -> Any:
-        return _default_for_list(value)
-
-    @field_validator("evidence_references", mode="before")
-    @classmethod
-    def evidence_list_defaults(cls, value: Any) -> Any:
-        if value is None:
-            return []
-        if isinstance(value, dict):
-            if any(key in value for key in ("skill", "name", "requirement")):
-                return [value]
-            return [
-                {"skill": skill, "evidence_ids": evidence}
-                for skill, evidence in value.items()
-                if isinstance(skill, str)
-            ]
-        return _default_for_list(value)
-
-    @field_validator("concise_dimension_assessments", mode="before")
-    @classmethod
-    def object_default(cls, value: Any) -> Any:
-        return _default_for_dict(value)
-
-    @field_validator("matched_skills", mode="after")
-    @classmethod
-    def clean_matches(cls, value: list[str]) -> list[str]:
-        return _dedupe_skills(value, 12)
-
-    @field_validator("missing_skills", mode="after")
-    @classmethod
-    def clean_gaps(cls, value: list[str]) -> list[str]:
-        return _dedupe_skills(value, 12)
-
-    @field_validator("unknown_skills", mode="after")
-    @classmethod
-    def clean_unknowns(cls, value: list[str]) -> list[str]:
-        return _dedupe_skills(value, 10)
-
-    @field_validator("unsupported_claim_candidates", mode="after")
-    @classmethod
-    def clean_claims(cls, value: list[str]) -> list[str]:
-        return list(dict.fromkeys(_clean_text(item, 240) for item in value if _clean_text(item, 240)))[:5]
-
-    @field_validator("concise_recommendations", mode="after")
-    @classmethod
-    def clean_recommendations(cls, value: list[str]) -> list[str]:
-        return list(dict.fromkeys(_clean_text(item, 180) for item in value if _clean_text(item, 180)))[:5]
-
-    @field_validator("match_reasons", mode="after")
-    @classmethod
-    def clean_match_reasons(cls, value: list[str]) -> list[str]:
-        return list(dict.fromkeys(_clean_text(item, 180) for item in value if _clean_text(item, 180)))[:5]
-
-    @field_validator("resume_improvements", mode="after")
-    @classmethod
-    def clean_resume_improvements(cls, value: list[str]) -> list[str]:
-        return list(dict.fromkeys(_clean_text(item, 220) for item in value if _clean_text(item, 220)))[:4]
-
-    @field_validator("evidence_references", mode="after")
-    @classmethod
-    def dedupe_references(cls, value: list[CompactEvidenceReference]) -> list[CompactEvidenceReference]:
-        result: list[CompactEvidenceReference] = []
-        seen: set[str] = set()
-        for item in value:
-            key = item.skill.casefold()
-            if item.skill and key not in seen:
-                seen.add(key)
-                result.append(item)
-        return result[:12]
-
-    @model_validator(mode="after")
-    def synchronize_recommendation_compatibility(self) -> "CompactAnalysisOutput":
-        if not self.recommendations and self.concise_recommendations:
-            self.recommendations = list(self.concise_recommendations)
-        if not self.concise_recommendations and self.recommendations:
-            self.concise_recommendations = list(self.recommendations)
-        return self
 
     @model_validator(mode="after")
     def require_some_analysis(self) -> "CompactAnalysisOutput":
@@ -1299,35 +1148,45 @@ def parse_model_json(raw_response: str) -> dict[str, Any]:
 
 
 def compact_analysis_warnings(data: dict[str, Any]) -> list[str]:
-    aliases = {
-        field_name: set(field_aliases)
-        for field_name, field_aliases in PROVIDER_FIELD_ALIASES.items()
-    }
-    aliases.update({
-        "matched_skills": {"matchedSkills", "matches"},
-        "missing_skills": {"missingSkills", "gaps"},
-        "unknown_skills": {"unknownSkills", "unknowns"},
-        "concise_dimension_assessments": {"dimension_assessments", "dimensionAssessments", "assessments", "dimensions"},
-        "evidence_references": {"evidenceReferences", "evidence_mapping", "evidenceMapping"},
-        "concise_recommendations": {"concise_recommendations"},
-    })
     warnings: list[str] = []
-    core = ("job_summary", "match_reasons", "recommendations", "resume_improvements")
-    missing = [key for key in core if key not in data and not aliases[key].intersection(data)]
+    missing = [
+        field_name
+        for field_name in PROVIDER_CANONICAL_FIELDS
+        if not any(key in data for key in _field_keys(field_name, PROVIDER_FIELD_ALIASES))
+        and not (field_name == "recommendations" and "concise_recommendations" in data)
+    ]
     if missing:
         warnings.append("Some optional model fields were missing and safe defaults were used: " + ", ".join(missing) + ".")
-    if any(aliases[key].intersection(data) for key in aliases):
+    aliases = (
+        *PROVIDER_FIELD_ALIASES.values(),
+        *(
+            TOP_LEVEL_FIELD_ALIASES[field_name]
+            for field_name in CANONICAL_ANALYSIS_FIELDS
+            if field_name not in {"concise_recommendations", "unsupported_claim_candidates"}
+        ),
+    )
+    has_alias = any(alias in data for field_aliases in aliases for alias in field_aliases)
+    if has_alias or "concise_recommendations" in data:
         warnings.append("Equivalent model field aliases were normalized.")
     if any(data.get(key) is None for key in data):
         warnings.append("Null model fields were replaced with safe defaults.")
     return warnings
 
 
-def validate_compact_analysis(data: dict[str, Any]) -> CompactAnalysisOutput:
-    if not isinstance(data, dict):
+def validate_compact_analysis(
+    data: dict[str, Any] | SalvagedCompactAnalysis,
+) -> CompactAnalysisOutput:
+    if isinstance(data, SalvagedCompactAnalysis):
+        normalized = dict(data.data)
+    elif isinstance(data, dict):
+        normalized = dict(salvage_compact_analysis(data).data)
+    else:
         raise ModelOutputError(MODEL_OUTPUT_SCHEMA_INVALID)
-    salvaged = salvage_compact_analysis(data)
+    if not normalized.get("recommendations") and normalized.get("concise_recommendations"):
+        normalized["recommendations"] = list(normalized["concise_recommendations"])
+    if not normalized.get("concise_recommendations") and normalized.get("recommendations"):
+        normalized["concise_recommendations"] = list(normalized["recommendations"])
     try:
-        return CompactAnalysisOutput.model_validate(salvaged.data)
+        return CompactAnalysisOutput.model_validate(normalized)
     except ValidationError as exc:
         raise ModelOutputError(MODEL_OUTPUT_SCHEMA_INVALID) from exc

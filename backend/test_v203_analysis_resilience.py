@@ -6,6 +6,7 @@ from unittest.mock import patch
 from docx import Document
 from fastapi.testclient import TestClient
 
+import analysis_contract
 from analysis_contract import (
     MODEL_OUTPUT_INVALID_JSON,
     ModelOutputError,
@@ -77,6 +78,18 @@ class V203AnalysisContractTest(unittest.TestCase):
         value = validate_compact_analysis({"matched_skills": None, "recommendations": "Keep it concise"})
         self.assertEqual(value.matched_skills, [])
         self.assertEqual(value.concise_recommendations, ["Keep it concise"])
+
+    def test_provider_normalization_runs_once_before_validation(self):
+        with patch(
+            "legacy_application.salvage_compact_analysis",
+            wraps=analysis_contract.salvage_compact_analysis,
+        ) as normalize:
+            _result, status, _warnings = model_response_to_result(
+                '{"recommendations":"Keep it concise"}',
+                repairer=lambda _: "",
+            )
+        self.assertEqual(status, "partial")
+        self.assertEqual(normalize.call_count, 1)
 
     def test_string_skill_becomes_list(self):
         value = validate_compact_analysis({"matched_skills": " python ", "recommendations": "Verify"})
