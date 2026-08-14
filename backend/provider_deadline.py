@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 import threading
 import time
@@ -40,7 +41,6 @@ class ProviderAttemptTimeout:
 
     timeout: httpx.Timeout
     budget_seconds: float
-    remaining_seconds: float
     remaining_bucket: str
 
 
@@ -131,76 +131,8 @@ class ProviderDeadline:
         return ProviderAttemptTimeout(
             timeout=timeout,
             budget_seconds=round(budget, 3),
-            remaining_seconds=round(remaining, 3),
             remaining_bucket=self.remaining_bucket(now),
         )
-
-    def can_start(self, *, configured_timeout_seconds: float, kind: str = "primary") -> bool:
-        return self.call_timeout(
-            configured_timeout_seconds=configured_timeout_seconds,
-            kind=kind,
-        ) is not None
-
-
-class _DeadlineSyncByteStream(httpx.SyncByteStream):
-    """Stop a response body whose chunks outlive the absolute deadline."""
-
-    def __init__(
-        self,
-        stream: httpx.SyncByteStream,
-        deadline_monotonic: float,
-        request: httpx.Request,
-    ) -> None:
-        self._stream = stream
-        self._deadline_monotonic = deadline_monotonic
-        self._request = request
-
-    def _read_next(self, iterator: object) -> tuple[str, object]:
-        """Read one transport chunk without allowing a blocking read past deadline."""
-        outcome: list[tuple[str, object]] = []
-        completed = threading.Event()
-
-        def read_chunk() -> None:
-            try:
-                outcome.append(("chunk", next(iterator)))  # type: ignore[arg-type]
-            except StopIteration:
-                outcome.append(("stop", None))
-            except BaseException as exc:
-                outcome.append(("error", exc))
-            finally:
-                completed.set()
-
-        worker = threading.Thread(target=read_chunk, daemon=True)
-        worker.start()
-        remaining = max(0.0, self._deadline_monotonic - time.monotonic())
-        if not completed.wait(remaining):
-            self.close()
-            completed.wait(0.2)
-            raise httpx.ReadTimeout(
-                "Provider response deadline exhausted",
-                request=self._request,
-            )
-        kind, value = outcome[0]
-        if kind == "error":
-            raise value  # type: ignore[misc]
-        return kind, value
-
-    def __iter__(self):
-        iterator = iter(self._stream)
-        while True:
-            if time.monotonic() >= self._deadline_monotonic:
-                self.close()
-                raise httpx.ReadTimeout(
-                    "Provider response deadline exhausted",
-                    request=self._request,
-                )
-            kind, chunk = self._read_next(iterator)
-            if kind == "stop":
-                return
-            yield chunk  # type: ignore[misc]
-
-    def close(self) -> None:
-        self._stream.close()
 
 
 class DeadlineHttpxClient(httpx.Client):
@@ -220,7 +152,7 @@ class DeadlineHttpxClient(httpx.Client):
 
     def _send_until_deadline(
         self,
-        operation: object,
+        operation: Callable[[], httpx.Response],
         *,
         request: httpx.Request,
     ) -> httpx.Response:
@@ -231,7 +163,7 @@ class DeadlineHttpxClient(httpx.Client):
 
         def send_request() -> None:
             try:
-                response = operation()  # type: ignore[operator]
+                response = operation()
                 if cancelled.is_set():
                     response.close()
                 else:
@@ -280,24 +212,20 @@ class DeadlineHttpxClient(httpx.Client):
                 key: min(max(float(value), 0.0), remaining)
                 for key, value in timeout_extensions.items()
             }
-        response = self._send_until_deadline(
-            lambda: super(DeadlineHttpxClient, self).send(
+        def send_response() -> httpx.Response:
+            response = super(DeadlineHttpxClient, self).send(
                 request,
                 stream=True,
                 auth=auth,
                 follow_redirects=follow_redirects,
-            ),
-            request=request,
-        )
-        response.stream = _DeadlineSyncByteStream(
-            response.stream,
-            self._deadline_monotonic,
-            request,
-        )
-        if not stream:
+            )
             try:
                 response.read()
             except BaseException:
                 response.close()
                 raise
-        return response
+            return response
+
+        # The Provider boundary is non-streaming. Reading the complete body in
+        # the same worker as header acquisition gives one hard total deadline.
+        return self._send_until_deadline(send_response, request=request)
