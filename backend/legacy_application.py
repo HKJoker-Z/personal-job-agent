@@ -1982,7 +1982,7 @@ def model_response_to_result(
     try:
         parsed_result = parse_model_json_result(raw_response)
         salvaged = salvage_compact_analysis(parsed_result.data)
-        compact = validate_compact_analysis(salvaged.data)
+        compact = validate_compact_analysis(salvaged)
         warnings = list(parsed_result.warnings)
         warnings.extend(compact_analysis_warnings(parsed_result.data))
         warnings.extend(salvage_warning_messages(salvaged.action_codes))
@@ -2022,7 +2022,7 @@ def model_response_to_result(
     )
     parsed_result = parse_model_json_result(repaired_text)
     salvaged = salvage_compact_analysis(parsed_result.data)
-    compact = validate_compact_analysis(salvaged.data)
+    compact = validate_compact_analysis(salvaged)
     warnings = ["The model response was automatically normalized by one format-only repair call."]
     warnings.extend(parsed_result.warnings)
     warnings.extend(compact_analysis_warnings(parsed_result.data))
