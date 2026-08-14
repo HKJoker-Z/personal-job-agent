@@ -136,6 +136,16 @@ Cookie、Resume、JD、Provider 原始响应或生产数据。
   Alembic current=head、health/auth/CSRF、Profile/Resume/Analyze、RAG/evidence/
   grounding、restart persistence、backup/restore 和 checksum；Compose 项目及 volumes
   已清理。
+- Phase 2C PR #66 head `c8df63da6546ac7699385f96ff8b6dcd90896bdf`：
+  CI run `31799206567` success；`backend-tests`、`backend-postgres`、
+  `frontend-build`、`docker-build`、`docker-smoke-v2`、
+  `postgres16-backup-restore`、`compose-validation`、
+  `production-runtime-regression`、`script-validation`、`repository-safety`
+  全部通过。
+- 同一 head 的 Java Normalization Candidate run `31799206555`：
+  `isolated-candidate` success，耗时 5m42s。
+- 上述 CI 证据之后仅补充本报告，不改变生产或测试代码；报告提交推送后仍需等待
+  最终 PR head 的新 CI，不能用旧 head 结果替代。
 
 首次定向测试命令未设置 `APP_DATABASE_PATH`，被仓库 `APP_ENV=test` SQLite 安全门在
 加载测试前拒绝，没有执行测试用例。随后所有 SQLite 测试均改用独立 `mktemp` 路径并
