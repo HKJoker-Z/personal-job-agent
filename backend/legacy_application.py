@@ -68,6 +68,10 @@ from app.analyze.input_preparation import (
     clamp_rag_top_k,
     prepare_analyze_input,
 )
+from app.analyze.evidence_preparation import (
+    prepare_project_evidence,
+    scan_untrusted_input,
+)
 from app.analyze.normalization_client import JavaNormalizationClient
 from app.analyze.normalization_runtime import select_effective_normalization
 from app.materials.grounding import EvidenceSource, validate_claims, validation_summary
@@ -3241,44 +3245,15 @@ async def analyze(
         request.state.analyze_idempotency_service = idempotency_service
         request.state.analyze_idempotency_claim = idempotency_claim
 
-    workflow.start_step("scan_untrusted_input", "Scan Untrusted Input")
-    try:
-        sanitized_resume_text, resume_scan = prepare_resume_for_llm(context.resume_text)
-        sanitized_job_text, job_scan = scan_and_sanitize_untrusted_text(
-            context.job_text,
-            "job_description",
-        )
-        context.sanitized_resume_text = sanitized_resume_text
-        context.sanitized_job_text = sanitized_job_text
-        context.security_scan = merge_security_scans(resume_scan, job_scan)
-        if context.security_scan.get("blocked"):
-            workflow.fail_step(
-                "scan_untrusted_input",
-                "Sensitive credential-like content was detected before LLM invocation.",
-            )
-            skip_workflow_steps_after(
-                workflow,
-                after_key="scan_untrusted_input",
-                message="Skipped because security scanning blocked the request.",
-            )
-            raise_security_blocked(workflow, context)
-        if context.security_scan.get("prompt_injection_detected"):
-            workflow.add_warning()
-        workflow.complete_step(
-            "scan_untrusted_input",
-            "Untrusted resume and job description were scanned and prepared for analysis.",
-        )
-    except HTTPException:
-        raise
-    except Exception as exc:
-        fail_analysis_and_raise(
-            workflow,
-            context,
-            step_key="scan_untrusted_input",
-            message="Security scanning failed.",
-            error_code="UNTRUSTED_INPUT_SCAN_FAILED",
-            exc=exc,
-        )
+    scan_untrusted_input(
+        workflow=workflow,
+        context=context,
+        failure_handler=fail_analysis_and_raise,
+        blocked_handler=raise_security_blocked,
+        skip_steps_after=skip_workflow_steps_after,
+        resume_preparer=prepare_resume_for_llm,
+        untrusted_text_scanner=scan_and_sanitize_untrusted_text,
+    )
 
     if settings.jd_normalization.mode == "shadow" and fingerprint is None:
         current_db = getattr(request.state, "v2_db", None)
@@ -3347,132 +3322,18 @@ async def analyze(
             exc=exc,
         )
 
-    logger.info(
-        "Analyze RAG settings rag_mode=%s use_knowledge_base=%s rag_top_k=%s",
-        context.rag_mode,
-        context.rag_mode == "project",
-        context.rag_top_k,
+    prepare_project_evidence(
+        workflow=workflow,
+        context=context,
+        failure_handler=fail_analysis_and_raise,
+        blocked_handler=raise_security_blocked,
+        skip_steps_after=skip_workflow_steps_after,
+        retrieval_query_builder=build_knowledge_retrieval_query,
+        project_knowledge_retriever=search_project_knowledge,
+        rag_source_builder=build_default_rag_sources,
+        project_chunk_scanner=scan_project_chunks,
+        safe_prompt_builder=build_safe_analysis_prompt,
     )
-    if context.rag_mode == "off":
-        workflow.skip_step(
-            "retrieve_project_evidence",
-            "Retrieve Project Knowledge",
-            "Project Knowledge RAG is off for this analysis.",
-        )
-    else:
-        workflow.start_step("retrieve_project_evidence", "Retrieve Project Knowledge")
-        try:
-            retrieval_query = build_knowledge_retrieval_query(
-                context.sanitized_job_text,
-                context.sanitized_resume_text,
-            )
-            rag_chunks, retrieval_method = search_project_knowledge(
-                retrieval_query,
-                context.rag_top_k,
-            )
-            context.retrieved_chunks = rag_chunks
-            context.rag_sources = build_default_rag_sources(rag_chunks)
-            if not rag_chunks:
-                workflow.add_warning()
-            workflow.complete_step(
-                "retrieve_project_evidence",
-                (
-                    f"Retrieved {len(rag_chunks)} Project Knowledge source(s) "
-                    f"using {retrieval_method}."
-                ),
-            )
-        except Exception as exc:
-            fail_analysis_and_raise(
-                workflow,
-                context,
-                step_key="retrieve_project_evidence",
-                message="Project Knowledge retrieval failed.",
-                error_code="PROJECT_KNOWLEDGE_RETRIEVAL_FAILED",
-                exc=exc,
-            )
-        logger.info(
-            "Project Knowledge retrieval completed result_count=%s retrieval_method=%s chunk_ids=%s titles=%s",
-            len(context.retrieved_chunks),
-            retrieval_method if context.retrieved_chunks else "none",
-            [chunk.get("chunk_id") for chunk in context.retrieved_chunks],
-            [chunk.get("document_title") for chunk in context.retrieved_chunks],
-        )
-
-    if context.rag_mode == "off":
-        workflow.skip_step(
-            "scan_project_evidence",
-            "Scan Project Evidence",
-            "Project Knowledge RAG is off for this analysis.",
-        )
-    else:
-        workflow.start_step("scan_project_evidence", "Scan Project Evidence")
-        try:
-            sanitized_chunks, project_scan, filtered_sources = scan_project_chunks(
-                context.retrieved_chunks
-            )
-            context.retrieved_chunks = sanitized_chunks
-            context.security_filtered_rag_sources = filtered_sources
-            context.rag_sources = build_default_rag_sources(sanitized_chunks)
-            if filtered_sources:
-                context.rag_sources.extend(filtered_sources)
-            context.security_scan = merge_security_scans(context.security_scan, project_scan)
-            if project_scan.get("prompt_injection_detected"):
-                workflow.add_warning()
-            if context.security_scan.get("blocked"):
-                workflow.fail_step(
-                    "scan_project_evidence",
-                    "Sensitive credential-like content was detected in Project Knowledge evidence.",
-                )
-                skip_workflow_steps_after(
-                    workflow,
-                    after_key="scan_project_evidence",
-                    message="Skipped because security scanning blocked the request.",
-                )
-                raise_security_blocked(
-                    workflow,
-                    context,
-                    error_code="INPUT_SECURITY_BLOCKED",
-                    error_stage="scan_project_evidence",
-                )
-            workflow.complete_step(
-                "scan_project_evidence",
-                (
-                    f"Scanned {len(context.retrieved_chunks)} Project Knowledge source(s); "
-                    f"filtered {len(filtered_sources)} source(s)."
-                ),
-            )
-        except HTTPException:
-            raise
-        except Exception as exc:
-            fail_analysis_and_raise(
-                workflow,
-                context,
-                step_key="scan_project_evidence",
-                message="Project evidence security scan failed.",
-                error_code="PROJECT_EVIDENCE_SCAN_FAILED",
-                exc=exc,
-            )
-
-    workflow.start_step("build_safe_prompt", "Build Safe Prompt")
-    try:
-        context.safe_prompt = build_safe_analysis_prompt(
-            resume_text=context.sanitized_resume_text,
-            job_description=context.sanitized_job_text,
-            rag_chunks=context.retrieved_chunks,
-        )
-        workflow.complete_step(
-            "build_safe_prompt",
-            "Safe prompt built with isolated untrusted data sections.",
-        )
-    except Exception as exc:
-        fail_analysis_and_raise(
-            workflow,
-            context,
-            step_key="build_safe_prompt",
-            message="Safe prompt construction failed.",
-            error_code="SAFE_PROMPT_BUILD_FAILED",
-            exc=exc,
-        )
 
     workflow.start_step("run_llm_analysis", "Run LLM Analysis")
     analysis_status = "complete"
