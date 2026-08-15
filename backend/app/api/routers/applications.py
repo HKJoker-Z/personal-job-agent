@@ -47,7 +47,7 @@ def create_application(payload: ApplicationCreate, db: DbSession, user: CurrentU
         _raise(exc)
 
 
-@router.get("/{application_id}")
+@router.get("/{application_id:uuid}")
 def get_application(application_id: UUID, db: DbSession, user: CurrentUser) -> dict[str, object]:
     try:
         return _service(db, user).get(application_id)
@@ -55,7 +55,7 @@ def get_application(application_id: UUID, db: DbSession, user: CurrentUser) -> d
         _raise(exc)
 
 
-@router.patch("/{application_id}")
+@router.patch("/{application_id:uuid}")
 def patch_application(application_id: UUID, payload: ApplicationPatch, db: DbSession, user: CurrentUser) -> dict[str, object]:
     try:
         return _service(db, user).update(application_id, payload.model_dump(exclude_unset=True))
@@ -63,8 +63,8 @@ def patch_application(application_id: UUID, payload: ApplicationPatch, db: DbSes
         _raise(exc)
 
 
-@router.delete("/{application_id}")
-@router.post("/{application_id}/archive")
+@router.delete("/{application_id:uuid}")
+@router.post("/{application_id:uuid}/archive")
 def archive_application(application_id: UUID, payload: ExpectedRevision, db: DbSession, user: CurrentUser) -> dict[str, object]:
     try:
         return _service(db, user).archive(application_id, payload.expected_revision)
@@ -72,7 +72,12 @@ def archive_application(application_id: UUID, payload: ExpectedRevision, db: DbS
         _raise(exc)
 
 
-@router.post("/{application_id}/restore")
+@router.api_route("/{application_id}", methods=["GET", "PATCH", "DELETE", "POST"])
+def invalid_application_id(application_id: str) -> None:
+    raise HTTPException(status_code=404, detail="Application not found.")
+
+
+@router.post("/{application_id:uuid}/restore")
 def restore_application(application_id: UUID, payload: ExpectedRevision, db: DbSession, user: CurrentUser) -> dict[str, object]:
     try:
         return _service(db, user).restore(application_id, payload.expected_revision)
@@ -80,7 +85,7 @@ def restore_application(application_id: UUID, payload: ExpectedRevision, db: DbS
         _raise(exc)
 
 
-@router.post("/{application_id}/transition")
+@router.post("/{application_id:uuid}/transition")
 def transition(application_id: UUID, payload: ApplicationTransition, db: DbSession, user: CurrentUser) -> dict[str, object]:
     try:
         return _service(db, user).transition(
@@ -91,7 +96,7 @@ def transition(application_id: UUID, payload: ApplicationTransition, db: DbSessi
         _raise(exc)
 
 
-@router.post("/{application_id}/reopen")
+@router.post("/{application_id:uuid}/reopen")
 def reopen(application_id: UUID, payload: ReopenApplication, db: DbSession, user: CurrentUser) -> dict[str, object]:
     try:
         return _service(db, user).reopen(application_id, payload.expected_revision, payload.reason)
@@ -99,7 +104,7 @@ def reopen(application_id: UUID, payload: ReopenApplication, db: DbSession, user
         _raise(exc)
 
 
-@router.get("/{application_id}/history")
+@router.get("/{application_id:uuid}/history")
 def history(application_id: UUID, db: DbSession, user: CurrentUser) -> list[dict[str, object]]:
     try:
         return _service(db, user).history(application_id)
@@ -107,7 +112,7 @@ def history(application_id: UUID, db: DbSession, user: CurrentUser) -> list[dict
         _raise(exc)
 
 
-@router.post("/{application_id}/resume")
+@router.post("/{application_id:uuid}/resume")
 def link_resume(application_id: UUID, payload: ResumeLink, db: DbSession, user: CurrentUser) -> dict[str, object]:
     try:
         return _service(db, user).link_resume(application_id, payload.resume_version_id, payload.expected_revision)
@@ -115,7 +120,7 @@ def link_resume(application_id: UUID, payload: ResumeLink, db: DbSession, user: 
         _raise(exc)
 
 
-@router.get("/{application_id}/notes")
+@router.get("/{application_id:uuid}/notes")
 def notes(application_id: UUID, db: DbSession, user: CurrentUser) -> list[dict[str, object]]:
     try:
         return _service(db, user).notes(application_id)
@@ -123,7 +128,7 @@ def notes(application_id: UUID, db: DbSession, user: CurrentUser) -> list[dict[s
         _raise(exc)
 
 
-@router.post("/{application_id}/notes", status_code=status.HTTP_201_CREATED)
+@router.post("/{application_id:uuid}/notes", status_code=status.HTTP_201_CREATED)
 def add_note(application_id: UUID, payload: NoteCreate, db: DbSession, user: CurrentUser) -> dict[str, object]:
     try:
         return _service(db, user).add_note(application_id, payload.model_dump())
@@ -131,7 +136,7 @@ def add_note(application_id: UUID, payload: NoteCreate, db: DbSession, user: Cur
         _raise(exc)
 
 
-@router.patch("/{application_id}/notes/{note_id}")
+@router.patch("/{application_id:uuid}/notes/{note_id:uuid}")
 def patch_note(application_id: UUID, note_id: UUID, payload: NotePatch, db: DbSession, user: CurrentUser) -> dict[str, object]:
     try:
         return _service(db, user).update_note(application_id, note_id, payload.model_dump(exclude_unset=True))
@@ -139,7 +144,7 @@ def patch_note(application_id: UUID, note_id: UUID, payload: NotePatch, db: DbSe
         _raise(exc)
 
 
-@router.delete("/{application_id}/notes/{note_id}")
+@router.delete("/{application_id:uuid}/notes/{note_id:uuid}")
 def delete_note(application_id: UUID, note_id: UUID, payload: ExpectedRevision, db: DbSession, user: CurrentUser) -> dict[str, bool]:
     try:
         _service(db, user).delete_note(application_id, note_id, payload.expected_revision)
@@ -148,7 +153,7 @@ def delete_note(application_id: UUID, note_id: UUID, payload: ExpectedRevision, 
         _raise(exc)
 
 
-@router.get("/{application_id}/suggested-tasks")
+@router.get("/{application_id:uuid}/suggested-tasks")
 def suggested_tasks(application_id: UUID, db: DbSession, user: CurrentUser) -> list[dict[str, object]]:
     try:
         return _service(db, user).suggested_tasks(application_id)

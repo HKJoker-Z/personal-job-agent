@@ -55,6 +55,7 @@ from app.api.errors import (
     is_analyze_request,
     request_id_for,
 )
+from app.applications.service import ApplicationService
 from app.analyze.idempotency import (
     AnalyzeIdempotencyService,
     IdempotencyError,
@@ -2110,16 +2111,29 @@ def get_existing_application_record(application_id: int) -> dict[str, Any]:
     return record
 
 
-def get_owned_history_record(application_id: int, request: Request) -> dict[str, Any]:
+def history_owner_scope(request: Request) -> tuple[object | None, bool]:
     user = getattr(request.state, "v2_user", None)
+    return getattr(user, "id", None), getattr(user, "role", "") == "admin"
+
+
+def get_owned_history_record(application_id: int, request: Request) -> dict[str, Any]:
+    owner_user_id, include_unowned = history_owner_scope(request)
     record = get_application_record(
         application_id,
-        owner_user_id=getattr(user, "id", None),
-        include_unowned=getattr(user, "role", "") == "admin",
+        owner_user_id=owner_user_id,
+        include_unowned=include_unowned,
     )
     if record is None:
         raise HTTPException(status_code=404, detail="History record not found.")
     return record
+
+
+def application_service_for(request: Request) -> ApplicationService:
+    current_user = getattr(request.state, "v2_user", None)
+    current_db = getattr(request.state, "v2_db", None)
+    if current_user is None or current_db is None:
+        raise HTTPException(status_code=401, detail="Authentication required.")
+    return ApplicationService(current_db, current_user.id)
 
 
 def attachment_headers(filename: str) -> dict[str, str]:
@@ -2816,6 +2830,27 @@ def search_knowledge(
 
 
 @app.get("/api/history")
+def list_history(
+    request: Request,
+    status: str | None = Query(None),
+    search: str | None = Query(None),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+) -> dict[str, Any]:
+    owner_user_id, include_unowned = history_owner_scope(request)
+    clean_status = validate_application_status(status, required=False)
+    clean_search = (search or "").strip() or None
+    items, total = list_application_records(
+        status=clean_status,
+        search=clean_search,
+        limit=limit,
+        offset=offset,
+        owner_user_id=owner_user_id,
+        include_unowned=include_unowned,
+    )
+    return {"items": items, "total": total, "limit": limit, "offset": offset}
+
+
 @app.get("/api/applications")
 def get_applications(
     request: Request,
@@ -2826,28 +2861,9 @@ def get_applications(
     stage: str | None = Query(None),
     archived: bool = Query(False),
 ) -> Any:
-    current_user = getattr(request.state, "v2_user", None)
-    if request.url.path == "/api/history":
-        clean_status = validate_application_status(status, required=False)
-        clean_search = (search or "").strip() or None
-        items, total = list_application_records(
-            status=clean_status,
-            search=clean_search,
-            limit=limit,
-            offset=offset,
-            owner_user_id=getattr(current_user, "id", None),
-            include_unowned=getattr(current_user, "role", "") == "admin",
-        )
-        return {"items": items, "total": total, "limit": limit, "offset": offset}
     legacy_query = any(key in request.query_params for key in ("status", "search", "limit", "offset"))
     if not legacy_query:
-        from app.applications.service import ApplicationService
-
-        current_user = getattr(request.state, "v2_user", None)
-        current_db = getattr(request.state, "v2_db", None)
-        if current_user is None or current_db is None:
-            raise HTTPException(status_code=401, detail="Authentication required.")
-        return ApplicationService(current_db, current_user.id).list(stage, archived)
+        return application_service_for(request).list(stage, archived)
     clean_status = validate_application_status(status, required=False)
     clean_search = (search or "").strip() or None
     items, total = list_application_records(
@@ -2859,197 +2875,167 @@ def get_applications(
     return {"items": items, "total": total, "limit": limit, "offset": offset}
 
 
-@app.get("/api/history/{application_id}")
-@app.get("/api/applications/{application_id}")
-def get_application(application_id: str, request: Request) -> dict[str, Any]:
-    from uuid import UUID
+@app.get("/api/history/{application_id:int}")
+def get_history(application_id: int, request: Request) -> dict[str, Any]:
+    return get_owned_history_record(application_id, request)
 
-    try:
-        version_2_id = UUID(application_id)
-    except ValueError:
-        try:
-            legacy_id = int(application_id)
-        except ValueError as exc:
-            raise HTTPException(status_code=404, detail="Application not found.") from exc
-        if request.url.path.startswith("/api/history/"):
-            return get_owned_history_record(legacy_id, request)
-        return get_existing_application_record(legacy_id)
-    from app.applications.service import ApplicationNotFound, ApplicationService
 
-    current_user = getattr(request.state, "v2_user", None)
-    current_db = getattr(request.state, "v2_db", None)
-    if current_user is None or current_db is None:
-        raise HTTPException(status_code=401, detail="Authentication required.")
-    try:
-        return ApplicationService(current_db, current_user.id).get(version_2_id)
-    except ApplicationNotFound as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+@app.get("/api/applications/{application_id:int}")
+def get_application(application_id: int) -> dict[str, Any]:
+    return get_existing_application_record(application_id)
+
+
+def _cover_letter_export(application_id: int, record: dict[str, Any]) -> StreamingResponse:
+    filename = build_export_filename("cover-letter", record, "docx")
+    logger.info("Cover letter export generated application_id=%s", application_id)
+    return StreamingResponse(build_cover_letter_docx(record), media_type=DOCX_MEDIA_TYPE, headers=attachment_headers(filename))
 
 
 @app.get("/api/history/{application_id}/cover-letter.docx")
+def export_history_cover_letter_docx(application_id: int, request: Request) -> StreamingResponse: return _cover_letter_export(application_id, get_owned_history_record(application_id, request))
+
+
 @app.get("/api/applications/{application_id}/cover-letter.docx")
-def export_cover_letter_docx(application_id: int, request: Request) -> StreamingResponse:
-    record = get_owned_history_record(application_id, request) if request.url.path.startswith("/api/history/") else get_existing_application_record(application_id)
-    buffer = build_cover_letter_docx(record)
-    filename = build_export_filename("cover-letter", record, "docx")
-    logger.info("Cover letter export generated application_id=%s", application_id)
-    return StreamingResponse(
-        buffer,
-        media_type=DOCX_MEDIA_TYPE,
-        headers=attachment_headers(filename),
-    )
+def export_cover_letter_docx(application_id: int) -> StreamingResponse: return _cover_letter_export(application_id, get_existing_application_record(application_id))
+
+
+def _head_cover_letter(record: dict[str, Any]) -> Response:
+    return Response(media_type=DOCX_MEDIA_TYPE, headers=attachment_headers(build_export_filename("cover-letter", record, "docx")))
 
 
 @app.head("/api/history/{application_id}/cover-letter.docx")
+def head_history_cover_letter_docx(application_id: int, request: Request) -> Response: return _head_cover_letter(get_owned_history_record(application_id, request))
+
+
 @app.head("/api/applications/{application_id}/cover-letter.docx")
-def head_cover_letter_docx(application_id: int, request: Request) -> Response:
-    record = get_owned_history_record(application_id, request) if request.url.path.startswith("/api/history/") else get_existing_application_record(application_id)
-    filename = build_export_filename("cover-letter", record, "docx")
-    return Response(media_type=DOCX_MEDIA_TYPE, headers=attachment_headers(filename))
+def head_cover_letter_docx(application_id: int) -> Response: return _head_cover_letter(get_existing_application_record(application_id))
+
+
+def _analysis_report_export(application_id: int, record: dict[str, Any]) -> StreamingResponse:
+    filename = build_export_filename("analysis-report", record, "pdf")
+    logger.info("Analysis report export generated application_id=%s", application_id)
+    return StreamingResponse(build_analysis_report_pdf(record), media_type=PDF_MEDIA_TYPE, headers=attachment_headers(filename))
 
 
 @app.get("/api/history/{application_id}/report.pdf")
+def export_history_analysis_report_pdf(application_id: int, request: Request) -> StreamingResponse: return _analysis_report_export(application_id, get_owned_history_record(application_id, request))
+
+
 @app.get("/api/applications/{application_id}/report.pdf")
-def export_analysis_report_pdf(application_id: int, request: Request) -> StreamingResponse:
-    record = get_owned_history_record(application_id, request) if request.url.path.startswith("/api/history/") else get_existing_application_record(application_id)
-    buffer = build_analysis_report_pdf(record)
-    filename = build_export_filename("analysis-report", record, "pdf")
-    logger.info("Analysis report export generated application_id=%s", application_id)
-    return StreamingResponse(
-        buffer,
-        media_type=PDF_MEDIA_TYPE,
-        headers=attachment_headers(filename),
-    )
+def export_analysis_report_pdf(application_id: int) -> StreamingResponse: return _analysis_report_export(application_id, get_existing_application_record(application_id))
+
+
+def _head_analysis_report(record: dict[str, Any]) -> Response:
+    return Response(media_type=PDF_MEDIA_TYPE, headers=attachment_headers(build_export_filename("analysis-report", record, "pdf")))
 
 
 @app.head("/api/history/{application_id}/report.pdf")
+def head_history_analysis_report_pdf(application_id: int, request: Request) -> Response: return _head_analysis_report(get_owned_history_record(application_id, request))
+
+
 @app.head("/api/applications/{application_id}/report.pdf")
-def head_analysis_report_pdf(application_id: int, request: Request) -> Response:
-    record = get_owned_history_record(application_id, request) if request.url.path.startswith("/api/history/") else get_existing_application_record(application_id)
-    filename = build_export_filename("analysis-report", record, "pdf")
-    return Response(media_type=PDF_MEDIA_TYPE, headers=attachment_headers(filename))
+def head_analysis_report_pdf(application_id: int) -> Response: return _head_analysis_report(get_existing_application_record(application_id))
 
 
-@app.patch("/api/history/{application_id}")
-@app.patch("/api/applications/{application_id}")
-async def patch_application(application_id: str, request: Request) -> dict[str, Any]:
-    from uuid import UUID
-
+async def _patch_legacy_application(
+    application_id: int,
+    request: Request,
+    *,
+    history: bool,
+) -> dict[str, Any]:
     raw_payload = await request.json()
     try:
-        version_2_id = UUID(application_id)
-    except ValueError:
-        try:
-            legacy_id = int(application_id)
-        except ValueError as exc:
-            raise HTTPException(status_code=404, detail="Application not found.") from exc
-        try:
-            payload = ApplicationUpdate.model_validate(raw_payload)
-        except ValidationError as exc:
-            raise HTTPException(status_code=422, detail="Application update is invalid.") from exc
-        clean_status = validate_application_status(payload.application_status, required=True)
-        notes_provided = field_was_provided(payload, "notes")
-        updated_record = update_application_record(
-            legacy_id,
-            application_status=clean_status,
-            notes=payload.notes,
-            update_notes=notes_provided,
-            owner_user_id=getattr(getattr(request.state, "v2_user", None), "id", None) if request.url.path.startswith("/api/history/") else None,
-            include_unowned=getattr(getattr(request.state, "v2_user", None), "role", "") == "admin" if request.url.path.startswith("/api/history/") else False,
-        )
-
-        if updated_record is None:
-            raise HTTPException(status_code=404, detail="Application record not found.")
-        return updated_record
-
-    from app.applications.schemas import ApplicationPatch
-    from app.applications.service import ApplicationConflict, ApplicationNotFound, ApplicationService
-
-    current_user = getattr(request.state, "v2_user", None)
-    current_db = getattr(request.state, "v2_db", None)
-    if current_user is None or current_db is None:
-        raise HTTPException(status_code=401, detail="Authentication required.")
-    try:
-        payload = ApplicationPatch.model_validate(raw_payload)
+        payload = ApplicationUpdate.model_validate(raw_payload)
     except ValidationError as exc:
         raise HTTPException(status_code=422, detail="Application update is invalid.") from exc
-    try:
-        return ApplicationService(current_db, current_user.id).update(
-            version_2_id, payload.model_dump(exclude_unset=True)
-        )
-    except ApplicationNotFound as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except ApplicationConflict as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-
-
-@app.patch("/api/history/{application_id}/next-action")
-@app.patch("/api/applications/{application_id}/next-action")
-def patch_next_action_decision(
-    application_id: int,
-    payload: NextActionDecisionUpdate,
-    request: Request,
-) -> dict[str, Any]:
-    decision = validate_next_action_decision(payload.decision)
-    updated_record = update_next_action_decision(
+    clean_status = validate_application_status(payload.application_status, required=True)
+    notes_provided = field_was_provided(payload, "notes")
+    owner_user_id, include_unowned = history_owner_scope(request) if history else (None, False)
+    updated_record = update_application_record(
         application_id,
-        decision=decision,
+        application_status=clean_status,
         notes=payload.notes,
-        owner_user_id=getattr(getattr(request.state, "v2_user", None), "id", None) if request.url.path.startswith("/api/history/") else None,
-        include_unowned=getattr(getattr(request.state, "v2_user", None), "role", "") == "admin" if request.url.path.startswith("/api/history/") else False,
+        update_notes=notes_provided,
+        owner_user_id=owner_user_id,
+        include_unowned=include_unowned,
     )
     if updated_record is None:
         raise HTTPException(status_code=404, detail="Application record not found.")
+    return updated_record
 
+
+@app.patch("/api/history/{application_id:int}")
+async def patch_history_application(application_id: int, request: Request) -> dict[str, Any]:
+    return await _patch_legacy_application(application_id, request, history=True)
+
+
+@app.patch("/api/applications/{application_id:int}")
+async def patch_application(application_id: int, request: Request) -> dict[str, Any]:
+    return await _patch_legacy_application(application_id, request, history=False)
+
+
+def _patch_next_action(
+    application_id: int,
+    payload: NextActionDecisionUpdate,
+    request: Request,
+    *,
+    history: bool,
+) -> dict[str, Any]:
+    decision = validate_next_action_decision(payload.decision)
+    owner_user_id, include_unowned = history_owner_scope(request) if history else (None, False)
+    updated = update_next_action_decision(
+        application_id,
+        decision=decision,
+        notes=payload.notes,
+        owner_user_id=owner_user_id,
+        include_unowned=include_unowned,
+    )
+    if updated is None:
+        raise HTTPException(status_code=404, detail="Application record not found.")
     return {
         "application_id": application_id,
-        "next_action": updated_record.get("next_action") or {},
-        "decision": updated_record.get("next_action_decision") or "pending",
-        "notes": updated_record.get("next_action_decision_notes") or "",
-        "decided_at": updated_record.get("next_action_decided_at"),
+        "next_action": updated.get("next_action") or {},
+        "decision": updated.get("next_action_decision") or "pending",
+        "notes": updated.get("next_action_decision_notes") or "",
+        "decided_at": updated.get("next_action_decided_at"),
     }
 
 
-@app.delete("/api/history/{application_id}")
-@app.delete("/api/applications/{application_id}")
-async def delete_application(application_id: str, request: Request) -> dict[str, Any]:
-    from uuid import UUID
+@app.patch("/api/history/{application_id:int}/next-action")
+def patch_history_next_action(application_id: int, payload: NextActionDecisionUpdate, request: Request) -> dict[str, Any]: return _patch_next_action(application_id, payload, request, history=True)
 
-    try:
-        version_2_id = UUID(application_id)
-    except ValueError:
-        try:
-            legacy_id = int(application_id)
-        except ValueError as exc:
-            raise HTTPException(status_code=404, detail="Application not found.") from exc
-        deleted = delete_application_record(
-            legacy_id,
-            owner_user_id=getattr(getattr(request.state, "v2_user", None), "id", None) if request.url.path.startswith("/api/history/") else None,
-            include_unowned=getattr(getattr(request.state, "v2_user", None), "role", "") == "admin" if request.url.path.startswith("/api/history/") else False,
-        )
-        if not deleted:
-            raise HTTPException(status_code=404, detail="Application record not found.")
-        return {"deleted": True, "id": legacy_id}
 
-    from app.applications.schemas import ExpectedRevision
-    from app.applications.service import ApplicationConflict, ApplicationNotFound, ApplicationService
+@app.patch("/api/applications/{application_id}/next-action")
+def patch_next_action_decision(application_id: int, payload: NextActionDecisionUpdate, request: Request) -> dict[str, Any]: return _patch_next_action(application_id, payload, request, history=False)
 
-    current_user = getattr(request.state, "v2_user", None)
-    current_db = getattr(request.state, "v2_db", None)
-    if current_user is None or current_db is None:
-        raise HTTPException(status_code=401, detail="Authentication required.")
-    try:
-        payload = ExpectedRevision.model_validate(await request.json())
-    except ValidationError as exc:
-        raise HTTPException(status_code=422, detail="Application archive request is invalid.") from exc
-    try:
-        return ApplicationService(current_db, current_user.id).archive(
-            version_2_id, payload.expected_revision
-        )
-    except ApplicationNotFound as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except ApplicationConflict as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+def _delete_legacy_application(
+    application_id: int, request: Request, *, history: bool
+) -> dict[str, Any]:
+    owner_user_id, include_unowned = history_owner_scope(request) if history else (None, False)
+    deleted = delete_application_record(
+        application_id,
+        owner_user_id=owner_user_id,
+        include_unowned=include_unowned,
+    )
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Application record not found.")
+    return {"deleted": True, "id": application_id}
+
+
+@app.delete("/api/history/{application_id:int}")
+def delete_history_application(application_id: int, request: Request) -> dict[str, Any]:
+    return _delete_legacy_application(application_id, request, history=True)
+
+
+@app.delete("/api/applications/{application_id:int}")
+def delete_application(application_id: int, request: Request) -> dict[str, Any]:
+    return _delete_legacy_application(application_id, request, history=False)
+
+
+@app.api_route("/api/history/{application_id}", methods=["GET", "PATCH", "DELETE"])
+def invalid_history_id(application_id: str) -> None:
+    raise HTTPException(status_code=404, detail="Application not found.")
 
 
 def _provider_deadline_exhausted(provider_budget: ProviderDeadline, exc: Exception) -> bool:

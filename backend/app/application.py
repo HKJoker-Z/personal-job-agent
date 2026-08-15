@@ -6,7 +6,7 @@ import logging
 
 from fastapi import FastAPI
 
-from app.api.routers import agent_runs, auth, dashboard, profile, resumes, system
+from app.api.routers import agent_runs, applications, auth, dashboard, profile, resumes, system
 from app.analyze.idempotency import AnalyzeIdempotencyFailureMiddleware
 from app.auth.middleware import V2SecurityMiddleware
 from app.core.config import load_v2_settings
@@ -31,6 +31,7 @@ def _compose_application(app: FastAPI) -> FastAPI:
     app.include_router(resumes.router)
     app.include_router(agent_runs.router)
     app.include_router(dashboard.router)
+    app.include_router(applications.router)
     app.include_router(system.router)
     # Security remains outside feature routing so unauthenticated requests fail
     # closed. Correlation is added last so it wraps every security outcome.
