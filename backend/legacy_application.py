@@ -72,6 +72,10 @@ from app.analyze.evidence_preparation import (
     prepare_project_evidence,
     scan_untrusted_input,
 )
+from app.analyze.result_refinement import (
+    refine_analyze_result,
+    sanitize_provider_result_narratives,
+)
 from app.analyze.normalization_client import JavaNormalizationClient
 from app.analyze.normalization_runtime import select_effective_normalization
 from app.materials.grounding import EvidenceSource, validate_claims, validation_summary
@@ -3536,18 +3540,15 @@ async def analyze(
                 resume_text=context.sanitized_resume_text,
                 job_description=context.sanitized_job_text,
             )
-            removed_narratives = sanitize_provider_narratives(
+            analysis_status, parsed_warnings = sanitize_provider_result_narratives(
                 result,
+                analysis_status,
+                parsed_warnings,
+                narrative_sanitizer=sanitize_provider_narratives,
                 resume_text=context.sanitized_resume_text,
                 job_description=context.sanitized_job_text,
                 retrieved_chunks=context.retrieved_chunks,
             )
-            if removed_narratives:
-                parsed_warnings.append(
-                    "Unsupported narrative claims were removed while preserving the safe analysis."
-                )
-                if analysis_status == "complete":
-                    analysis_status = "partial"
             context.model_metadata = safe_model_metadata({
                 **context.model_metadata,
                 **parse_metadata,
@@ -3636,174 +3637,26 @@ async def analyze(
     })
     provider_phase_completed_monotonic = time.monotonic()
 
-    workflow.start_step("validate_evidence_references", "Validate Evidence References")
-    try:
-        evidence_validation = validate_model_evidence_references(
-            result,
-            resume_text=context.sanitized_resume_text,
-            retrieved_chunks=context.retrieved_chunks,
-        )
-        if evidence_validation["rejected_reference_count"]:
-            workflow.add_warning()
-            analysis_warnings.append(
-                "Unknown or unsupported evidence references were ignored without blocking the analysis."
-            )
-            if analysis_status == "complete":
-                analysis_status = "partial"
-        workflow.complete_step(
-            "validate_evidence_references",
-            (
-                "Validated model evidence IDs against the current request; rejected "
-                f"{evidence_validation['rejected_reference_count']} reference(s)."
-            ),
-        )
-    except Exception as exc:
-        fail_analysis_and_raise(
-            workflow,
-            context,
-            step_key="validate_evidence_references",
-            message="Evidence reference validation failed safely.",
-            error_code="EVIDENCE_REFERENCE_VALIDATION_FAILED",
-            exc=exc,
-        )
-
-    workflow.start_step("reconcile_evidence", "Reconcile Evidence")
-    try:
-        corrected_terms = reconcile_result_with_rag_evidence(result, context.retrieved_chunks)
-        context.rag_reconciliation_count = len(corrected_terms)
-        result["rag_mode"] = context.rag_mode
-        result["used_knowledge_base"] = bool(
-            context.rag_mode == "project" and context.retrieved_chunks
-        )
-        result["retrieval_count"] = len(context.retrieved_chunks)
-        enforce_analysis_grounding(
-            result,
-            context.sanitized_resume_text,
-            context.retrieved_chunks,
-        )
-        result["scoring_breakdown"] = deterministic_scoring(
-            result,
-            context.sanitized_resume_text,
-            context.sanitized_job_text,
-            context.retrieved_chunks,
-        )
-        result["match_score"] = calculate_weighted_match_score(result["scoring_breakdown"])
-        ensure_deterministic_narratives(result, context.sanitized_job_text)
-        result["rag_sources"] = build_default_rag_sources(
-            context.retrieved_chunks,
-            result.get("matched_skills") or [],
-        )
-        if not result["used_knowledge_base"]:
-            result["rag_sources"] = []
-        if (result.get("claim_validation") or {}).get("unsupported_claim_count"):
-            workflow.add_warning()
-            analysis_warnings.append(
-                "Unsupported candidate claims were removed without blocking the reliable result."
-            )
-            if analysis_status == "complete":
-                analysis_status = "partial"
-        result["analysis_status"] = analysis_status
-        # Evidence cleanup and deterministic grounding can change a provider
-        # result from complete to partial after JSON parsing. Keep the
-        # structured observation aligned with the final public state.
-        context.model_metadata = safe_model_metadata({
-            **context.model_metadata,
-            "result_state": analysis_status,
-        })
-        result["analysis_warnings"] = list(dict.fromkeys(analysis_warnings))
-        result["recommendations"] = normalize_list(
-            result.get("recommendations") or result.get("resume_suggestions")
-        )
-        result["resume_suggestions"] = list(result["recommendations"])
-        result.setdefault("unknown_skills", [])
-        result.setdefault("cover_letter", "")
-        result.setdefault("upgraded_resume_bullets", [])
-        result.setdefault("ats_analysis", {})
-        result.setdefault("evidence_mapping", [])
-        workflow.complete_step(
-            "reconcile_evidence",
-            (
-                f"Reconciled Project Knowledge evidence; corrected {len(corrected_terms)} "
-                "RAG-supported term(s)."
-            ),
-        )
-    except Exception as exc:
-        fail_analysis_and_raise(
-            workflow,
-            context,
-            step_key="reconcile_evidence",
-            message="Evidence reconciliation failed.",
-            error_code="EVIDENCE_RECONCILIATION_FAILED",
-            exc=exc,
-        )
-
-    workflow.start_step("recommend_next_action", "Recommend Next Action")
-    try:
-        context.next_action = generate_next_action(result)
-        result["next_action"] = context.next_action
-        result["next_action_decision"] = "pending"
-        workflow.complete_step(
-            "recommend_next_action",
-            f"Recommended next action: {context.next_action.get('label', 'No Recommendation')}.",
-        )
-    except Exception as exc:
-        fail_analysis_and_raise(
-            workflow,
-            context,
-            step_key="recommend_next_action",
-            message="Next-action recommendation failed.",
-            error_code="NEXT_ACTION_RECOMMENDATION_FAILED",
-            exc=exc,
-        )
-
-    context.security_scan = normalized_security_scan(context.security_scan or empty_security_scan())
-    context.security_status = security_status_from_scan(context.security_scan)
-    result["security_scan"] = context.security_scan
-    result["security_status"] = context.security_status
-    result["security_policy_version"] = SECURITY_POLICY_VERSION
-
-    workflow.start_step("final_output_scan", "Final Output Security Scan")
-    try:
-        serialized_result = json.dumps(result, ensure_ascii=False, separators=(",", ":"), default=str)
-        _sanitized_final, final_scan, final_marker = scan_llm_output(serialized_result)
-        context.security_scan = merge_security_scans(context.security_scan, final_scan)
-        if final_marker or final_scan.get("sensitive_data_detected") or final_scan.get("blocked"):
-            workflow.fail_step(
-                "final_output_scan",
-                "Final serialized analysis failed the blocking security boundary.",
-            )
-            skip_workflow_steps_after(
-                workflow,
-                after_key="final_output_scan",
-                message="Skipped because final output security scanning blocked the response.",
-            )
-            raise_security_blocked(
-                workflow,
-                context,
-                status_code=502,
-                message="The analysis result failed final security validation. Please try again.",
-                error_code="OUTPUT_SECURITY_BLOCKED",
-                error_stage="final_output_scan",
-            )
-        context.security_scan = normalized_security_scan(context.security_scan)
-        context.security_status = security_status_from_scan(context.security_scan)
-        result["security_scan"] = context.security_scan
-        result["security_status"] = context.security_status
-        workflow.complete_step(
-            "final_output_scan",
-            "Final serialized analysis passed output security scanning.",
-        )
-    except HTTPException:
-        raise
-    except Exception as exc:
-        fail_analysis_and_raise(
-            workflow,
-            context,
-            step_key="final_output_scan",
-            message="Final output security scanning failed.",
-            error_code="FINAL_OUTPUT_SCAN_FAILED",
-            exc=exc,
-        )
+    analysis_status = refine_analyze_result(
+        workflow=workflow,
+        context=context,
+        result=result,
+        analysis_status=analysis_status,
+        analysis_warnings=analysis_warnings,
+        failure_handler=fail_analysis_and_raise,
+        blocked_handler=raise_security_blocked,
+        skip_steps_after=skip_workflow_steps_after,
+        evidence_validator=validate_model_evidence_references,
+        evidence_reconciler=reconcile_result_with_rag_evidence,
+        grounding_enforcer=enforce_analysis_grounding,
+        deterministic_scorer=deterministic_scoring,
+        match_score_calculator=calculate_weighted_match_score,
+        narrative_ensurer=ensure_deterministic_narratives,
+        rag_source_builder=build_default_rag_sources,
+        next_action_generator=generate_next_action,
+        list_normalizer=normalize_list,
+        output_scanner=scan_llm_output,
+    )
 
     if save_to_history:
         workflow.start_step("save_application", "Save Application")
