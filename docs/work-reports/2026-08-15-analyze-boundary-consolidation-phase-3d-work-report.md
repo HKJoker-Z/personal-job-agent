@@ -10,6 +10,7 @@
 - 合并后的 main CI run `31871257101` 成功，Java isolated candidate run `31871256879` 成功。
 - Phase 3D 基线为合并后最新 `origin/main`：
   `a4e57d06a059db8089a22ff957630c27250775c1`。
+- Phase 3D 功能提交：`e18092be322b8e6be11824dc6b9b5d7b6bb8fe4c`。
 
 ## 删除的边界成本
 
@@ -96,7 +97,9 @@ assembly；它们仍是 handler 中紧密的事务收尾边界。
   PostgreSQL opt-in tests 按预期 skipped。
 - PostgreSQL 16.9 isolated container：`PJA_RUN_POSTGRES_TESTS=1 python -m unittest -q
   backend.test_v2_postgres_integration`，12/12 通过；容器已清理。
-- GitHub CI：以本分支推送后的最新 head 结果为准，推送后记录。
+- GitHub CI run `31872156774`：backend、PostgreSQL、frontend、Docker build/smoke、Compose、
+  production runtime、script 和 repository safety checks 全部通过。
+- Java Normalization Candidate run `31872156726`：isolated synthetic candidate 和 cleanup 全部通过。
 - 本阶段未修改前端、Compose、Dockerfile 或部署配置，因此不重复运行本地 frontend build、fresh
   Docker build 和 smoke；这些对应 CI job 仍会检查。
 - 首次带有环境 SOCKS proxy 的 Provider 测试因缺少 `socksio` 失败；清除 `HTTP_PROXY`、`HTTPS_PROXY`
