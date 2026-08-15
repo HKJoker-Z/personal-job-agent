@@ -105,7 +105,7 @@ AST line span 和 workflow branch construct 统计如下：
   smoke steps 通过，包含 Alembic、auth/CSRF、Profile/Resume/Analyze、RAG/evidence/
   grounding、restart persistence、backup/restore 和 checksum。隔离容器、network、volume
   和临时 image tags 已清理；现有生产-like 服务未触碰。
-- GitHub CI：Phase 3B PR #68 的最终 head `777add32d6b923d221ed11926f4f469f3d66656b` 已通过全部实际 checks。CI run `31865641991` 成功（包括 backend、PostgreSQL、frontend、Docker、Compose、production runtime、script、repository safety 和 Docker smoke checks），Java Normalization Candidate run `31865641927` 成功。按仓库规则，skipped 的发布任务不计为失败。
+- GitHub CI：Phase 3B 功能/测试 head `777add32d6b923d221ed11926f4f469f3d66656b` 的 CI run `31865641991` 和 Java Normalization Candidate run `31865641927` 均成功；随后报告更新 head `86a076981807a459eae561333d3f59d2ceb08f1b` 的 CI run `31865937025` 和 Java Normalization Candidate run `31865936993` 也均成功。CI 实际 checks 包括 backend、PostgreSQL、frontend、Docker、Compose、production runtime、script、repository safety 和 Docker smoke checks；按仓库规则，skipped 的发布任务不计为失败。
 
 所有测试仅使用合成数据、本地 fixture 和 Mock Provider；未读取、输出或提交真实密钥、Cookie、
 Resume、JD、Project Knowledge、Provider 响应或生产数据。
