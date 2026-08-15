@@ -148,7 +148,11 @@ Cookie、Resume、JD、Provider 响应或生产数据。
   覆盖 Alembic current=head、health/auth/CSRF、Profile/Resume/Analyze、RAG/evidence/
   grounding、restart persistence、backup/restore 和 checksum。隔离 Compose 项目、volumes、
   networks 和临时镜像均已清理。PR CI 必须用 fresh build 再确认该门禁。
-- GitHub CI：创建 Phase 3A PR 后等待最终 head 的全部实际 checks；结果在最终报告提交中补充。
+- GitHub CI：Phase 3A PR head `80333980398226671fd1cec5af0d124de6acc5a5` 的 CI run
+  `31861778801` 成功，实际 checks `backend-tests`、`backend-postgres`、`frontend-build`、
+  `docker-build`、`docker-smoke-v2`、`postgres16-backup-restore`、`compose-validation`、
+  `production-runtime-regression`、`script-validation` 和 `repository-safety` 全部成功；
+  Java Normalization Candidate run `31861778768` 的 `isolated-candidate` 也成功。
 
 ## 已知风险与回滚
 
