@@ -121,7 +121,6 @@ from knowledge_utils import (
     extract_knowledge_file_text,
     validate_knowledge_filename,
 )
-from recommendation_engine import generate_next_action
 from safe_prompt import build_safe_analysis_prompt
 from security_utils import (
     POLICY_VERSION as SECURITY_POLICY_VERSION,
@@ -1204,73 +1203,6 @@ def enforce_analysis_grounding(
         result["claim_validation"]["warning"] = (
             "Unsupported candidate claims were removed from the result."
         )
-
-
-def sanitize_provider_narratives(
-    result: dict[str, Any],
-    *,
-    resume_text: str,
-    job_description: str,
-    retrieved_chunks: list[dict[str, Any]],
-) -> int:
-    """Remove only unsupported narrative sentences while retaining safe peers."""
-    sources = [
-        EvidenceSource("resume", None, None, resume_text),
-        EvidenceSource("job_description", None, None, job_description),
-    ]
-    sources.extend(
-        EvidenceSource(
-            "project_knowledge",
-            str(chunk.get("chunk_id") or "") or None,
-            None,
-            normalize_string(chunk.get("content")),
-        )
-        for chunk in retrieved_chunks
-    )
-
-    def clean_text(value: Any) -> tuple[str, int]:
-        if not isinstance(value, str) or not value.strip():
-            return "", 0
-        kept: list[str] = []
-        removed = 0
-        for sentence in re.split(r"(?<=[.!?。！？])\s+|\n+", value):
-            sentence = sentence.strip()
-            if not sentence:
-                continue
-            links = validate_claims(sentence, sources)
-            if any(item.get("support_status") in {"unsupported", "partially_supported"} for item in links):
-                removed += 1
-                continue
-            kept.append(sentence)
-        return " ".join(kept)[:480], removed
-
-    def clean_list(value: Any) -> tuple[list[str], int]:
-        if not isinstance(value, list):
-            return [], 0
-        kept: list[str] = []
-        removed = 0
-        for item in value:
-            clean, count = clean_text(item)
-            removed += count
-            if clean:
-                kept.append(clean)
-        return list(dict.fromkeys(kept)), removed
-
-    removed_total = 0
-    summary, removed = clean_text(result.get("job_summary"))
-    removed_total += removed
-    if isinstance(result.get("job_summary"), str):
-        result["job_summary"] = summary
-    reason, removed = clean_text(result.get("match_reason"))
-    removed_total += removed
-    if isinstance(result.get("match_reason"), str):
-        result["match_reason"] = reason
-    for field_name in ("recommendations", "resume_suggestions"):
-        cleaned, removed = clean_list(result.get(field_name))
-        removed_total += removed
-        if isinstance(result.get(field_name), list):
-            result[field_name] = cleaned
-    return removed_total
 
 
 def provider_retry_reason(exc: Exception | ModelOutputError) -> str | None:
@@ -3544,7 +3476,6 @@ async def analyze(
                 result,
                 analysis_status,
                 parsed_warnings,
-                narrative_sanitizer=sanitize_provider_narratives,
                 resume_text=context.sanitized_resume_text,
                 job_description=context.sanitized_job_text,
                 retrieved_chunks=context.retrieved_chunks,
@@ -3649,13 +3580,10 @@ async def analyze(
         evidence_validator=validate_model_evidence_references,
         evidence_reconciler=reconcile_result_with_rag_evidence,
         grounding_enforcer=enforce_analysis_grounding,
-        deterministic_scorer=deterministic_scoring,
         match_score_calculator=calculate_weighted_match_score,
         narrative_ensurer=ensure_deterministic_narratives,
         rag_source_builder=build_default_rag_sources,
-        next_action_generator=generate_next_action,
         list_normalizer=normalize_list,
-        output_scanner=scan_llm_output,
     )
 
     if save_to_history:

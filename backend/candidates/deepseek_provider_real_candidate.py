@@ -45,10 +45,10 @@ from legacy_application import (
     ensure_deterministic_narratives,
     model_response_to_result,
     reconcile_result_with_rag_evidence,
-    sanitize_provider_narratives,
     scan_llm_output,
     validate_model_evidence_references,
 )
+from app.analyze.result_refinement import sanitize_provider_narratives
 from security_utils import (
     empty_security_scan,
     merge_security_scans,

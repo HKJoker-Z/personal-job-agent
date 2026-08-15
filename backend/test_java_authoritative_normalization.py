@@ -278,7 +278,9 @@ class JavaNormalizationAnalyzeIntegrationTest(unittest.TestCase):
             "scoring": [],
         }
         original_prompt = legacy_application.build_safe_analysis_prompt
-        original_scoring = legacy_application.deterministic_scoring
+        from app.analyze import result_refinement
+
+        original_scoring = result_refinement.deterministic_scoring
 
         def retrieval_query(job_text, resume_text):
             calls["rag"].append(job_text)
@@ -317,7 +319,7 @@ class JavaNormalizationAnalyzeIntegrationTest(unittest.TestCase):
             "legacy_application.call_deepseek_raw",
             side_effect=provider,
         ) as provider_call, patch(
-            "legacy_application.deterministic_scoring",
+            "app.analyze.result_refinement.deterministic_scoring",
             side_effect=scoring,
         ):
             response = self.request()
