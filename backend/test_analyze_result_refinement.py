@@ -7,13 +7,10 @@ from app.analyze.result_refinement import refine_analyze_result
 from legacy_application import (
     build_default_rag_sources,
     calculate_weighted_match_score,
-    deterministic_scoring,
     enforce_analysis_grounding,
     ensure_deterministic_narratives,
-    generate_next_action,
     normalize_list,
     reconcile_result_with_rag_evidence,
-    scan_llm_output,
     validate_model_evidence_references,
 )
 
@@ -99,13 +96,10 @@ class AnalyzeResultRefinementTest(unittest.TestCase):
             evidence_validator=validate_model_evidence_references,
             evidence_reconciler=reconcile_result_with_rag_evidence,
             grounding_enforcer=enforce_analysis_grounding,
-            deterministic_scorer=deterministic_scoring,
             match_score_calculator=calculate_weighted_match_score,
             narrative_ensurer=ensure_deterministic_narratives,
             rag_source_builder=build_default_rag_sources,
-            next_action_generator=generate_next_action,
             list_normalizer=normalize_list,
-            output_scanner=scan_llm_output,
         )
         return final_status, context, workflow
 
@@ -198,13 +192,10 @@ class AnalyzeResultRefinementTest(unittest.TestCase):
                 evidence_validator=validate_model_evidence_references,
                 evidence_reconciler=reconcile_result_with_rag_evidence,
                 grounding_enforcer=enforce_analysis_grounding,
-                deterministic_scorer=deterministic_scoring,
                 match_score_calculator=calculate_weighted_match_score,
                 narrative_ensurer=ensure_deterministic_narratives,
                 rag_source_builder=build_default_rag_sources,
-                next_action_generator=generate_next_action,
                 list_normalizer=normalize_list,
-                output_scanner=scan_llm_output,
             )
 
         self.assertEqual(raised.exception.status_code, 502)

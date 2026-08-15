@@ -6,9 +6,9 @@ from pathlib import Path
 
 from analysis_contract import ModelOutputError
 from analysis_fallback import local_fallback_result
+from app.analyze.result_refinement import sanitize_provider_narratives
 from legacy_application import (
     model_response_to_result,
-    sanitize_provider_narratives,
     validate_model_evidence_references,
 )
 from safe_prompt import build_safe_analysis_prompt
