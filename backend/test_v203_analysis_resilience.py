@@ -321,7 +321,7 @@ class V203AnalysisApiTest(unittest.TestCase):
             job_url="https://jobs.example.test/fictional",
         )
         with patch(
-            "legacy_application.fetch_job_text_from_url",
+            "app.analyze.input_preparation._fetch_job_text",
             side_effect=RuntimeError("PRIVATE_FETCH_FAILURE"),
         ):
             response = self.client.post("/api/analyze", **request)
