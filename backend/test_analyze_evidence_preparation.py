@@ -348,7 +348,7 @@ class AnalyzeEvidencePreparationBehaviorTest(unittest.TestCase):
                 "use_project_knowledge": "false",
             },
             request_id="phase3b-blocked",
-            resume_text="Synthetic resume with sk-test-only-abcdefghijklmnop",
+            resume_text="Synthetic resume with postgres://synthetic:synthetic-secret@localhost/test",
         )
 
         self.assertEqual(response.status_code, 422, response.text)
