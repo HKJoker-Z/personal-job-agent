@@ -4,8 +4,8 @@
 
 Personal Job Agent is a private, administrator-led web application for
 evidence-grounded Resume and Job Description analysis. The prepared source
-release candidate is **2.0.6**; public production remains **2.0.5** until
-publication. The current Alembic schema revision is `20260730_07` (`head`).
+release candidate is **2.0.7**; public production remains **2.0.6** until
+deployment. The current Alembic schema revision is `20260730_07` (`head`).
 
 The application uses a React/Vite frontend, a FastAPI/Python backend,
 SQLAlchemy 2, PostgreSQL 16, Redis, Dramatiq, a Transactional Outbox, Nginx,
@@ -18,11 +18,13 @@ AI output is advisory and requires human review. Personal Job Agent does not
 automatically submit applications, send email, contact employers, or guarantee
 Applicant Tracking System (ATS), interview, or hiring outcomes.
 
-## Current Version 2.0.6 Source Changes
+## Current Version 2.0.7 Source Changes
 
-Version 2.0.6 carries forward the bounded production integration of a private,
+Version 2.0.7 carries forward the bounded production integration of a private,
 stateless Spring Boot normalization-only service and the merged Provider
-deadline/acceptance work. FastAPI remains the only public application and owns
+deadline/acceptance work. History View now opens a saved result in a dedicated
+detail state and reuses the Analyze result renderer without rerunning Analyze or
+DeepSeek. FastAPI remains the only public application and owns
 security, idempotency, Project Knowledge retrieval, Provider interaction,
 scoring, History, monitoring, and all persistence.
 
@@ -552,7 +554,7 @@ gates; Version 2.0.6 retains them.
 
 ### Candidate, health, and rollback
 
-Release validation checks exact Version 2.0.6 health/readiness, Alembic
+Release validation checks exact Version 2.0.7 health/readiness, Alembic
 `20260730_07`, mode `java`, reviewed immutable image digests, healthy/private
 dependencies, stable restarts/OOM state, and unchanged public ports without
 generating Analyze traffic. Production remains on the Version 2.0.5 baseline
@@ -698,7 +700,7 @@ later, closing the database-commit versus Redis-send gap.
 
 ### How can an upgrade be rolled back?
 
-Record Version 2.0.5 application digests/config, deploy reviewed Version 2.0.6
+Record Version 2.0.6 application digests/config, deploy reviewed Version 2.0.7
 digests, and preserve Alembic `20260730_07`. Rollback restores the old
 application images/config; an urgent Java-boundary rollback recreates only
 Backend in `local` mode.
@@ -719,7 +721,7 @@ Resume without a stale reference.
 - PostgreSQL full-text RAG is lexical, not embedding/vector retrieval, and can
   miss semantic equivalents outside bounded synonyms.
 - Scanned PDFs without selectable text require external OCR; OCR is not in
-  Version 2.0.6.
+  Version 2.0.7.
 - Safe job URL extraction cannot parse every site or client-rendered page.
 - The system does not automatically apply, send email, contact employers, or
   guarantee ATS parsing, ranking, interviews, or hiring.

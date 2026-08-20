@@ -1,6 +1,6 @@
-# Version 2.0.6 production readiness
+# Version 2.0.7 production readiness
 
-Version 2.0.6 is production-ready only after the immutable-image, preflight,
+Version 2.0.7 is production-ready only after the immutable-image, preflight,
 cutover, health, rollback, tag, release, Project Knowledge, and final-report
 gates in [Deployment](DEPLOYMENT.md) pass.
 
@@ -34,7 +34,7 @@ floating deployment reference, image/source-label mismatch, unhealthy service,
 restart/OOM event, exposed Java port, secret finding, topology drift, or loss of
 rollback readiness.
 
-Operator rollback is to restore the Version 2.0.5 application image and
+Operator rollback is to restore the Version 2.0.6 application image and
 compose/configuration revision. No Java source,
 Java policy/dictionary, Alembic revision, or database downgrade is part of the
 change.
