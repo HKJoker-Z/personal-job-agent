@@ -92,6 +92,7 @@ assert all(
 assert services["backend"]["environment"]["ANALYSIS_JD_NORMALIZATION_MODE"] == "local"
 assert services["worker"]["environment"]["ANALYSIS_JD_NORMALIZATION_MODE"] == "local"
 assert services["outbox-dispatcher"]["environment"]["ANALYSIS_JD_NORMALIZATION_MODE"] == "local"
+assert services["outbox-dispatcher"]["healthcheck"]["timeout"] == "15s"
 assert services["backend"]["environment"]["JD_NORMALIZATION_BASE_URL"] == "http://java-normalization:8080"
 assert services["backend"]["environment"]["JD_NORMALIZATION_API_KEY_FILE"] == "/run/pja-secrets/java-normalization-api-key"
 assert services["backend"]["environment"]["JD_NORMALIZATION_SHADOW_SAMPLE_RATE"] == "0"

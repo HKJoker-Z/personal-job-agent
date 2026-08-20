@@ -164,7 +164,7 @@ services:
     healthcheck:
       test: ["CMD", "python", "-m", "app.agent_runs.dispatcher_healthcheck"]
       interval: 10s
-      timeout: 5s
+      timeout: 15s
       start_period: 20s
       retries: 6
     networks: [data]
