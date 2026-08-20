@@ -6,6 +6,7 @@ reviewable in Git history.
 
 | Date | Report |
 |---|---|
+| 2026-08-20 | [Version 2.0.7 Release (production deployment rolled back)](2026-08-20-v2.0.7-release-work-report.md) |
 | 2026-08-14 | [Provider Deadline Simplification Phase 2A](2026-08-14-provider-deadline-simplification-phase-2a-work-report.md) |
 | 2026-08-14 | [Behavior-Preserving Simplification Phase 1](2026-08-14-behavior-preserving-simplification-phase-1-work-report.md) |
 | 2026-08-08 | [Version 2.0.6 Production Deployment (RELEASED)](2026-08-08-v2.0.6-production-deployment-work-report.md) |
