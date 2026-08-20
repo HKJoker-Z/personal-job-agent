@@ -854,7 +854,7 @@ function NextActionSection({ nextAction, decision, applicationId, canPersistDeci
   );
 }
 
-function AnalysisResult({ result }) {
+function AnalysisResult({ result, onDecisionUpdated }) {
   const score = clampScore(result?.match_score);
   const savedToHistory = Boolean(result?.saved_to_history);
   const securityStatus = result?.security_status || "not_available";
@@ -955,6 +955,7 @@ function AnalysisResult({ result }) {
         decision={result.next_action_decision}
         applicationId={result.application_id}
         canPersistDecision={Boolean(result.saved_to_history && result.application_id)}
+        onDecisionUpdated={onDecisionUpdated}
       />
       <ExportActions applicationId={result.application_id} enabled={savedToHistory} />
 
@@ -1245,6 +1246,15 @@ function HistoryPage() {
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState("");
   const [deletingId, setDeletingId] = useState(null);
+  const historyResult = selectedRecord ? {
+    ...selectedRecord,
+    application_id: selectedRecord.id,
+    saved_to_history: true,
+    used_knowledge_base: selectedRecord.used_knowledge_base
+      ?? asArray(selectedRecord.rag_sources).length > 0,
+    retrieval_count: selectedRecord.retrieval_count
+      ?? asArray(selectedRecord.rag_sources).length,
+  } : null;
 
   async function loadHistory() {
     if (loading) {
@@ -1393,7 +1403,7 @@ function HistoryPage() {
         </section>
       )}
 
-      {records.length > 0 && (
+      {records.length > 0 && !selectedRecord && !detailLoading && (
         <section className="panel list-panel">
           <div className="list-summary">
             <strong>{total}</strong>
@@ -1464,103 +1474,46 @@ function HistoryPage() {
       )}
 
       {selectedRecord && (
-        <section className="panel detail-panel">
-          <div className="detail-header">
-            <div>
-              <span className="label">Saved Analysis #{selectedRecord.id}</span>
-              <h2>{displayPosition(selectedRecord.job_title)}</h2>
-              <p>{displayCompany(selectedRecord.company_name)}</p>
+        <>
+          <section className="panel detail-panel">
+            <div className="detail-header">
+              <div>
+                <span className="label">Saved Analysis #{selectedRecord.id}</span>
+                <h2>{displayPosition(selectedRecord.job_title)}</h2>
+                <p>{displayCompany(selectedRecord.company_name)}</p>
+              </div>
+              <button type="button" onClick={() => setSelectedRecord(null)}>Back to History</button>
             </div>
-            <strong>{clampScore(selectedRecord.match_score)}/100</strong>
-          </div>
 
-          <div className="detail-grid">
-            <div>
-              <span className="label">Created</span>
-              <p>{formatDate(selectedRecord.created_at)}</p>
+            <div className="detail-grid">
+              <div>
+                <span className="label">Created</span>
+                <p>{formatDate(selectedRecord.created_at)}</p>
+              </div>
+              <div>
+                <span className="label">Updated</span>
+                <p>{formatDate(selectedRecord.updated_at)}</p>
+              </div>
+              <div>
+                <span className="label">Resume File</span>
+                <p>{displayText(selectedRecord.resume_filename)}</p>
+              </div>
+              <div>
+                <span className="label">Job URL</span>
+                <p>{displayText(selectedRecord.job_url)}</p>
+              </div>
             </div>
-            <div>
-              <span className="label">Updated</span>
-              <p>{formatDate(selectedRecord.updated_at)}</p>
-            </div>
-            <div>
-              <span className="label">Resume File</span>
-              <p>{displayText(selectedRecord.resume_filename)}</p>
-            </div>
-            <div>
-              <span className="label">Security</span>
-              <p>
-                <SecurityBadge status={selectedRecord.security_status} />
-              </p>
-            </div>
-            <div className="wide-field">
-              <span className="label">Job URL</span>
-              <p>{displayText(selectedRecord.job_url)}</p>
-            </div>
-          </div>
 
-          <div
-            className={`analysis-state-badge ${normalizedAnalysisStatus(selectedRecord.analysis_status)}`}
-            role="status"
-            aria-label={`Analysis state: ${normalizedAnalysisStatus(selectedRecord.analysis_status)}`}
-          >
-            Analysis state: {normalizedAnalysisStatus(selectedRecord.analysis_status)}
-          </div>
-
-          <SecurityAuditSection
-            scan={selectedRecord.security_scan}
-            status={selectedRecord.security_status}
-            policyVersion={selectedRecord.security_policy_version}
-          />
-
-          <section className="result-section">
-            <h3>Match Reason</h3>
-            <p>{displayAnalysisNarrative(selectedRecord.match_reason, "Match Reasons unavailable.")}</p>
+            <section className="result-section">
+              <h3>Human Decision</h3>
+              <p>Decision: {displayText(selectedRecord.next_action_decision, "pending")}</p>
+              <p>Notes: {displayText(selectedRecord.next_action_decision_notes, "No notes recorded.")}</p>
+              <p>Decided at: {displayText(selectedRecord.next_action_decided_at, "Not decided")}</p>
+            </section>
           </section>
 
-          <section className="result-section">
-            <h3>Job Summary</h3>
-            <p>{displayAnalysisNarrative(selectedRecord.job_summary, "Job Summary unavailable.")}</p>
-          </section>
-
-          <ResultList title="Matched Skills" items={selectedRecord.matched_skills} />
-          <ResultList title="Missing Skills" items={selectedRecord.missing_skills} />
-          <ResultList title="Resume Suggestions" items={selectedRecord.resume_suggestions} />
-          <ScoringBreakdownSection breakdown={selectedRecord.scoring_breakdown} />
-          <ATSAnalysisSection analysis={selectedRecord.ats_analysis} />
-          <UpgradedResumeBulletsSection bullets={selectedRecord.upgraded_resume_bullets} />
-          <RagSourcesSection
-            sources={selectedRecord.rag_sources}
-            ragMode={selectedRecord.rag_mode}
-            usedKnowledgeBase={asArray(selectedRecord.rag_sources).length > 0}
-            retrievalCount={asArray(selectedRecord.rag_sources).length}
-          />
-          <AgentWorkflowSection
-            steps={selectedRecord.workflow_steps}
-            workflowDurationMs={selectedRecord.workflow_duration_ms}
-            workflowDurationUs={selectedRecord.workflow_duration_us}
-          />
-          <NextActionSection
-            nextAction={selectedRecord.next_action}
-            decision={selectedRecord.next_action_decision}
-            applicationId={selectedRecord.id}
-            canPersistDecision={Boolean(selectedRecord.id && asObject(selectedRecord.next_action).action)}
-            onDecisionUpdated={handleNextDecisionUpdated}
-          />
-          <section className="result-section">
-            <h3>Human Decision</h3>
-            <p>Decision: {displayText(selectedRecord.next_action_decision, "pending")}</p>
-            <p>Notes: {displayText(selectedRecord.next_action_decision_notes, "No notes recorded.")}</p>
-            <p>Decided at: {displayText(selectedRecord.next_action_decided_at, "Not decided")}</p>
-          </section>
-          <ExportActions applicationId={selectedRecord.id} />
-
-          <section className="result-section cover-letter-section">
-            <h3>Cover Letter</h3>
-            <pre>{selectedRecord.cover_letter || "No cover letter generated."}</pre>
-          </section>
-
-        </section>
+          <AnalysisResult result={historyResult} onDecisionUpdated={handleNextDecisionUpdated} />
+        </>
       )}
     </>
   );

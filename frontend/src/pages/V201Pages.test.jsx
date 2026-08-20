@@ -96,7 +96,7 @@ describe("Version 2.0.1 simplified workspace", () => {
     expect(screen.getByText("Job Summary unavailable.")).toBeVisible();
   });
 
-  it("keeps History detail state and narrative rendering consistent", async () => {
+  it("opens a saved History result through the shared Analysis result view", async () => {
     global.fetch
       .mockResolvedValueOnce(new Response(JSON.stringify({
         total: 1,
@@ -110,13 +110,7 @@ describe("Version 2.0.1 simplified workspace", () => {
         analysis_status: "partial",
         job_summary: "History summary",
         match_reason: "History reason",
-        matched_skills: [],
-        missing_skills: [],
-        scoring_breakdown: {},
-        ats_analysis: {},
         security_status: "passed",
-        security_scan: {},
-        next_action: {},
       }), { status: 200 }));
     render(<HistoryPage />);
     expect(await screen.findByText("Synthetic Co")).toBeInTheDocument();
@@ -124,6 +118,19 @@ describe("Version 2.0.1 simplified workspace", () => {
     expect(await screen.findByText("History summary")).toBeInTheDocument();
     expect(screen.getByText("History reason")).toBeInTheDocument();
     expect(screen.getByRole("status", { name: /Analysis state: partial/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Back to History" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "岗位摘要" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "English Cover Letter" })).toBeInTheDocument();
+    expect(screen.getByText("No workflow audit trail is available for this older record.")).toBeInTheDocument();
+    expect(screen.queryByRole("table")).not.toBeInTheDocument();
+    expect(global.fetch).toHaveBeenCalledTimes(2);
+    expect(global.fetch.mock.calls.map(([url]) => new URL(url, "http://localhost").pathname)).toEqual([
+      "/api/history",
+      "/api/history/12",
+    ]);
+
+    fireEvent.click(screen.getByRole("button", { name: "Back to History" }));
+    expect(screen.getByRole("table")).toBeInTheDocument();
   });
 
   it.each([
