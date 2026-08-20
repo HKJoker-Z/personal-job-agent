@@ -13,21 +13,21 @@ applications, contact employers, or guarantee an Applicant Tracking System
 
 | Item | Current state |
 | --- | --- |
-| Release candidate | **2.0.6** — Bounded Provider deadlines and resilient synchronous Analyze |
-| Public production baseline | **2.0.5** until Version 2.0.6 publication |
+| Release candidate | **2.0.7** — History Analysis View Fix |
+| Public production baseline | **2.0.6** until Version 2.0.7 deployment |
 | Production schema | Alembic `20260730_07` (`head`) |
 | Production database | PostgreSQL 16 |
 | Runtime topology | HTTPS Edge, Frontend, Backend, private Java normalization, PostgreSQL, Redis, Worker, and Outbox Dispatcher |
 
-Version 2.0.6 carries forward the private, stateless Java normalization-only
-production integration and adds bounded Provider deadlines, pragmatic shallow
-Provider acceptance, deterministic fallback preservation, and field-level
-salvage for resilient synchronous Analyze completion. FastAPI remains
+Version 2.0.7 carries forward the private, stateless Java normalization-only
+production integration and the bounded, resilient synchronous Analyze path. It
+fixes History View so a saved analysis opens in a dedicated detail view that
+reuses the Analyze result renderer without rerunning analysis. FastAPI remains
 authoritative for security, idempotency, retrieval, scoring, History, and
 monitoring. Production remains in `java` normalization mode with safe
 `fallback_local` containment and an authoritative second security scan.
 
-See the [Version 2.0.6 release notes](docs/V2_0_6_RELEASE_NOTES.md) for the
+See the [Version 2.0.7 release notes](docs/V2_0_7_RELEASE_NOTES.md) for the
 prepared upgrade and rollback details.
 
 ## Core Features
@@ -361,7 +361,7 @@ Mock LLM, persistence, and Backup/Restore together. It uses unique temporary
 resources and removes them after completion:
 
 ```bash
-PJA_SMOKE_MILESTONE=2.0.6 PJA_APP_VERSION=2.0.6 \
+PJA_SMOKE_MILESTONE=2.0.7 PJA_APP_VERSION=2.0.7 \
   scripts/docker-smoke-v2.sh
 ```
 
@@ -415,7 +415,7 @@ The test and CI layers cover:
 - Strict PostgreSQL 16 Backup/Restore, full inventory comparison, and negative
   PostgreSQL 17 client gates before writes.
 
-CI and Version 2.0.6 release validation do not call DeepSeek. Provider behavior
+CI and Version 2.0.7 release validation do not call DeepSeek. Provider behavior
 is covered with deterministic mocks and the isolated Mock LLM. Test counts are
 deliberately not fixed here because they change as regressions are added.
 
@@ -443,7 +443,8 @@ the repository evidence. Version 1.6 and later link to formal releases.
 | [v2.0.3](docs/V2_0_3_RELEASE_NOTES.md) | Resilient DeepSeek parsing/repair/fallback and safe upload with automatic Primary Resume selection. |
 | [v2.0.4](docs/V2_0_4_RELEASE_NOTES.md) | Portfolio architecture material, Request ID/error contracts, monitoring SQL optimization, and PostgreSQL-backed Analyze idempotency. |
 | [v2.0.5](docs/V2_0_5_RELEASE_NOTES.md) | Private stateless Java normalization, deterministic Shadow, Java-authoritative execution binding, second-scan security, safe local fallback, and production rollout evidence. |
-| [2.0.6 release candidate](docs/V2_0_6_RELEASE_NOTES.md) | Bounded Provider deadlines, pragmatic shallow output acceptance, deterministic fallback preservation, field-level salvage, and production-candidate hard-gate evidence. |
+| [v2.0.6](docs/V2_0_6_RELEASE_NOTES.md) | Bounded Provider deadlines, pragmatic shallow output acceptance, deterministic fallback preservation, field-level salvage, and production-candidate hard-gate evidence. |
+| [v2.0.7](docs/V2_0_7_RELEASE_NOTES.md) | History View opens saved analysis details through the shared Analyze result renderer without rerunning analysis. |
 
 ## Known Limitations
 
@@ -468,7 +469,7 @@ the repository evidence. Version 1.6 and later link to formal releases.
 
 - Repository: [HKJoker-Z/personal-job-agent](https://github.com/HKJoker-Z/personal-job-agent)
 - Default branch: `main`
-- Status: Version 2.0.6 is the prepared release candidate; public production remains Version 2.0.5 until publication.
+- Status: Version 2.0.7 is the prepared release candidate; public production remains Version 2.0.6 until deployment.
 - License: no license file is currently included. Public source visibility does
   not itself grant reuse rights; normal copyright rules apply.
 
@@ -483,6 +484,7 @@ the repository evidence. Version 1.6 and later link to formal releases.
 - [Version 2.0.4 API](docs/V2_0_4_API.md)
 - [Version 2.0.5 release notes](docs/V2_0_5_RELEASE_NOTES.md)
 - [Version 2.0.6 release notes](docs/V2_0_6_RELEASE_NOTES.md)
+- [Version 2.0.7 release notes](docs/V2_0_7_RELEASE_NOTES.md)
 - [Authentication and Remember Me](docs/V2_AUTHENTICATION.md)
 - [Project Knowledge RAG](docs/V2_RAG.md)
 - [Development](docs/V2_DEVELOPMENT.md)
