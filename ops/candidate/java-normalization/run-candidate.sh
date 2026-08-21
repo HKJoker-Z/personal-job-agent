@@ -151,14 +151,14 @@ head_value="$("${COMPOSE[@]}" run --rm --no-deps migrate \
   alembic -c alembic.ini heads | sed -n 's/ .*//p')"
 current_value="$("${COMPOSE[@]}" run --rm --no-deps migrate \
   alembic -c alembic.ini current | sed -n 's/ .*//p')"
-[[ "${head_value}" == "20260730_07" && "${current_value}" == "20260730_07" ]] \
-  || fail "candidate Alembic revision is not 20260730_07"
+[[ "${head_value}" == "20260820_08" && "${current_value}" == "20260820_08" ]] \
+  || fail "candidate Alembic revision is not 20260820_08"
 "${COMPOSE[@]}" run --rm --no-deps migrate \
   alembic -c alembic.ini upgrade head >/dev/null
 schema_ok="$("${COMPOSE[@]}" exec -T postgres \
   psql -U "${CANDIDATE_POSTGRES_USER}" -d "${CANDIDATE_POSTGRES_DB}" -Atqc \
   "SELECT (
-     (SELECT version_num FROM alembic_version) = '20260730_07'
+     (SELECT version_num FROM alembic_version) = '20260820_08'
      AND EXISTS (
        SELECT 1 FROM information_schema.columns
        WHERE table_name = 'analyze_idempotency_records'
@@ -778,7 +778,7 @@ grep -qi '^Idempotency-Replayed: true' "${temporary_directory}/rollback-replay.h
   || fail "rollback did not preserve completed Java response"
 json_equal "${JAVA_RESPONSE}" "${temporary_directory}/rollback-replay.json"
 "${COMPOSE[@]}" stop java-normalization >/dev/null
-[[ "$(sql_scalar "SELECT version_num FROM alembic_version;")" == "20260730_07" ]] \
+[[ "$(sql_scalar "SELECT version_num FROM alembic_version;")" == "20260820_08" ]] \
   || fail "rollback unexpectedly changed the database schema"
 step "configuration-only rollback to local without rebuild or schema downgrade"
 

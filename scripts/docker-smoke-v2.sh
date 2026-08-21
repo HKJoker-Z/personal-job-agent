@@ -8,7 +8,7 @@ fi
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 STAMP="$(date +%s)-$$"
 SMOKE_MILESTONE="${PJA_SMOKE_MILESTONE:-2.0.1}"
-APP_RELEASE_VERSION="${PJA_APP_VERSION:-2.0.7}"
+APP_RELEASE_VERSION="${PJA_APP_VERSION:-2.1.0}"
 REAL_LLM_VALIDATION="${PJA_REAL_LLM_VALIDATION:-0}"
 HOLD_SECONDS="${PJA_SMOKE_HOLD_SECONDS:-0}"
 if [[ "${REAL_LLM_VALIDATION}" != "0" && "${REAL_LLM_VALIDATION}" != "1" ]]; then
@@ -26,7 +26,13 @@ fi
 V202_SCOPE=0
 V203_SCOPE=0
 V204_SCOPE=0
-if [[ "${SMOKE_MILESTONE}" == "2.0.7" ]]; then
+V210_SCOPE=0
+if [[ "${SMOKE_MILESTONE}" == "2.1.0" ]]; then
+  TEST_PREFIX='pja-v2-final'
+  DEFAULT_HTTP_PORT=18088
+  DEFAULT_POSTGRES_PORT=15438
+  V210_SCOPE=1
+elif [[ "${SMOKE_MILESTONE}" == "2.0.7" ]]; then
   TEST_PREFIX='pja-v2-final'
   DEFAULT_HTTP_PORT=18088
   DEFAULT_POSTGRES_PORT=15438
@@ -318,6 +324,9 @@ python3 -c 'import json,sys; value=json.load(open(sys.argv[1])); assert value["r
 smoke_step 'existing Project Knowledge workflow with PostgreSQL full-text search'
 
 for removed_path in /api/jobs /api/applications /api/approvals /api/tasks /api/job-rank-runs; do
+  if [[ "${V210_SCOPE}" == "1" && "${removed_path}" == "/api/applications" ]]; then
+    continue
+  fi
   REMOVED_GET_STATUS="$(curl --noproxy '*' --silent --output "${RESPONSE_FILE}" --write-out '%{http_code}' \
     --cookie "${COOKIE_JAR}" "${ORIGIN}${removed_path}")"
   test "${REMOVED_GET_STATUS}" = 410
@@ -377,6 +386,47 @@ curl --noproxy '*' --fail --silent --show-error --cookie "${COOKIE_JAR}" \
   "${ORIGIN}/api/history/${HISTORY_ID}" >"${RESPONSE_FILE}"
 python3 -c 'import json,sys; value=json.load(open(sys.argv[1])); assert value["id"] == int(sys.argv[2]); assert value["rag_sources"]' "${RESPONSE_FILE}" "${HISTORY_ID}"
 smoke_step 'Project Knowledge RAG changes matching with safe sources, evidence mapping, grounding, and History persistence'
+
+if [[ "${V210_SCOPE}" == "1" ]]; then
+  ANALYSIS_COMPANY="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["company_name"])' "${RESPONSE_FILE}")"
+  ANALYSIS_TITLE="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["job_title"])' "${RESPONSE_FILE}")"
+  curl --noproxy '*' --fail --silent --show-error \
+    --cookie "${COOKIE_JAR}" -H "Origin: ${ORIGIN}" -H "X-CSRF-Token: ${CSRF_TOKEN}" \
+    -F "company_name=${ANALYSIS_COMPANY}" -F "job_title=${ANALYSIS_TITLE}" \
+    -F 'job_description=Synthetic role requiring FastAPI PostgreSQL RAG and Redis.' \
+    -F "source_analysis_id=${HISTORY_ID}" -F "resume_version_id=${VERSION_ID}" \
+    "${ORIGIN}/api/applications/from-analysis" >"${RESPONSE_FILE}"
+  SUBMITTED_APPLICATION_ID="$(python3 -c 'import json,sys; value=json.load(open(sys.argv[1]))["application"]; assert value["current_stage"] == "applied"; assert value["applied_at"]; assert value["source_analysis_id"] == int(sys.argv[2]); print(value["id"])' "${RESPONSE_FILE}" "${HISTORY_ID}")"
+
+  DUPLICATE_STATUS="$(curl --noproxy '*' --silent --output /dev/null --write-out '%{http_code}' \
+    --cookie "${COOKIE_JAR}" -H "Origin: ${ORIGIN}" -H "X-CSRF-Token: ${CSRF_TOKEN}" \
+    -F "company_name=${ANALYSIS_COMPANY}" -F "job_title=${ANALYSIS_TITLE}" \
+    -F "source_analysis_id=${HISTORY_ID}" -F "resume_version_id=${VERSION_ID}" \
+    "${ORIGIN}/api/applications/from-analysis")"
+  test "${DUPLICATE_STATUS}" = 409
+
+  curl --noproxy '*' --fail --silent --show-error --cookie "${COOKIE_JAR}" \
+    "${ORIGIN}/api/applications/${SUBMITTED_APPLICATION_ID}" >"${RESPONSE_FILE}"
+  python3 -c 'import json,sys; value=json.load(open(sys.argv[1])); assert value["company_name"] == sys.argv[2]; assert value["job_title"] == sys.argv[3]; assert value["job_description"]; assert "Test summary" in value["resume_snapshot"]' \
+    "${RESPONSE_FILE}" "${ANALYSIS_COMPANY}" "${ANALYSIS_TITLE}"
+  curl --noproxy '*' --fail --silent --show-error --cookie "${COOKIE_JAR}" \
+    "${ORIGIN}/api/history/${HISTORY_ID}" >"${RESPONSE_FILE}"
+  python3 -c 'import json,sys; assert json.load(open(sys.argv[1]))["id"] == int(sys.argv[2])' "${RESPONSE_FILE}" "${HISTORY_ID}"
+
+  REQUIRED_STATUS="$(curl --noproxy '*' --silent --output /dev/null --write-out '%{http_code}' \
+    --cookie "${COOKIE_JAR}" -X POST -H "Origin: ${ORIGIN}" -H "X-CSRF-Token: ${CSRF_TOKEN}" \
+    -H 'Content-Type: application/json' --data '{"job_description":"Optional"}' \
+    "${ORIGIN}/api/applications")"
+  test "${REQUIRED_STATUS}" = 400
+  api_write POST /api/applications \
+    '{"company_name":"Manual Smoke Company","job_title":"Manual Smoke Role"}'
+  MANUAL_APPLICATION_ID="$(python3 -c 'import json,sys; value=json.load(open(sys.argv[1]))["application"]; assert value["applied_at"]; assert value["job_description"] == ""; assert value["resume_snapshot"] is None; print(value["id"])' "${RESPONSE_FILE}")"
+  curl --noproxy '*' --fail --silent --show-error --cookie "${COOKIE_JAR}" \
+    "${ORIGIN}/api/applications" >"${RESPONSE_FILE}"
+  python3 -c 'import json,sys; value=json.load(open(sys.argv[1])); assert [item["id"] for item in value[:2]] == [sys.argv[2], sys.argv[3]]' \
+    "${RESPONSE_FILE}" "${MANUAL_APPLICATION_ID}" "${SUBMITTED_APPLICATION_ID}"
+  smoke_step 'Applications manual/Analysis creation, Resume snapshot, History retention, detail, ordering, and duplicate guard'
+fi
 
 DOCX_FIXTURE="${TEST_ROOT}/smoke-resume.docx"
 python3 - "${DOCX_FIXTURE}" <<'PY'

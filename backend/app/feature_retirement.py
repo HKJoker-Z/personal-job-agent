@@ -7,6 +7,8 @@ retired workflows.
 
 from __future__ import annotations
 
+from uuid import UUID
+
 from fastapi import Request
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
@@ -15,7 +17,6 @@ from starlette.responses import Response
 
 REMOVED_API_PREFIXES = (
     "/api/jobs",
-    "/api/applications",
     "/api/approvals",
     "/api/tasks",
     "/api/application-packages",
@@ -25,7 +26,23 @@ REMOVED_API_PREFIXES = (
 )
 
 
+def _is_current_application_api(path: str, method: str) -> bool:
+    if path == "/api/applications":
+        return method in {"GET", "POST"}
+    if path == "/api/applications/from-analysis":
+        return method == "POST"
+    if method != "GET" or not path.startswith("/api/applications/"):
+        return False
+    try:
+        UUID(path.removeprefix("/api/applications/"))
+    except ValueError:
+        return False
+    return True
+
+
 def is_removed_api(path: str, method: str) -> bool:
+    if path == "/api/applications" or path.startswith("/api/applications/"):
+        return not _is_current_application_api(path, method)
     if any(path == prefix or path.startswith(f"{prefix}/") for prefix in REMOVED_API_PREFIXES):
         return True
     # Existing Agent Runs remain readable and cancellable. New package-based

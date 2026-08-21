@@ -462,7 +462,16 @@ class Application(TimestampMixin, Base):
     owner_user_id: Mapped[UUID] = mapped_column(
         Uuid, ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False
     )
-    job_id: Mapped[UUID] = mapped_column(Uuid, ForeignKey("jobs.id", ondelete="RESTRICT"), index=True)
+    job_id: Mapped[UUID | None] = mapped_column(
+        Uuid, ForeignKey("jobs.id", ondelete="RESTRICT"), index=True
+    )
+    company_name: Mapped[str | None] = mapped_column(String(500))
+    job_title: Mapped[str | None] = mapped_column(String(500))
+    job_description: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    resume_snapshot: Mapped[str | None] = mapped_column(Text)
+    source_analysis_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("application_records.id", ondelete="SET NULL"), index=True
+    )
     current_stage: Mapped[str] = mapped_column(String(40), default="saved", index=True, nullable=False)
     source: Mapped[str] = mapped_column(String(80), default="manual", nullable=False)
     priority: Mapped[str] = mapped_column(String(20), default="normal", index=True, nullable=False)
@@ -486,6 +495,16 @@ APPLICATION_ACTIVE_UNIQUE = Index(
     sqlite_where=Application.__table__.c.archived_at.is_(None),
 )
 Application.__table__.append_constraint(APPLICATION_ACTIVE_UNIQUE)
+
+APPLICATION_ANALYSIS_UNIQUE = Index(
+    "uq_applications_owner_source_analysis",
+    Application.__table__.c.owner_user_id,
+    Application.__table__.c.source_analysis_id,
+    unique=True,
+    postgresql_where=Application.__table__.c.source_analysis_id.is_not(None),
+    sqlite_where=Application.__table__.c.source_analysis_id.is_not(None),
+)
+Application.__table__.append_constraint(APPLICATION_ANALYSIS_UNIQUE)
 
 
 class ApplicationStageHistory(Base):

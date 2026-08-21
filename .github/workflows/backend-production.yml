@@ -161,11 +161,11 @@ jobs:
           push: true
           tags: ghcr.io/hkjoker-z/personal-job-agent-backend:sha-${{ github.sha }}
           build-args: |
-            APP_VERSION=2.0.7
+            APP_VERSION=2.1.0
           labels: |
             org.opencontainers.image.source=https://github.com/HKJoker-Z/personal-job-agent
             org.opencontainers.image.revision=${{ github.sha }}
-            org.opencontainers.image.version=2.0.7
+            org.opencontainers.image.version=2.1.0
             org.opencontainers.image.title=Personal Job Agent integrated Backend
           cache-from: type=gha,scope=integrated-backend-production
           cache-to: type=gha,mode=max,scope=integrated-backend-production
@@ -183,7 +183,7 @@ jobs:
             "https://github.com/HKJoker-Z/personal-job-agent"
           test "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "${IMAGE}@${DIGEST}")" = \
             "${EXPECTED_REVISION}"
-          test "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.version"}}' "${IMAGE}@${DIGEST}")" = "2.0.7"
+          test "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.version"}}' "${IMAGE}@${DIGEST}")" = "2.1.0"
           ! docker image inspect "${IMAGE}@${DIGEST}" | grep -Ei \
             '(DEEPSEEK_API_KEY|JD_NORMALIZATION_API_KEY|POSTGRES_(APP|MIGRATION)_PASSWORD)=[^"[:space:]]+'
           ! docker history --no-trunc "${IMAGE}@${DIGEST}" | grep -Ei \

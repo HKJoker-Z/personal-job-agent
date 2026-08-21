@@ -8,9 +8,12 @@ from uuid import UUID
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from analysis_fallback import structure_aware_truncate
 from app.applications.repository import ApplicationRepository, TaskRepository
+from app.core.config import load_v2_settings
 from app.db.models import (
     Application,
+    ApplicationRecord,
     ApplicationNote,
     ApplicationStageHistory,
     ApplicationTask,
@@ -20,6 +23,9 @@ from app.db.models import (
 from app.db.repositories.auth import AuthRepository
 from app.jobs.service import JobNotFound, serialize_model
 from app.resumes.repository import ResumeRepository
+from app.resumes.service import ResumeService
+from config import load_config
+from security_utils import prepare_resume_for_llm
 
 
 TRANSITIONS: dict[str, tuple[str, ...]] = {
@@ -64,7 +70,7 @@ class ApplicationService:
 
     def list(self, stage: str | None = None, archived: bool = False) -> list[dict[str, object]]:
         applications = self.repository.list(self.owner_id, stage, archived)
-        job_ids = {item.job_id for item in applications}
+        job_ids = {item.job_id for item in applications if item.job_id is not None}
         jobs = {
             job.id: job
             for job in self.db.scalars(
@@ -73,6 +79,9 @@ class ApplicationService:
         } if job_ids else {}
         return [
             serialize_application(item) | {
+                "company_name": item.company_name or (jobs[item.job_id].company_name if item.job_id in jobs else None),
+                "job_title": item.job_title or (jobs[item.job_id].title if item.job_id in jobs else None),
+                "job_description": item.job_description or (jobs[item.job_id].description if item.job_id in jobs else ""),
                 "job": {
                     "id": str(jobs[item.job_id].id),
                     "company_name": jobs[item.job_id].company_name,
@@ -87,11 +96,16 @@ class ApplicationService:
         job = self.db.scalar(select(Job).where(Job.id == application.job_id, Job.owner_user_id == self.owner_id))
         return {
             **serialize_application(application),
+            "company_name": application.company_name or (job.company_name if job else None),
+            "job_title": application.job_title or (job.title if job else None),
+            "job_description": application.job_description or (job.description if job else ""),
             "job": {"id": str(job.id), "company_name": job.company_name, "title": job.title} if job else None,
             "history": self.history(application_id),
         }
 
     def create(self, values: dict[str, object]) -> dict[str, object]:
+        if values.get("job_id") is None:
+            return self.create_submitted(values)
         job = self.db.scalar(select(Job).where(
             Job.id == values["job_id"], Job.owner_user_id == self.owner_id, Job.archived_at.is_(None)
         ))
@@ -111,6 +125,61 @@ class ApplicationService:
         ))
         self._audit("application.created", application.id, {"job_id": str(job.id)})
         return {"application": serialize_application(application), "warning": warning}
+
+    def create_submitted(
+        self,
+        values: dict[str, object],
+        *,
+        resume_snapshot: str | None = None,
+    ) -> dict[str, object]:
+        values = dict(values)
+        values.pop("job_id", None)
+        values.pop("source", None)
+        analysis_id = values.get("source_analysis_id")
+        if analysis_id is not None:
+            analysis = self.db.scalar(select(ApplicationRecord).where(
+                ApplicationRecord.id == analysis_id,
+                ApplicationRecord.owner_user_id == self.owner_id,
+            ))
+            if analysis is None:
+                raise ApplicationNotFound("Analysis not found.")
+            if self.repository.for_analysis(self.owner_id, int(analysis_id)):
+                raise ApplicationConflict("This Analysis is already marked as Applied.")
+            values["company_name"] = values.get("company_name") or analysis.company_name
+            values["job_title"] = values.get("job_title") or analysis.job_title
+
+        resume_id = values.get("resume_version_id")
+        if resume_id:
+            version = ResumeRepository(self.db).owned_version(
+                self.owner_id, UUID(str(resume_id))
+            )
+            if version is None:
+                raise ApplicationNotFound("Resume Version not found.")
+            resume_text = ResumeService(
+                self.db, self.owner_id, load_v2_settings()
+            ).analysis_text(version.id)
+            resume_text, _ = structure_aware_truncate(
+                resume_text, load_config().analysis_resume_max_chars
+            )
+            resume_snapshot, _ = prepare_resume_for_llm(resume_text)
+
+        application = Application(
+            owner_user_id=self.owner_id,
+            job_id=None,
+            current_stage="applied",
+            source="analysis" if analysis_id is not None else "manual",
+            applied_at=utc_now(),
+            resume_snapshot=resume_snapshot or None,
+            **values,
+        )
+        self.db.add(application)
+        self.db.flush()
+        self._audit(
+            "application.applied",
+            application.id,
+            {"source_analysis_id": analysis_id},
+        )
+        return {"application": serialize_application(application), "warning": None}
 
     def update(self, application_id: UUID, values: dict[str, object]) -> dict[str, object]:
         expected = int(values.pop("expected_revision"))

@@ -10,7 +10,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 
-APP_VERSION = os.getenv("APP_VERSION", "2.0.7").strip() or "2.0.7"
+APP_VERSION = os.getenv("APP_VERSION", "2.1.0").strip() or "2.1.0"
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 BACKEND_DIR = Path(__file__).resolve().parent
 DEFAULT_DEVELOPMENT_DATABASE_PATH = (BACKEND_DIR / "data" / "app.db").resolve(strict=False)

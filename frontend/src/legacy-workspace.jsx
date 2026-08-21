@@ -2,7 +2,7 @@ import React, { Component, useEffect, useRef, useState } from "react";
 import { apiFetch, normalizeApiError } from "./api/client";
 
 const API_BASE_URL = import.meta.env.DEV ? (import.meta.env.VITE_API_BASE_URL || "") : "";
-const APP_VERSION = "2.0.7";
+const APP_VERSION = "2.1.0";
 const NEXT_ACTION_DECISIONS = [
   { value: "accepted", label: "Accept Recommendation" },
   { value: "dismissed", label: "Dismiss" },
@@ -854,7 +854,7 @@ function NextActionSection({ nextAction, decision, applicationId, canPersistDeci
   );
 }
 
-function AnalysisResult({ result, onDecisionUpdated }) {
+function AnalysisResult({ result, onDecisionUpdated, onApplied, applying, applied }) {
   const score = clampScore(result?.match_score);
   const savedToHistory = Boolean(result?.saved_to_history);
   const securityStatus = result?.security_status || "not_available";
@@ -963,6 +963,12 @@ function AnalysisResult({ result, onDecisionUpdated }) {
         <h3>English Cover Letter</h3>
         <pre>{result.cover_letter || "No cover letter generated."}</pre>
       </section>
+      {onApplied && <section className="result-section applied-action-section">
+        <button type="button" onClick={onApplied} disabled={applying || applied}>
+          {applying ? "Saving..." : applied ? "Applied" : "Applied"}
+        </button>
+        {applied && <p className="history-message" role="status">Application recorded successfully.</p>}
+      </section>}
     </section>
   );
 }
@@ -984,7 +990,11 @@ function AnalyzePage() {
   const [securityError, setSecurityError] = useState(null);
   const [supportRequestId, setSupportRequestId] = useState("");
   const [result, setResult] = useState(null);
+  const [applying, setApplying] = useState(false);
+  const [applied, setApplied] = useState(false);
+  const [applyError, setApplyError] = useState("");
   const submittingRef = useRef(false);
+  const applyingRef = useRef(false);
   const pendingAnalyzeRef = useRef(null);
 
   useEffect(() => {
@@ -1024,6 +1034,8 @@ function AnalyzePage() {
     setSecurityError(null);
     setSupportRequestId("");
     setResult(null);
+    setApplied(false);
+    setApplyError("");
 
     if (!resume && !resumeVersionId) {
       setError("Please select a Resume Version or upload a resume.");
@@ -1106,6 +1118,28 @@ function AnalyzePage() {
     } finally {
       submittingRef.current = false;
       setLoading(false);
+    }
+  }
+
+  async function handleApplied() {
+    if (!result || applyingRef.current || applied) return;
+    applyingRef.current = true;
+    setApplying(true); setApplyError("");
+    const form = new FormData();
+    form.append("company_name", displayCompany(result.company_name));
+    form.append("job_title", displayPosition(result.job_title));
+    form.append("job_description", result.application_job_description || jobText.trim());
+    if (result.saved_to_history && result.application_id) form.append("source_analysis_id", String(result.application_id));
+    if (resumeVersionId) form.append("resume_version_id", resumeVersionId);
+    else if (resume) form.append("resume", resume);
+    try {
+      await requestJson(`${API_BASE_URL}/api/applications/from-analysis`, { method: "POST", body: form }, "Failed to record Application.");
+      setApplied(true);
+    } catch (value) {
+      setApplyError(getRequestErrorMessage(value, "Failed to record Application."));
+    } finally {
+      applyingRef.current = false;
+      setApplying(false);
     }
   }
 
@@ -1231,7 +1265,8 @@ function AnalyzePage() {
         </section>
       )}
 
-      {hasResult && <AnalysisResult result={result} />}
+      {applyError && <section className="panel state-panel error-panel" role="alert"><strong>Application was not recorded</strong><p>{applyError}</p></section>}
+      {hasResult && <AnalysisResult result={result} onApplied={handleApplied} applying={applying} applied={applied} />}
     </>
   );
 }

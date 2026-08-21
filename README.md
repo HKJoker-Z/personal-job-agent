@@ -13,21 +13,19 @@ applications, contact employers, or guarantee an Applicant Tracking System
 
 | Item | Current state |
 | --- | --- |
-| Release candidate | **2.0.7** — History Analysis View Fix |
-| Public production baseline | **2.0.6** until Version 2.0.7 deployment |
-| Production schema | Alembic `20260730_07` (`head`) |
+| Release candidate | **2.1.0** — Applications |
+| Public production baseline | **2.0.7** until Version 2.1.0 deployment |
+| Target production schema | Alembic `20260820_08` (`head`) |
 | Production database | PostgreSQL 16 |
 | Runtime topology | HTTPS Edge, Frontend, Backend, private Java normalization, PostgreSQL, Redis, Worker, and Outbox Dispatcher |
 
-Version 2.0.7 carries forward the private, stateless Java normalization-only
-production integration and the bounded, resilient synchronous Analyze path. It
-fixes History View so a saved analysis opens in a dedicated detail view that
-reuses the Analyze result renderer without rerunning analysis. FastAPI remains
-authoritative for security, idempotency, retrieval, scoring, History, and
-monitoring. Production remains in `java` normalization mode with safe
-`fallback_local` containment and an authoritative second security scan.
+Version 2.1.0 adds an Applications workflow for recording jobs that were
+actually submitted. Applications can be created manually or from a completed
+Analysis; Analysis-created records retain the Resume snapshot used for that
+analysis, while the original History record remains unchanged. The existing
+private Java normalization integration and bounded Analyze path are unchanged.
 
-See the [Version 2.0.7 release notes](docs/V2_0_7_RELEASE_NOTES.md) for the
+See the [Version 2.1.0 release notes](docs/V2_1_0_RELEASE_NOTES.md) for the
 prepared upgrade and rollback details.
 
 ## Core Features
@@ -46,6 +44,8 @@ prepared upgrade and rollback details.
 - Stable `complete`, `repaired`, `partial`, and `fallback` analysis results.
 - Optional History persistence, History detail, status/notes, DOCX cover-letter
   export, and PDF analysis-report export.
+- Applications list/detail, manual submission records, and Analysis-to-Applied
+  creation with the Analysis Resume snapshot and duplicate-click protection.
 - Administrator Monitoring and deterministic offline Evaluation, including
   metadata-only traces and explicitly confirmed cleanup controls.
 - Read-only historical Agent Run inspection, authenticated Server-Sent Events
@@ -55,7 +55,7 @@ prepared upgrade and rollback details.
 
 ### Removed or Disabled Features
 
-Jobs, Job Rankings, Applications, Approvals, and Tasks are not current product
+Jobs, Job Rankings, Approvals, and Tasks are not current product
 workflows. Their navigation entries and public mutation paths were removed or
 disabled in Version 2.0.1. Old browser routes show **Feature Removed**, and
 authenticated calls to retired API prefixes return HTTP `410 FEATURE_REMOVED`.
@@ -361,7 +361,7 @@ Mock LLM, persistence, and Backup/Restore together. It uses unique temporary
 resources and removes them after completion:
 
 ```bash
-PJA_SMOKE_MILESTONE=2.0.7 PJA_APP_VERSION=2.0.7 \
+PJA_SMOKE_MILESTONE=2.1.0 PJA_APP_VERSION=2.1.0 \
   scripts/docker-smoke-v2.sh
 ```
 
@@ -381,14 +381,14 @@ authentication. Unsafe requests also require trusted Origin and CSRF checks.
 | Resumes | `/api/resumes`, `/api/resumes/primary`, Resume Versions, private file metadata/download, import/upload |
 | Analyze | `POST /api/analyze` |
 | History | `/api/history`, History detail/update/delete, DOCX and PDF exports |
+| Applications | `/api/applications`, detail, and `/api/applications/from-analysis` |
 | Project Knowledge | `/api/project-knowledge/status`, `/upload`, `/rebuild`, `/search` |
 | Monitoring/Evaluation | `/api/monitoring/*` and `/api/evaluations/*`; destructive cleanup has additional administrator controls |
 | Retained Agent Runs | Read/list/cancel, Steps, Events, and authenticated SSE; create/retry/resume are disabled |
 | System | Public `/api/health`, dependency `/api/ready`, and authenticated `/api/admin/readiness` |
 
-Generic `/api/knowledge/*` uploads are disabled. Retired Jobs, Applications,
-Approvals, Tasks, package/material, and ranking APIs are not supported product
-interfaces.
+Generic `/api/knowledge/*` uploads are disabled. Retired Jobs, Approvals,
+Tasks, package/material, and ranking APIs are not supported product interfaces.
 
 ## Testing
 
@@ -415,7 +415,7 @@ The test and CI layers cover:
 - Strict PostgreSQL 16 Backup/Restore, full inventory comparison, and negative
   PostgreSQL 17 client gates before writes.
 
-CI and Version 2.0.7 release validation do not call DeepSeek. Provider behavior
+CI and Version 2.1.0 release validation do not call DeepSeek. Provider behavior
 is covered with deterministic mocks and the isolated Mock LLM. Test counts are
 deliberately not fixed here because they change as regressions are added.
 
@@ -445,6 +445,7 @@ the repository evidence. Version 1.6 and later link to formal releases.
 | [v2.0.5](docs/V2_0_5_RELEASE_NOTES.md) | Private stateless Java normalization, deterministic Shadow, Java-authoritative execution binding, second-scan security, safe local fallback, and production rollout evidence. |
 | [v2.0.6](docs/V2_0_6_RELEASE_NOTES.md) | Bounded Provider deadlines, pragmatic shallow output acceptance, deterministic fallback preservation, field-level salvage, and production-candidate hard-gate evidence. |
 | [v2.0.7](docs/V2_0_7_RELEASE_NOTES.md) | History View opens saved analysis details through the shared Analyze result renderer without rerunning analysis. |
+| [v2.1.0](docs/V2_1_0_RELEASE_NOTES.md) | Records actual job submissions manually or from Analysis, preserving the Resume snapshot used at submission time. |
 
 ## Known Limitations
 
@@ -460,7 +461,7 @@ the repository evidence. Version 1.6 and later link to formal releases.
 - Safe job-URL extraction cannot parse every site or client-rendered page.
 - The tool does not automatically apply for jobs, send email, contact employers,
   or guarantee ATS parsing, ranking, interviews, or hiring outcomes.
-- Jobs, Job Rankings, Applications, Approvals, and Tasks remain disabled. Some
+- Jobs, Job Rankings, Approvals, and Tasks remain disabled. Some
   historical tables and read-only Agent data remain only for compatibility.
 - Production is a single-host Docker Compose deployment, without Kubernetes,
   high availability, or a zero-downtime guarantee.
@@ -469,7 +470,7 @@ the repository evidence. Version 1.6 and later link to formal releases.
 
 - Repository: [HKJoker-Z/personal-job-agent](https://github.com/HKJoker-Z/personal-job-agent)
 - Default branch: `main`
-- Status: Version 2.0.7 is the prepared release candidate; public production remains Version 2.0.6 until deployment.
+- Status: Version 2.1.0 is the prepared release candidate; public production remains Version 2.0.7 until deployment.
 - License: no license file is currently included. Public source visibility does
   not itself grant reuse rights; normal copyright rules apply.
 
@@ -485,6 +486,7 @@ the repository evidence. Version 1.6 and later link to formal releases.
 - [Version 2.0.5 release notes](docs/V2_0_5_RELEASE_NOTES.md)
 - [Version 2.0.6 release notes](docs/V2_0_6_RELEASE_NOTES.md)
 - [Version 2.0.7 release notes](docs/V2_0_7_RELEASE_NOTES.md)
+- [Version 2.1.0 release notes](docs/V2_1_0_RELEASE_NOTES.md)
 - [Authentication and Remember Me](docs/V2_AUTHENTICATION.md)
 - [Project Knowledge RAG](docs/V2_RAG.md)
 - [Development](docs/V2_DEVELOPMENT.md)
@@ -492,6 +494,6 @@ the repository evidence. Version 1.6 and later link to formal releases.
 - [Deployment and rollback](docs/DEPLOYMENT.md)
 - [Version 2 Backup and Restore](docs/V2_BACKUP_AND_RESTORE.md)
 
-Documents about Jobs, Applications, Tasks, Rankings, Materials, and Approvals
-record historical Version 2.0.0 implementation. They are not current product
-instructions.
+Documents about Jobs, Tasks, Rankings, Materials, Approvals, and the historical
+Application pipeline record Version 2.0.0 implementation. The current
+Applications workflow is defined by the Version 2.1.0 release notes and API.

@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 ApplicationStage = Literal[
@@ -33,7 +33,11 @@ def _plain(value: str | None) -> str | None:
 
 class ApplicationCreate(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
-    job_id: UUID
+    job_id: UUID | None = None
+    company_name: str | None = Field(default=None, min_length=1, max_length=500)
+    job_title: str | None = Field(default=None, min_length=1, max_length=500)
+    job_description: str = Field(default="", max_length=200_000)
+    source_analysis_id: int | None = Field(default=None, ge=1)
     source: str = Field(default="manual", max_length=80)
     priority: Priority = "normal"
     resume_version_id: UUID | None = None
@@ -41,6 +45,13 @@ class ApplicationCreate(BaseModel):
     expected_response_at: datetime | None = None
     _next_utc = field_validator("next_action_at")(_utc)
     _expected_utc = field_validator("expected_response_at")(_utc)
+    _description_plain = field_validator("job_description")(_plain)
+
+    @model_validator(mode="after")
+    def require_job_or_application_fields(self) -> "ApplicationCreate":
+        if self.job_id is None and (not self.company_name or not self.job_title):
+            raise ValueError("Company Name and Job Title are required.")
+        return self
 
 
 class ApplicationPatch(BaseModel):

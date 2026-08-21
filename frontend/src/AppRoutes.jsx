@@ -5,6 +5,7 @@ import { ProtectedRoute } from "./auth/ProtectedRoute";
 import { AppLayout } from "./components/AppLayout";
 import { LegacyWorkspace } from "./legacy-workspace";
 import { AccountPage } from "./pages/AccountPage";
+import { ApplicationsPage } from "./pages/ApplicationPages";
 import { AgentRunDetailPage, AgentRunsPage } from "./pages/AgentPages";
 import { ArchitecturePage } from "./pages/ArchitecturePage";
 import { DashboardPage } from "./pages/DashboardPage";
@@ -27,7 +28,7 @@ export function App() {
       <Route path="/dashboard" element={<DashboardPage />} />
       <Route path="/jobs/*" element={<FeatureRemovedPage />} />
       <Route path="/job-ranking/*" element={<FeatureRemovedPage />} />
-      <Route path="/applications/*" element={<FeatureRemovedPage />} />
+      <Route path="/applications" element={<ApplicationsPage />} />
       <Route path="/application-packages/*" element={<FeatureRemovedPage />} />
       <Route path="/agent-runs" element={<AgentRunsPage />} />
       <Route path="/agent-runs/:runId" element={<AgentRunDetailPage />} />

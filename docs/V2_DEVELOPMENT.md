@@ -1,4 +1,4 @@
-# Version 2.0.7 development
+# Version 2.1.0 development
 
 Use Python 3.12 and Node 22. Tests must use temporary SQLite or a database whose name contains `test`; never point test configuration at production data. CI and normal local smoke use Mock LLM and must not call DeepSeek.
 
@@ -12,7 +12,7 @@ cd frontend && npm ci && cd ..
 APP_ENV=test .venv/bin/python -m unittest discover -s backend -p 'test_*.py'
 cd frontend && npm test && npm run build && cd ..
 scripts/test-v201-production-runtime.sh
-PJA_SMOKE_MILESTONE=2.0.7 PJA_APP_VERSION=2.0.7 scripts/docker-smoke-v2.sh
+PJA_SMOKE_MILESTONE=2.1.0 PJA_APP_VERSION=2.1.0 scripts/docker-smoke-v2.sh
 docker build -f backend/Dockerfile -t personal-job-agent-backend:pg16-test .
 docker build -f backend/Dockerfile --build-arg POSTGRES_CLIENT_MAJOR=17 -t personal-job-agent-backend:pg17-negative .
 scripts/postgres16-restore-regression.sh personal-job-agent-backend:pg16-test personal-job-agent-backend:pg17-negative
@@ -22,7 +22,7 @@ Run PostgreSQL integration with a dedicated test database and `PJA_RUN_POSTGRES_
 
 ## Product boundaries
 
-Do not add Version 2.1 features. Do not restore public Jobs, Job Rankings, Applications, Approvals, or Tasks. Their models and migrations remain for compatibility, but the full application must return 410 for old APIs. Analyze must remain independent of retired entities.
+Do not restore public Jobs, Job Rankings, Approvals, Tasks, or the historical Application pipeline. Their models and migrations remain for compatibility, but the full application must return 410 for retired APIs. Version 2.1.0 exposes only Application list/detail and manual/Analysis submission creation. Analyze remains independent of retired Job and workflow entities.
 
 Do not persist passwords or tokens in frontend storage. Do not add arbitrary user-upload RAG. Do not bypass prompt injection, secret/PII scans, output scanning, evidence reconciliation, or claim validation. Mock provider mode must fail closed in production.
 

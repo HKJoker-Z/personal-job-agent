@@ -84,7 +84,7 @@ export function ArchitecturePage() {
   return <section className="architecture-page" aria-labelledby="architecture-title">
     <header className="architecture-hero">
       <div>
-        <span className="eyebrow">Version 2.0.7 · Read-only overview</span>
+        <span className="eyebrow">Version 2.1.0 · Read-only overview</span>
         <h1 id="architecture-title">Architecture</h1>
         <p>Personal Job Agent is a modular monolith with supporting data, worker, frontend, and operational components. The current Resume-to-JD analysis path is synchronous and designed for evidence-aware human review.</p>
       </div>
@@ -147,7 +147,7 @@ export function ArchitecturePage() {
         <ul className="architecture-status-list">
           <li>New Agent Run creation, retry, and resume are disabled.</li>
           <li>Historical Agent Runs remain readable, streamable, and cancellable.</li>
-          <li>Jobs, Job Rankings, Applications, Approvals, and Tasks are not current user-facing product features.</li>
+          <li>Jobs, Job Rankings, Approvals, and Tasks are not current user-facing product features.</li>
         </ul>
       </div>
       <div className="boundary-note">

@@ -26,7 +26,7 @@ class FeatureRetirementTest(unittest.TestCase):
 
     def test_removed_routes_return_one_safe_410_contract(self):
         paths = [
-            "/api/jobs", "/api/jobs/one", "/api/applications", "/api/approvals/one",
+            "/api/jobs", "/api/jobs/one", "/api/approvals/one",
             "/api/tasks", "/api/application-packages/one", "/api/material-versions/one",
             "/api/job-rank-runs",
         ]
@@ -42,7 +42,7 @@ class FeatureRetirementTest(unittest.TestCase):
                 })
 
     def test_removed_mutations_cannot_reach_the_route_handler(self):
-        for path in ("/api/jobs", "/api/applications", "/api/approvals", "/api/tasks"):
+        for path in ("/api/jobs", "/api/approvals", "/api/tasks"):
             self.assertTrue(is_removed_api(path, "POST"))
             self.assertEqual(self.client.post(path).status_code, 410)
 
@@ -58,6 +58,14 @@ class FeatureRetirementTest(unittest.TestCase):
         self.assertEqual(self.client.post("/api/analyze").status_code, 200)
         self.assertEqual(self.client.get("/api/history").status_code, 200)
 
+    def test_current_application_routes_are_available_but_retired_workflows_are_not(self):
+        self.assertFalse(is_removed_api("/api/applications", "GET"))
+        self.assertFalse(is_removed_api("/api/applications", "POST"))
+        self.assertFalse(is_removed_api("/api/applications/from-analysis", "POST"))
+        self.assertFalse(is_removed_api("/api/applications/3bf9a2bb-23c4-4e1d-898f-e3dbf1bc64fe", "GET"))
+        self.assertTrue(is_removed_api("/api/applications/3bf9a2bb-23c4-4e1d-898f-e3dbf1bc64fe", "DELETE"))
+        self.assertTrue(is_removed_api("/api/applications/3bf9a2bb-23c4-4e1d-898f-e3dbf1bc64fe/transition", "POST"))
+
     def test_standalone_dispatcher_can_disable_the_worker_copy(self):
         with patch.dict("os.environ", {"OUTBOX_DISPATCH_IN_WORKER": "false"}):
             self.assertFalse(embedded_dispatcher_enabled())
@@ -69,7 +77,7 @@ class FeatureRetirementTest(unittest.TestCase):
                 job_url=None,
                 resume_filename=None,
             )
-            self.assertEqual(self.client.post("/api/applications").status_code, 410)
+            self.assertEqual(self.client.post("/api/applications").status_code, 200)
             rows, total = list_application_records(status=None, search=None, limit=10, offset=0)
             self.assertEqual(total, 1)
             self.assertEqual(rows[0]["id"], row_id)

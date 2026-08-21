@@ -226,7 +226,7 @@ class V2PostgreSQLIntegrationTest(unittest.TestCase):
                 connection.execute(
                     "SELECT version_num FROM alembic_version"
                 ).fetchone()[0],
-                "20260730_07",
+                "20260820_08",
             )
 
         replay = AnalyzeIdempotencyService().claim(

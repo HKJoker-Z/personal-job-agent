@@ -66,7 +66,7 @@ fingerprint bytes, response bodies, and secrets are excluded.
 
 The single run validates:
 
-- fresh migration to the single `20260730_07` head and a no-op second upgrade;
+- fresh migration to the single `20260820_08` head and a no-op second upgrade;
 - local, deterministic shadow, and Java-authoritative modes;
 - binding before provider work using a paused mock-provider barrier;
 - exact effective-input identity through RAG, prompt, mock provider, result,
@@ -91,7 +91,7 @@ The runner recreates only its candidate backend with
 `ANALYSIS_JD_NORMALIZATION_MODE` set to `local`, `shadow`, or `java`. Shadow
 sampling is fixed at `1` for deterministic candidate coverage. Its final
 rollback sets the backend to `local`, confirms new requests work, replays an
-existing Java-completed result, leaves the schema at `20260730_07`, and then
+existing Java-completed result, leaves the schema at `20260820_08`, and then
 stops Java independently. No image rebuild or database downgrade is used.
 
 For manual Compose inspection, first generate candidate secrets and always pass
