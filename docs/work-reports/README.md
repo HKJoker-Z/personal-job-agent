@@ -6,6 +6,7 @@ reviewable in Git history.
 
 | Date | Report |
 |---|---|
+| 2026-08-21 | [Version 2.1.0 Production Release (RELEASED)](2026-08-21-v2.1.0-release-work-report.md) |
 | 2026-08-20 | [Version 2.0.7 Outbox Health Gate Follow-up (production deployed)](2026-08-20-v2.0.7-outbox-health-gate-followup-work-report.md) |
 | 2026-08-20 | [Version 2.0.7 Release (production deployment rolled back)](2026-08-20-v2.0.7-release-work-report.md) |
 | 2026-08-14 | [Provider Deadline Simplification Phase 2A](2026-08-14-provider-deadline-simplification-phase-2a-work-report.md) |
