@@ -4,8 +4,8 @@
 
 Personal Job Agent is a private, administrator-led web application for
 evidence-grounded Resume and Job Description analysis. The prepared source
-release candidate is **2.0.7**; public production remains **2.0.6** until
-deployment. The current Alembic schema revision is `20260730_07` (`head`).
+release candidate is **2.1.0**; public production remains **2.0.7** until
+deployment. The target Alembic schema revision is `20260820_08` (`head`).
 
 The application uses a React/Vite frontend, a FastAPI/Python backend,
 SQLAlchemy 2, PostgreSQL 16, Redis, Dramatiq, a Transactional Outbox, Nginx,
@@ -18,15 +18,19 @@ AI output is advisory and requires human review. Personal Job Agent does not
 automatically submit applications, send email, contact employers, or guarantee
 Applicant Tracking System (ATS), interview, or hiring outcomes.
 
-## Current Version 2.0.7 Source Changes
+## Current Version 2.1.0 Source Changes
 
-Version 2.0.7 carries forward the bounded production integration of a private,
+Version 2.1.0 carries forward the bounded production integration of a private,
 stateless Spring Boot normalization-only service and the merged Provider
 deadline/acceptance work. History View now opens a saved result in a dedicated
 detail state and reuses the Analyze result renderer without rerunning Analyze or
 DeepSeek. FastAPI remains the only public application and owns
 security, idempotency, Project Knowledge retrieval, Provider interaction,
-scoring, History, monitoring, and all persistence.
+scoring, History, monitoring, and all persistence. It adds an Applications
+list/detail and manual creation flow plus an Analysis Applied action.
+Analysis-created Applications keep the Resume text used by that analysis as a
+snapshot, preserve the History record, and enforce one Application per
+user/source Analysis.
 
 The integration has explicit `local`, `shadow`, and `java` modes. Shadow
 sampling is deterministic from the existing Analyze input fingerprint and does
@@ -40,7 +44,7 @@ New attempts additionally bind an `analyze-execution-v1` fingerprint before
 Project Knowledge retrieval, prompt construction, Provider work, scoring,
 History, and result finalization. Production runs in `java` mode with policy
 `jd-normalization-v1`, dictionary `skills-v1`, private Java networking, and no
-Java host port. Alembic remains `20260730_07`.
+Java host port. Version 2.1.0 adds Alembic `20260820_08` after `20260730_07`.
 
 Java production evidence covered four Java-authoritative requests: 4/4 Java
 success, Request ID match, accepted second scan, pre-Provider execution binding,
@@ -114,6 +118,8 @@ Task database entity.
 
 Current capabilities are Dashboard; Analyze with Primary/saved/request-only
 Resume sources, pasted/safely fetched JD, optional Project RAG and History;
+Applications list/detail and manual/Analysis submission recording with Applied
+Time and an optional Resume snapshot;
 revision-aware Career Profile; Resume Library, Versions, private File Assets,
 diff/finalize/archive; History detail, notes/status, decisions and DOCX/PDF
 exports; Project Knowledge status/replace/rebuild/search; administrator
@@ -122,7 +128,7 @@ and cancellation; and Account password/Session controls.
 
 ## Removed or Disabled Features
 
-Jobs, Job Rankings, Applications, Approvals, and Tasks are removed or disabled
+Jobs, Job Rankings, Approvals, and Tasks are removed or disabled
 from the current workspace and public operating flow. Old browser routes show a
 Feature Removed page. Authenticated retired API prefixes return HTTP
 `410 FEATURE_REMOVED`.
@@ -554,19 +560,20 @@ gates; Version 2.0.6 retains them.
 
 ### Candidate, health, and rollback
 
-Release validation checks exact Version 2.0.7 health/readiness, Alembic
-`20260730_07`, mode `java`, reviewed immutable image digests, healthy/private
+Release validation checks exact Version 2.1.0 health/readiness, Alembic
+`20260820_08`, mode `java`, reviewed immutable image digests, healthy/private
 dependencies, stable restarts/OOM state, and unchanged public ports without
-generating Analyze traffic. Production remains on the Version 2.0.5 baseline
+generating real Provider traffic. Production remains on the Version 2.0.7 baseline
 until the separate publication phase.
 
 Readiness checks database/schema, files, Project Knowledge/search, Redis, Worker,
 disk, auth initialization, and LLM configuration without calling DeepSeek.
 
-Image rollback restores the recorded Version 2.0.5 application digests without
+Image rollback restores the recorded Version 2.0.7 application digests without
 deleting volumes, Resume files, backups, or knowledge. Emergency mode rollback
-recreates only Backend in `local`. Alembic remains `20260730_07`; no schema
-downgrade or Java deletion is needed.
+recreates only Backend in `local`. A normal image rollback retains Alembic
+`20260820_08`; the verified pre-release backup is reserved for an explicitly
+approved data restore.
 
 ## Data Migration
 
@@ -700,10 +707,11 @@ later, closing the database-commit versus Redis-send gap.
 
 ### How can an upgrade be rolled back?
 
-Record Version 2.0.6 application digests/config, deploy reviewed Version 2.0.7
-digests, and preserve Alembic `20260730_07`. Rollback restores the old
-application images/config; an urgent Java-boundary rollback recreates only
-Backend in `local` mode.
+Record Version 2.0.7 application digests/config and schema, create a verified
+PostgreSQL 16 backup, then deploy reviewed Version 2.1.0 digests and migrate to
+Alembic `20260820_08`. Image rollback restores the old application images/config
+without silently discarding new data; an urgent Java-boundary rollback recreates
+only Backend in `local` mode.
 
 ### How does Primary Resume improve the workflow?
 
@@ -721,11 +729,11 @@ Resume without a stale reference.
 - PostgreSQL full-text RAG is lexical, not embedding/vector retrieval, and can
   miss semantic equivalents outside bounded synonyms.
 - Scanned PDFs without selectable text require external OCR; OCR is not in
-  Version 2.0.7.
+  Version 2.1.0.
 - Safe job URL extraction cannot parse every site or client-rendered page.
 - The system does not automatically apply, send email, contact employers, or
   guarantee ATS parsing, ranking, interviews, or hiring.
-- Jobs, Job Rankings, Applications, Approvals, and Tasks remain disabled.
+- Jobs, Job Rankings, Approvals, and Tasks remain disabled.
 - Historical Agent Runs may refer to retired workflows and cannot be retried or
   resumed through the current public workflow.
 - Production is single-host Docker Compose, not Kubernetes or high availability.

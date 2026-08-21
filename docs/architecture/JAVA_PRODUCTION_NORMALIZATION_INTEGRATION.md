@@ -3,7 +3,7 @@
 ## 1. Executive decision
 
 **GO. The normalization-only production integration was implemented and rolled
-out through the bounded Phase IVA-IVD gates. Version 2.0.7 carries forward the
+out through the bounded Phase IVA-IVD gates. Version 2.1.0 carries forward the
 accepted Java-authoritative production state.**
 
 The smallest safe design is one private, stateless Spring Boot normalization
@@ -30,7 +30,7 @@ behavior.
 
 ## 2. Current architecture
 
-Personal Job Agent 2.0.7 is a FastAPI modular monolith with a React client,
+Personal Job Agent 2.1.0 is a FastAPI modular monolith with a React client,
 PostgreSQL 16, Redis/Dramatiq foundations, and a synchronous Analyze workflow.
 The Java service runs privately in its stateless normalization-only profile;
 its standalone PostgreSQL/Flyway design remains inactive. FastAPI calls the

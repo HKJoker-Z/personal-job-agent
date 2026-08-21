@@ -1,6 +1,6 @@
 # CI/CD and Container Image Publishing
 
-Version 2.0.7 CI includes full Python test discovery, a real PostgreSQL 16 service test, frontend Vitest/build and dependency-audit coverage, Java Maven verification, full-profile and normalization-only Java smoke tests, the isolated Java/FastAPI candidate, the retained compatibility/product smoke, and strict PostgreSQL 16 Backup/Restore rehearsal. CI never generates production Analyze traffic or deploys production automatically.
+Version 2.1.0 CI includes full Python test discovery, a real PostgreSQL 16 service test, frontend Vitest/build and dependency-audit coverage, Java Maven verification, full-profile and normalization-only Java smoke tests, the isolated Java/FastAPI candidate, the retained compatibility/product smoke including Applications, and strict PostgreSQL 16 Backup/Restore rehearsal. CI never generates production Analyze traffic or deploys production automatically.
 
 ## Continuous Integration
 
@@ -28,8 +28,8 @@ run on the exact release source commit validates tests/builds and publishes:
 - `ghcr.io/hkjoker-z/personal-job-agent-frontend`
 
 Each image receives only `sha-<full-commit>` during predeployment publication
-and records OCI source, full revision, and Version `2.0.7`. When annotated tag
-`v2.0.7` is pushed, the tag-triggered path validates
+and records OCI source, full revision, and Version `2.1.0`. When annotated tag
+`v2.1.0` is pushed, the tag-triggered path validates
 the already published exact-commit images without rebuilding or replacing them.
 The workflow needs `contents: read` and narrowly scoped package permissions. It
 does not pass deployment secrets as build arguments or perform automatic
