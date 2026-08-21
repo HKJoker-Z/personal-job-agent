@@ -178,6 +178,30 @@ describe("Version 2.0.1 simplified workspace", () => {
     expect(screen.queryByText(/automatically normalized/)).not.toBeInTheDocument();
   });
 
+  it("marks an Analysis as Applied once and keeps its History record", async () => {
+    global.fetch
+      .mockResolvedValueOnce(new Response(JSON.stringify([{ title: "Primary", active_version_id: "v1", is_primary: true }]), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ title: "Primary", active_version_id: "v1", is_primary: true }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        analysis_status: "complete", company_name: "Example Co", job_title: "Engineer",
+        application_id: 42, saved_to_history: true, application_job_description: "Build APIs",
+        match_score: 80, matched_skills: [], missing_skills: [], scoring_breakdown: {},
+      }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ application: { id: "application-1" } }), { status: 201 }));
+    render(<AnalyzePage />);
+    await screen.findByText(/Primary Resume selected automatically/);
+    fireEvent.change(screen.getByLabelText("Job Description"), { target: { value: "Build APIs" } });
+    fireEvent.click(screen.getByRole("button", { name: "Analyze" }));
+    const appliedButton = await screen.findByRole("button", { name: "Applied" });
+    fireEvent.click(appliedButton);
+    fireEvent.click(appliedButton);
+    expect(await screen.findByText("Application recorded successfully.")).toBeInTheDocument();
+    expect(appliedButton).toBeDisabled();
+    expect(global.fetch).toHaveBeenCalledTimes(4);
+    expect(new URL(global.fetch.mock.calls[3][0], "http://localhost").pathname).toBe("/api/applications/from-analysis");
+    expect(global.fetch.mock.calls[3][1].body.get("source_analysis_id")).toBe("42");
+  });
+
   it("prevents duplicate Analyze submissions while a request is pending", async () => {
     let resolveAnalyze;
     const pending = new Promise((resolve) => { resolveAnalyze = resolve; });

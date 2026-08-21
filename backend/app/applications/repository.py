@@ -30,12 +30,19 @@ class ApplicationRepository:
             Application.archived_at.is_(None),
         ))
 
+    def for_analysis(self, owner_id: UUID, analysis_id: int) -> Application | None:
+        return self.db.scalar(select(Application).where(
+            Application.owner_user_id == owner_id,
+            Application.source_analysis_id == analysis_id,
+        ))
+
     def list(self, owner_id: UUID, stage: str | None = None, archived: bool = False) -> list[Application]:
         statement = select(Application).where(Application.owner_user_id == owner_id)
         statement = statement.where(Application.archived_at.is_not(None) if archived else Application.archived_at.is_(None))
+        statement = statement.where(Application.applied_at.is_not(None))
         if stage:
             statement = statement.where(Application.current_stage == stage)
-        return list(self.db.scalars(statement.order_by(Application.updated_at.desc(), Application.id)))
+        return list(self.db.scalars(statement.order_by(Application.applied_at.desc(), Application.id.desc())))
 
     def history(self, owner_id: UUID, application_id: UUID) -> list[ApplicationStageHistory]:
         return list(self.db.scalars(select(ApplicationStageHistory).where(

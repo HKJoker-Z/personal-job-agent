@@ -21,7 +21,7 @@ describe("application routes", () => {
     expect(screen.getByText("POST /api/analyze")).toBeInTheDocument();
     expect(screen.getByText(/does not create an Agent Run or enter the Redis and Dramatiq queue/i)).toBeInTheDocument();
     expect(screen.getByText(/New Agent Run creation, retry, and resume are disabled/i)).toBeInTheDocument();
-    expect(screen.getByText(/Jobs, Job Rankings, Applications, Approvals, and Tasks are not current/i)).toBeInTheDocument();
+    expect(screen.getByText(/Jobs, Job Rankings, Approvals, and Tasks are not current/i)).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Architecture" })).toHaveAttribute("aria-current", "page");
   });
 
@@ -31,8 +31,14 @@ describe("application routes", () => {
     expect(await screen.findByText("No stored resumes yet.")).toBeInTheDocument();
   });
 
+  it("renders the Applications page", async () => {
+    render(<MemoryRouter initialEntries={["/applications"]}><App /></MemoryRouter>);
+    expect(screen.getByRole("heading", { name: "Applications", level: 1 })).toBeInTheDocument();
+    expect(await screen.findByText("No Applications yet.")).toBeInTheDocument();
+  });
+
   it.each([
-    "/jobs", "/jobs/old", "/job-ranking", "/applications", "/application-packages/old",
+    "/jobs", "/jobs/old", "/job-ranking", "/application-packages/old",
     "/approvals/old", "/tasks",
   ])("renders Feature Removed for %s", (path) => {
     render(<MemoryRouter initialEntries={[path]}><App /></MemoryRouter>);

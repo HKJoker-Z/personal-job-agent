@@ -32,6 +32,7 @@ describe("unified navigation", () => {
       Dashboard: "/dashboard",
       Analyze: "/analyze",
       History: "/history",
+      Applications: "/applications",
       Resumes: "/resumes",
       Profile: "/profile",
       "Project Knowledge": "/project-knowledge",
@@ -56,7 +57,7 @@ describe("unified navigation", () => {
 
   it("does not expose retired module navigation", () => {
     view();
-    for (const label of ["Jobs", "Job Rankings", "Applications", "Approvals", "Tasks"]) {
+    for (const label of ["Jobs", "Job Rankings", "Approvals", "Tasks"]) {
       expect(screen.queryByRole("link", { name: label })).not.toBeInTheDocument();
     }
   });

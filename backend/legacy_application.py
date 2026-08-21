@@ -3693,6 +3693,7 @@ async def analyze(
     result["workflow_duration_ms"] = workflow_duration["workflow_duration_ms"]
     result["workflow_duration_us"] = workflow_duration["workflow_duration_us"]
     result["workflow_steps"] = workflow.to_list()
+    result["application_job_description"] = context.sanitized_job_text
 
     if idempotency_service is not None and idempotency_claim is not None:
         current_user = getattr(request.state, "v2_user", None)

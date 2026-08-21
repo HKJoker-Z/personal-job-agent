@@ -55,7 +55,7 @@ prepared upgrade and rollback details.
 
 ### Removed or Disabled Features
 
-Jobs, Job Rankings, Applications, Approvals, and Tasks are not current product
+Jobs, Job Rankings, Approvals, and Tasks are not current product
 workflows. Their navigation entries and public mutation paths were removed or
 disabled in Version 2.0.1. Old browser routes show **Feature Removed**, and
 authenticated calls to retired API prefixes return HTTP `410 FEATURE_REMOVED`.

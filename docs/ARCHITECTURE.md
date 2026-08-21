@@ -192,7 +192,7 @@ retry, and resume requests are disabled.
 - Historical Agent Runs remain readable, streamable, and cancellable.
 - Redis, the Worker, and the Outbox dispatcher remain operational
   infrastructure retained for compatibility and operational workflows.
-- Jobs, Job Rankings, Applications, Approvals, and Tasks are not current
+- Jobs, Job Rankings, Approvals, and Tasks are not current
   user-facing product features.
 
 ## Architectural records
