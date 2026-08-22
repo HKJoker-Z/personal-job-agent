@@ -6,6 +6,7 @@ reviewable in Git history.
 
 | Date | Report |
 |---|---|
+| 2026-08-22 | [v2.2.0 Final Controlled Retry (reproducible public failure, rolled back)](2026-08-22-v2.2.0-final-controlled-retry-failure-work-report.md) |
 | 2026-08-22 | [v2.2.0 Refined-Gate Redeployment (HARD FAIL, rolled back)](2026-08-22-v2.2.0-refined-gate-redeployment-failure-work-report.md) |
 | 2026-08-22 | [v2.2.0 Production Redeployment (NO-GO, rolled back)](2026-08-22-v2.2.0-production-redeployment-failure-work-report.md) |
 | 2026-08-22 | [v2.2.1 Analyze Runtime Hotfix Diagnosis](2026-08-22-v2.2.1-analyze-runtime-hotfix-work-report.md) |
