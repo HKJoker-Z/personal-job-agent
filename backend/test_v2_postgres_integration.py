@@ -30,6 +30,8 @@ from app.db.models import (
     ApplicationRecord,
     ApplicationStageHistory,
     Job,
+    Resume,
+    ResumeVersion,
 )
 from app.jobs.service import JobService
 from app.applications.service import ApplicationConflict, ApplicationService
@@ -614,6 +616,64 @@ class V2PostgreSQLIntegrationTest(unittest.TestCase):
             with self.assertRaises(IntegrityError):
                 db.flush()
             db.rollback()
+        finally:
+            db.close()
+
+    def test_submitted_application_delete_is_physical_and_preserves_sources(self):
+        owner = self.create_owner()
+        db = session_factory(self.database_url)()
+        try:
+            resume_service = ResumeService(db, owner.id, load_v2_settings())
+            resume = resume_service.create({
+                "title": "PostgreSQL Delete Resume",
+                "language": "en",
+                "target_role": "Engineer",
+            })
+            version = resume_service.create_version(
+                UUID(resume["id"]),
+                {"schema_version": 1, "header": {}, "summary": "PostgreSQL snapshot", "sections": []},
+                None,
+                "DELETE integration fixture",
+            )
+            analysis = ApplicationRecord(
+                owner_user_id=owner.id,
+                created_at=datetime.now(timezone.utc),
+                updated_at=datetime.now(timezone.utc),
+                company_name="PostgreSQL Analysis Company",
+                job_title="PostgreSQL Analysis Role",
+            )
+            db.add(analysis)
+            db.flush()
+            deleted = ApplicationService(db, owner.id).create_submitted({
+                "company_name": analysis.company_name,
+                "job_title": analysis.job_title,
+                "job_description": "Physical DELETE fixture",
+                "source_analysis_id": analysis.id,
+                "resume_version_id": version["id"],
+            })["application"]
+            retained = ApplicationService(db, owner.id).create_submitted({
+                "company_name": "Retained Company",
+                "job_title": "Retained Role",
+                "job_description": "Unaffected fixture",
+                "source_analysis_id": None,
+                "resume_version_id": None,
+            })["application"]
+            db.commit()
+
+            ApplicationService(db, owner.id).delete(UUID(deleted["id"]))
+            db.commit()
+
+            self.assertIsNone(db.get(Application, UUID(deleted["id"])))
+            self.assertIsNotNone(db.get(Application, UUID(retained["id"])))
+            self.assertIsNotNone(db.get(ApplicationRecord, analysis.id))
+            self.assertIsNotNone(db.get(Resume, UUID(resume["id"])))
+            self.assertIsNotNone(db.get(ResumeVersion, UUID(version["id"])))
+            self.assertEqual(
+                db.scalar(select(func.count(Application.id)).where(
+                    Application.id == UUID(deleted["id"])
+                )),
+                0,
+            )
         finally:
             db.close()
 

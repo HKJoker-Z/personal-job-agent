@@ -2,7 +2,7 @@ import React, { Component, useEffect, useRef, useState } from "react";
 import { apiFetch, normalizeApiError } from "./api/client";
 
 const API_BASE_URL = import.meta.env.DEV ? (import.meta.env.VITE_API_BASE_URL || "") : "";
-const APP_VERSION = "2.1.0";
+const APP_VERSION = "2.2.0";
 const NEXT_ACTION_DECISIONS = [
   { value: "accepted", label: "Accept Recommendation" },
   { value: "dismissed", label: "Dismiss" },

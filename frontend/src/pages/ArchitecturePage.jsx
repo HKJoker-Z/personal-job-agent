@@ -84,7 +84,7 @@ export function ArchitecturePage() {
   return <section className="architecture-page" aria-labelledby="architecture-title">
     <header className="architecture-hero">
       <div>
-        <span className="eyebrow">Version 2.1.0 · Read-only overview</span>
+        <span className="eyebrow">Version 2.2.0 · Read-only overview</span>
         <h1 id="architecture-title">Architecture</h1>
         <p>Personal Job Agent is a modular monolith with supporting data, worker, frontend, and operational components. The current Resume-to-JD analysis path is synchronous and designed for evidence-aware human review.</p>
       </div>

@@ -1,6 +1,8 @@
-"""Version 2.1.0 submitted Application creation endpoints."""
+"""Version 2.2.0 submitted Application endpoints."""
 
 from __future__ import annotations
+
+from uuid import UUID
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
 
@@ -40,6 +42,17 @@ def create_application(
     try:
         return ApplicationService(db, user.id).create(payload.model_dump())
     except (ApplicationConflict, ApplicationNotFound) as exc:
+        _raise(exc)
+
+
+@router.delete("/{application_id}")
+def delete_application(
+    application_id: UUID, db: DbSession, user: CurrentUser
+) -> dict[str, object]:
+    try:
+        ApplicationService(db, user.id).delete(application_id)
+        return {"deleted": True, "id": str(application_id)}
+    except ApplicationNotFound as exc:
         _raise(exc)
 
 

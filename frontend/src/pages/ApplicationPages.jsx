@@ -17,6 +17,7 @@ export function ApplicationsPage() {
   const [resumeVersionId, setResumeVersionId] = useState("");
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
+  const [deletingId, setDeletingId] = useState("");
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
 
@@ -67,8 +68,25 @@ export function ApplicationsPage() {
     }
   }
 
+  async function deleteApplication(application) {
+    const confirmed = window.confirm(
+      `Delete this Application?\n\nCompany Name: ${application.company_name}\nJob Title: ${application.job_title}\n\nThis cannot be undone.`
+    );
+    if (!confirmed) return;
+    setDeletingId(application.id); setError(""); setMessage("");
+    try {
+      await apiJson(`/api/applications/${application.id}`, { method: "DELETE" });
+      await load();
+      setMessage("Application deleted successfully.");
+    } catch (value) {
+      setError(value.message);
+    } finally {
+      setDeletingId("");
+    }
+  }
+
   return <section className="applications-page">
-    <section className="panel">
+    <section className="panel applications-header">
       <div className="section-heading"><div><span className="eyebrow">Applications</span><h1>Applications</h1><p className="muted">Jobs you have actually applied to.</p></div><button type="button" onClick={() => setShowForm((value) => !value)}>Add Application</button></div>
       {showForm && <form className="form-panel" onSubmit={createApplication}>
         <label>Company Name<input value={companyName} onChange={(event) => setCompanyName(event.target.value)} required maxLength="500" /></label>
@@ -85,9 +103,9 @@ export function ApplicationsPage() {
       <div className="detail-header"><div><span className="label">Application</span><h2>{selected.job_title}</h2><p>{selected.company_name}</p></div><button type="button" onClick={() => setSelected(null)}>Back to Applications</button></div>
       <div className="detail-grid"><div><span className="label">Applied Time</span><p>{formatAppliedTime(selected.applied_at)}</p></div><div><span className="label">Resume</span><p>{selected.resume_snapshot ? "Saved snapshot" : "Not provided"}</p></div></div>
       <section className="result-section"><h3>Job Description</h3><p className="plain-note">{selected.job_description || "Not provided"}</p></section>
-      <section className="result-section"><h3>Resume Snapshot</h3><p className="plain-note">{selected.resume_snapshot || "Not provided"}</p></section>
+      <section className="result-section"><h3>Resume Snapshot</h3><div className="resume-snapshot" data-testid="resume-snapshot">{selected.resume_snapshot || "Not provided"}</div></section>
     </section> : <section className="panel list-panel">
-      {loading ? <p>Loading Applications...</p> : applications.length === 0 ? <p>No Applications yet.</p> : <div className="table-wrap"><table><thead><tr><th>Company</th><th>Job Title</th><th>Applied Time</th><th>Actions</th></tr></thead><tbody>{applications.map((application) => <tr key={application.id}><td>{application.company_name}</td><td>{application.job_title}</td><td>{formatAppliedTime(application.applied_at)}</td><td><button type="button" onClick={() => viewApplication(application.id)}>View</button></td></tr>)}</tbody></table></div>}
+      {loading ? <p>Loading Applications...</p> : applications.length === 0 ? <p>No Applications yet.</p> : <div className="table-wrap"><table><thead><tr><th>Company</th><th>Job Title</th><th>Applied Time</th><th>Actions</th></tr></thead><tbody>{applications.map((application) => <tr key={application.id}><td>{application.company_name}</td><td>{application.job_title}</td><td>{formatAppliedTime(application.applied_at)}</td><td><div className="action-row"><button type="button" onClick={() => viewApplication(application.id)}>View</button><button type="button" className="danger-button" disabled={deletingId === application.id} onClick={() => deleteApplication(application)}>{deletingId === application.id ? "Deleting..." : "Delete"}</button></div></td></tr>)}</tbody></table></div>}
     </section>}
   </section>;
 }

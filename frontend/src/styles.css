@@ -991,9 +991,14 @@ pre {
 
 .history-panel,
 .list-panel,
-.detail-panel {
+.detail-panel,
+.applications-header {
   margin-top: 18px;
   padding: 22px;
+}
+
+.applications-header {
+  margin-top: 0;
 }
 
 .history-toolbar {
@@ -1720,6 +1725,13 @@ th {
   overflow-wrap: anywhere;
 }
 
+.resume-snapshot {
+  max-width: 78ch;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.7;
+}
+
 .muted {
   color: #66758a;
 }
@@ -1744,6 +1756,7 @@ th {
   .history-panel,
   .list-panel,
   .detail-panel,
+  .applications-header,
   .state-panel {
     padding: 16px;
   }

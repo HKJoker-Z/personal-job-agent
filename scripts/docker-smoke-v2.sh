@@ -8,7 +8,7 @@ fi
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 STAMP="$(date +%s)-$$"
 SMOKE_MILESTONE="${PJA_SMOKE_MILESTONE:-2.0.1}"
-APP_RELEASE_VERSION="${PJA_APP_VERSION:-2.1.0}"
+APP_RELEASE_VERSION="${PJA_APP_VERSION:-2.2.0}"
 REAL_LLM_VALIDATION="${PJA_REAL_LLM_VALIDATION:-0}"
 HOLD_SECONDS="${PJA_SMOKE_HOLD_SECONDS:-0}"
 if [[ "${REAL_LLM_VALIDATION}" != "0" && "${REAL_LLM_VALIDATION}" != "1" ]]; then
@@ -27,7 +27,14 @@ V202_SCOPE=0
 V203_SCOPE=0
 V204_SCOPE=0
 V210_SCOPE=0
-if [[ "${SMOKE_MILESTONE}" == "2.1.0" ]]; then
+V220_SCOPE=0
+if [[ "${SMOKE_MILESTONE}" == "2.2.0" ]]; then
+  TEST_PREFIX='pja-v2-final'
+  DEFAULT_HTTP_PORT=18088
+  DEFAULT_POSTGRES_PORT=15438
+  V210_SCOPE=1
+  V220_SCOPE=1
+elif [[ "${SMOKE_MILESTONE}" == "2.1.0" ]]; then
   TEST_PREFIX='pja-v2-final'
   DEFAULT_HTTP_PORT=18088
   DEFAULT_POSTGRES_PORT=15438
@@ -426,6 +433,36 @@ if [[ "${V210_SCOPE}" == "1" ]]; then
   python3 -c 'import json,sys; value=json.load(open(sys.argv[1])); assert [item["id"] for item in value[:2]] == [sys.argv[2], sys.argv[3]]' \
     "${RESPONSE_FILE}" "${MANUAL_APPLICATION_ID}" "${SUBMITTED_APPLICATION_ID}"
   smoke_step 'Applications manual/Analysis creation, Resume snapshot, History retention, detail, ordering, and duplicate guard'
+
+  if [[ "${V220_SCOPE}" == "1" ]]; then
+    api_write DELETE "/api/applications/${SUBMITTED_APPLICATION_ID}"
+    python3 -c 'import json,sys; value=json.load(open(sys.argv[1])); assert value == {"deleted": True, "id": sys.argv[2]}' \
+      "${RESPONSE_FILE}" "${SUBMITTED_APPLICATION_ID}"
+    DELETED_STATUS="$(curl --noproxy '*' --silent --output /dev/null --write-out '%{http_code}' \
+      --cookie "${COOKIE_JAR}" "${ORIGIN}/api/applications/${SUBMITTED_APPLICATION_ID}")"
+    test "${DELETED_STATUS}" = 404
+    APPLICATION_ROW_COUNT="$("${COMPOSE[@]}" exec -T database \
+      psql -U pja_bootstrap -d personal_job_agent_smoke_test -Atqc \
+      "SELECT COUNT(*) FROM applications WHERE id = '${SUBMITTED_APPLICATION_ID}'")"
+    test "${APPLICATION_ROW_COUNT}" = 0
+    curl --noproxy '*' --fail --silent --show-error --cookie "${COOKIE_JAR}" \
+      "${ORIGIN}/api/applications" >"${RESPONSE_FILE}"
+    python3 -c 'import json,sys; ids=[item["id"] for item in json.load(open(sys.argv[1]))]; assert sys.argv[2] in ids; assert sys.argv[3] not in ids' \
+      "${RESPONSE_FILE}" "${MANUAL_APPLICATION_ID}" "${SUBMITTED_APPLICATION_ID}"
+    curl --noproxy '*' --fail --silent --show-error --cookie "${COOKIE_JAR}" \
+      "${ORIGIN}/api/history/${HISTORY_ID}" >"${RESPONSE_FILE}"
+    python3 -c 'import json,sys; assert json.load(open(sys.argv[1]))["id"] == int(sys.argv[2])' \
+      "${RESPONSE_FILE}" "${HISTORY_ID}"
+    curl --noproxy '*' --fail --silent --show-error --cookie "${COOKIE_JAR}" \
+      "${ORIGIN}/api/resumes/${RESUME_ID}/versions/${VERSION_ID}" >"${RESPONSE_FILE}"
+    python3 -c 'import json,sys; assert json.load(open(sys.argv[1]))["id"] == sys.argv[2]' \
+      "${RESPONSE_FILE}" "${VERSION_ID}"
+    TRASH_TABLE_COUNT="$("${COMPOSE[@]}" exec -T database \
+      psql -U pja_bootstrap -d personal_job_agent_smoke_test -Atqc \
+      "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_name IN ('application_trash', 'deleted_applications')")"
+    test "${TRASH_TABLE_COUNT}" = 0
+    smoke_step 'Application physical DELETE, unrelated Application retention, and source History/Resume preservation'
+  fi
 fi
 
 DOCX_FIXTURE="${TEST_ROOT}/smoke-resume.docx"

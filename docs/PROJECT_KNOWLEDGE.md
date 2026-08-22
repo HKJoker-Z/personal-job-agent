@@ -4,8 +4,8 @@
 
 Personal Job Agent is a private, administrator-led web application for
 evidence-grounded Resume and Job Description analysis. The prepared source
-release candidate is **2.1.0**; public production remains **2.0.7** until
-deployment. The target Alembic schema revision is `20260820_08` (`head`).
+production release is **2.2.0**, upgraded from **2.1.0**. The production
+Alembic schema revision remains `20260820_08` (`head`).
 
 The application uses a React/Vite frontend, a FastAPI/Python backend,
 SQLAlchemy 2, PostgreSQL 16, Redis, Dramatiq, a Transactional Outbox, Nginx,
@@ -18,9 +18,9 @@ AI output is advisory and requires human review. Personal Job Agent does not
 automatically submit applications, send email, contact employers, or guarantee
 Applicant Tracking System (ATS), interview, or hiring outcomes.
 
-## Current Version 2.1.0 Source Changes
+## Current Version 2.2.0 Source Changes
 
-Version 2.1.0 carries forward the bounded production integration of a private,
+Version 2.2.0 carries forward the bounded production integration of a private,
 stateless Spring Boot normalization-only service and the merged Provider
 deadline/acceptance work. History View now opens a saved result in a dedicated
 detail state and reuses the Analyze result renderer without rerunning Analyze or
@@ -30,7 +30,10 @@ scoring, History, monitoring, and all persistence. It adds an Applications
 list/detail and manual creation flow plus an Analysis Applied action.
 Analysis-created Applications keep the Resume text used by that analysis as a
 snapshot, preserve the History record, and enforce one Application per
-user/source Analysis.
+user/source Analysis. It adds confirmed physical deletion of an owned
+Application while preserving its source Analysis/History and Resume, improves
+plain-text Resume snapshot wrapping and spacing without changing stored text,
+and aligns the Applications header padding with the main cards.
 
 The integration has explicit `local`, `shadow`, and `java` modes. Shadow
 sampling is deterministic from the existing Analyze input fingerprint and does
@@ -44,7 +47,7 @@ New attempts additionally bind an `analyze-execution-v1` fingerprint before
 Project Knowledge retrieval, prompt construction, Provider work, scoring,
 History, and result finalization. Production runs in `java` mode with policy
 `jd-normalization-v1`, dictionary `skills-v1`, private Java networking, and no
-Java host port. Version 2.1.0 adds Alembic `20260820_08` after `20260730_07`.
+Java host port. Version 2.2.0 retains Alembic `20260820_08`; it adds no migration.
 
 Java production evidence covered four Java-authoritative requests: 4/4 Java
 success, Request ID match, accepted second scan, pre-Provider execution binding,
@@ -560,16 +563,16 @@ gates; Version 2.0.6 retains them.
 
 ### Candidate, health, and rollback
 
-Release validation checks exact Version 2.1.0 health/readiness, Alembic
+Release validation checks exact Version 2.2.0 health/readiness, Alembic
 `20260820_08`, mode `java`, reviewed immutable image digests, healthy/private
 dependencies, stable restarts/OOM state, and unchanged public ports without
-generating real Provider traffic. Production remains on the Version 2.0.7 baseline
-until the separate publication phase.
+generating real Provider traffic. The production upgrade baseline is Version
+2.1.0 and the schema remains unchanged.
 
 Readiness checks database/schema, files, Project Knowledge/search, Redis, Worker,
 disk, auth initialization, and LLM configuration without calling DeepSeek.
 
-Image rollback restores the recorded Version 2.0.7 application digests without
+Image rollback restores the recorded Version 2.1.0 application digests without
 deleting volumes, Resume files, backups, or knowledge. Emergency mode rollback
 recreates only Backend in `local`. A normal image rollback retains Alembic
 `20260820_08`; the verified pre-release backup is reserved for an explicitly
@@ -707,8 +710,8 @@ later, closing the database-commit versus Redis-send gap.
 
 ### How can an upgrade be rolled back?
 
-Record Version 2.0.7 application digests/config and schema, create a verified
-PostgreSQL 16 backup, then deploy reviewed Version 2.1.0 digests and migrate to
+Record Version 2.1.0 application digests/config and schema, create a verified
+PostgreSQL 16 backup, then deploy reviewed Version 2.2.0 digests while retaining
 Alembic `20260820_08`. Image rollback restores the old application images/config
 without silently discarding new data; an urgent Java-boundary rollback recreates
 only Backend in `local` mode.
@@ -729,7 +732,7 @@ Resume without a stale reference.
 - PostgreSQL full-text RAG is lexical, not embedding/vector retrieval, and can
   miss semantic equivalents outside bounded synonyms.
 - Scanned PDFs without selectable text require external OCR; OCR is not in
-  Version 2.1.0.
+  Version 2.2.0.
 - Safe job URL extraction cannot parse every site or client-rendered page.
 - The system does not automatically apply, send email, contact employers, or
   guarantee ATS parsing, ranking, interviews, or hiring.
