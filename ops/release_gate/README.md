@@ -27,13 +27,17 @@ python3 ops/release_gate/collect_analyze.py \
   --edge-container candidate-edge-1 \
   --frontend-container candidate-frontend-1 \
   --backend-container candidate-backend-1 \
-  --java-container candidate-java-1
+  --java-container candidate-java-1 \
+  --schedule-seconds 0,30,60,120,240
 ```
 
 Exit 0 means `PASS` or `PASS_WITH_WARNING`, exit 1 means statistical `FAIL`,
 and exit 2 means `HARD_FAIL` or evidence collection failure. On public
 availability failure the collector writes bounded evidence, stops immediately,
-and returns 2. It never writes credentials or response bodies.
+and returns 2. Evidence includes curl exit code/stderr, status/bytes and
+connect/start-transfer/total timing, correlated body-free Edge/Frontend access
+observations, and a safe container/network snapshot. It never writes
+credentials or response bodies.
 
 After evidence is retained, delete the isolated account and all user-scoped
 test rows with the release runbook cleanup, then verify exact zero remaining.

@@ -28,6 +28,14 @@ def passing_evidence() -> dict[str, object]:
                 "frontend_log_scanned": True,
                 "backend_log_scanned": True,
                 "java_log_scanned": True,
+                "edge_access_observation_present": True,
+                "edge_status": 200,
+                "edge_upstream_status": 200,
+                "edge_bytes_sent": 1024,
+                "frontend_access_observation_present": True,
+                "frontend_status": 200,
+                "frontend_upstream_status": 200,
+                "frontend_bytes_sent": 1024,
                 "rag_enabled": True,
                 "history_persisted": True,
                 "metrics_persisted": True,
@@ -107,6 +115,13 @@ class AnalyzeReleaseGateTests(unittest.TestCase):
         result = evaluate(evidence)
         self.assertEqual(result.verdict, "PASS")
         self.assertIn("run_1:single_java_latency_spike", result.warnings)
+
+    def test_missing_nginx_access_observation_is_hard_fail(self):
+        evidence = passing_evidence()
+        evidence["runs"][0]["edge_access_observation_present"] = False
+        result = evaluate(evidence)
+        self.assertEqual(result.verdict, "HARD_FAIL")
+        self.assertIn("run_1:edge_access_observation_missing", result.hard_failures)
 
 
 if __name__ == "__main__":

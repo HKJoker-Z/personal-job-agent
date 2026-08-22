@@ -20,6 +20,7 @@ import re
 import secrets
 import ssl
 import subprocess
+import tempfile
 import time
 from dataclasses import asdict
 from http.cookiejar import CookieJar
@@ -99,9 +100,11 @@ def multipart(fields: dict[str, str]) -> tuple[bytes, str]:
 class PublicClient:
     def __init__(self, base_url: str, origin: str, ca_file: Path | None, timeout: float):
         context = ssl.create_default_context(cafile=str(ca_file) if ca_file else None)
-        self.opener = build_opener(HTTPSHandler(context=context), HTTPCookieProcessor(CookieJar()))
+        self.cookies = CookieJar()
+        self.opener = build_opener(HTTPSHandler(context=context), HTTPCookieProcessor(self.cookies))
         self.base_url = base_url.rstrip("/")
         self.origin = origin
+        self.ca_file = ca_file
         self.timeout = timeout
         self.csrf = ""
 
@@ -172,6 +175,155 @@ class PublicClient:
                 pass
         return status, parsed, raw, headers, error
 
+    def cookie_header(self) -> str:
+        return "; ".join(f"{cookie.name}={cookie.value}" for cookie in self.cookies)
+
+
+def _curl_json_number(value: object) -> float | None:
+    try:
+        return float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+
+
+def curl_analyze(
+    client: PublicClient,
+    *,
+    resume_version_id: str,
+    job_file: Path,
+    request_id: str,
+    idempotency_key: str,
+    artifact_dir: Path,
+    timeout: float,
+) -> tuple[int | None, bytes, dict[str, str], str | None, dict[str, Any]]:
+    """Run Analyze with curl while retaining bounded, body-free client diagnostics."""
+    artifact_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    response_fd, response_name = tempfile.mkstemp(prefix=".analyze-response-", dir=artifact_dir)
+    headers_fd, headers_name = tempfile.mkstemp(prefix=".analyze-headers-", dir=artifact_dir)
+    os.close(response_fd)
+    os.close(headers_fd)
+    response_path = Path(response_name)
+    headers_path = Path(headers_name)
+    os.chmod(response_path, 0o600)
+    os.chmod(headers_path, 0o600)
+    cookie = client.cookie_header()
+    if not cookie or not client.csrf:
+        raise CollectionFailure("curl_authentication_material_missing")
+    # Secrets are supplied on stdin, never in argv, process listings, logs, or evidence.
+    secret_config = (
+        f'header = "X-CSRF-Token: {client.csrf}"\n'
+        f'header = "Cookie: {cookie}"\n'
+    )
+    command = [
+        "curl",
+        "--silent",
+        "--show-error",
+        "--request",
+        "POST",
+        "--url",
+        client.base_url + "/api/analyze",
+        "--header",
+        "Accept: application/json",
+        "--header",
+        f"Origin: {client.origin}",
+        "--header",
+        "User-Agent: PJA-production-equivalent-release-gate/2",
+        "--header",
+        f"X-Request-ID: {request_id}",
+        "--header",
+        f"Idempotency-Key: {idempotency_key}",
+        "--form",
+        f"resume_version_id={resume_version_id}",
+        "--form",
+        f"job_text=<{job_file}",
+        "--form",
+        "save_to_history=true",
+        "--form",
+        "use_project_knowledge=true",
+        "--form",
+        "project_knowledge_top_k=5",
+        "--config",
+        "-",
+        "--dump-header",
+        str(headers_path),
+        "--output",
+        str(response_path),
+        "--connect-timeout",
+        "15",
+        "--max-time",
+        str(timeout),
+        "--write-out",
+        "%{json}\n",
+    ]
+    if client.ca_file is not None:
+        command.extend(("--cacert", str(client.ca_file)))
+    process = subprocess.run(
+        command,
+        input=secret_config,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=timeout + 10,
+        check=False,
+    )
+    try:
+        raw = response_path.read_bytes()
+        raw_headers = headers_path.read_text(encoding="utf-8", errors="replace")
+    finally:
+        response_path.unlink(missing_ok=True)
+        headers_path.unlink(missing_ok=True)
+    try:
+        metrics = json.loads(process.stdout.strip().splitlines()[-1])
+    except (IndexError, json.JSONDecodeError):
+        metrics = {}
+    if not isinstance(metrics, dict):
+        metrics = {}
+    status_value = metrics.get("http_code")
+    try:
+        status = int(status_value) if int(status_value) > 0 else None
+    except (TypeError, ValueError):
+        status = None
+    headers: dict[str, str] = {}
+    for line in raw_headers.splitlines():
+        if ":" in line:
+            key, value = line.split(":", 1)
+            headers[key.strip()] = value.strip()
+    stderr = process.stderr[-4096:]
+    if process.returncode == 0:
+        transport_error = None
+    elif process.returncode == 52 or (status is None and not raw):
+        transport_error = "empty_reply"
+    else:
+        transport_error = "connection_failure"
+    diagnostics = {
+        "client_exit_code": process.returncode,
+        "client_stderr": stderr,
+        "client_http_status": status,
+        "client_response_bytes": len(raw),
+        "client_size_download": _curl_json_number(metrics.get("size_download")),
+        "client_connect_time_ms": (
+            round(value * 1000, 3)
+            if (value := _curl_json_number(metrics.get("time_connect"))) is not None
+            else None
+        ),
+        "client_start_transfer_time_ms": (
+            round(value * 1000, 3)
+            if (value := _curl_json_number(metrics.get("time_starttransfer"))) is not None
+            else None
+        ),
+        "client_total_time_ms": (
+            round(value * 1000, 3)
+            if (value := _curl_json_number(metrics.get("time_total"))) is not None
+            else None
+        ),
+        "client_remote_ip": metrics.get("remote_ip"),
+        "client_remote_port": metrics.get("remote_port"),
+        "client_local_ip": metrics.get("local_ip"),
+        "client_local_port": metrics.get("local_port"),
+        "client_raw_error": stderr,
+    }
+    return status, raw, headers, transport_error, diagnostics
+
 
 def docker_logs(container: str, start: dt.datetime, end: dt.datetime) -> tuple[bool, str]:
     process = subprocess.run(
@@ -214,6 +366,53 @@ def matching(values: list[dict[str, Any]], request_id: str, message: str) -> lis
         if str(value.get("request_id") or "") == request_id
         and str(value.get("message") or "") == message
     ]
+
+
+def nginx_number(value: object, *, milliseconds: bool = False) -> float | int | None:
+    try:
+        number = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+    if milliseconds:
+        return round(number * 1000, 3)
+    return int(number) if number.is_integer() else number
+
+
+def runtime_snapshot(containers: dict[str, str]) -> dict[str, Any]:
+    snapshot: dict[str, Any] = {}
+    for layer, container in containers.items():
+        process = subprocess.run(
+            ["docker", "inspect", container],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        if process.returncode != 0:
+            snapshot[layer] = {"inspect_ok": False, "container": container}
+            continue
+        try:
+            value = json.loads(process.stdout)[0]
+            state = value.get("State") or {}
+            networks = (value.get("NetworkSettings") or {}).get("Networks") or {}
+            snapshot[layer] = {
+                "inspect_ok": True,
+                "container": container,
+                "container_id": str(value.get("Id") or "")[:12],
+                "image": value.get("Image"),
+                "started_at": state.get("StartedAt"),
+                "restart_count": value.get("RestartCount"),
+                "oom_killed": state.get("OOMKilled"),
+                "health": (state.get("Health") or {}).get("Status"),
+                "networks": {
+                    name: {"ip_address": details.get("IPAddress")}
+                    for name, details in networks.items()
+                },
+            }
+        except (IndexError, TypeError, ValueError, json.JSONDecodeError):
+            snapshot[layer] = {"inspect_ok": False, "container": container}
+    return snapshot
 
 
 def response_is_complete(value: object) -> bool:
@@ -345,6 +544,18 @@ def collect(args: argparse.Namespace) -> dict[str, Any]:
         request_id=safe_request_id(prefix, "rag"),
     )
 
+    containers = {
+        "edge": args.edge_container,
+        "frontend": args.frontend_container,
+        "backend": args.backend_container,
+        "java": args.java_container,
+    }
+    schedule = tuple(float(item) for item in args.schedule_seconds.split(","))
+    if len(schedule) != RUN_COUNT or any(item < 0 for item in schedule):
+        raise CollectionFailure("schedule_must_contain_five_nonnegative_seconds")
+    if any(left > right for left, right in zip(schedule, schedule[1:])):
+        raise CollectionFailure("schedule_must_be_nondecreasing")
+
     evidence: dict[str, Any] = {
         "schema_version": 1,
         "started_at": rfc3339(utc_now()),
@@ -362,38 +573,30 @@ def collect(args: argparse.Namespace) -> dict[str, Any]:
         "hard_gates": hard_gates,
         "runs": [],
         "warnings": [],
+        "schedule_seconds": schedule,
+        "runtime_snapshot_before": runtime_snapshot(containers),
         "test_resources": {"resume_id": resume_id, "resume_version_id": version_id},
     }
     atomic_json(args.output, evidence)
 
-    containers = {
-        "edge": args.edge_container,
-        "frontend": args.frontend_container,
-        "backend": args.backend_container,
-        "java": args.java_container,
-    }
     error_run_indexes: list[int] = []
+    gate_started = time.monotonic()
     for index in range(1, RUN_COUNT + 1):
+        wait_seconds = gate_started + schedule[index - 1] - time.monotonic()
+        if wait_seconds > 0:
+            time.sleep(wait_seconds)
         request_id = safe_request_id(prefix, f"analyze{index}")
         idempotency_key = f"release-gate-{secrets.token_urlsafe(32)}"
-        body, content_type = multipart(
-            {
-                "resume_version_id": version_id,
-                "job_text": job_text,
-                "save_to_history": "true",
-                "use_project_knowledge": "true",
-                "project_knowledge_top_k": "5",
-            }
-        )
         started = utc_now()
         start_monotonic = time.monotonic()
-        status, raw, headers, transport_error = client.call(
-            "/api/analyze",
-            method="POST",
-            body=body,
-            content_type=content_type,
+        status, raw, headers, transport_error, client_diagnostics = curl_analyze(
+            client,
+            resume_version_id=version_id,
+            job_file=args.job_file,
             request_id=request_id,
             idempotency_key=idempotency_key,
+            artifact_dir=args.artifact_dir,
+            timeout=args.timeout,
         )
         duration_ms = round((time.monotonic() - start_monotonic) * 1000, 3)
         ended = utc_now()
@@ -425,6 +628,23 @@ def collect(args: argparse.Namespace) -> dict[str, Any]:
         ]
         observation = normalization[-1] if len(normalization) == 1 else {}
         completion = backend_completed[-1] if len(backend_completed) == 1 else {}
+
+        edge_access = [
+            value
+            for value in json_lines(raw_logs["edge"])
+            if value.get("message") == "nginx_access"
+            and value.get("layer") == "edge"
+            and value.get("request_id") == request_id
+        ]
+        frontend_access = [
+            value
+            for value in json_lines(raw_logs["frontend"])
+            if value.get("message") == "nginx_access"
+            and value.get("layer") == "frontend"
+            and value.get("request_id") == request_id
+        ]
+        edge_observation = edge_access[-1] if len(edge_access) == 1 else {}
+        frontend_observation = frontend_access[-1] if len(frontend_access) == 1 else {}
 
         java_values = json_lines(raw_logs["java"])
         java_completed = matching(java_values, request_id, "http_request_completed")
@@ -513,6 +733,30 @@ def collect(args: argparse.Namespace) -> dict[str, Any]:
             "relevant_errors": relevant_errors,
             "persistent_runtime_error": False,
             "warnings": warnings,
+            "edge_access_observation_present": len(edge_access) == 1,
+            "edge_status": nginx_number(edge_observation.get("status")),
+            "edge_upstream_status": nginx_number(edge_observation.get("upstream_status")),
+            "edge_request_time_ms": nginx_number(
+                edge_observation.get("request_time"), milliseconds=True
+            ),
+            "edge_upstream_response_time_ms": nginx_number(
+                edge_observation.get("upstream_response_time"), milliseconds=True
+            ),
+            "edge_bytes_sent": nginx_number(edge_observation.get("bytes_sent")),
+            "frontend_access_observation_present": len(frontend_access) == 1,
+            "frontend_status": nginx_number(frontend_observation.get("status")),
+            "frontend_upstream_status": nginx_number(
+                frontend_observation.get("upstream_status")
+            ),
+            "frontend_request_time_ms": nginx_number(
+                frontend_observation.get("request_time"), milliseconds=True
+            ),
+            "frontend_upstream_response_time_ms": nginx_number(
+                frontend_observation.get("upstream_response_time"), milliseconds=True
+            ),
+            "frontend_bytes_sent": nginx_number(frontend_observation.get("bytes_sent")),
+            "backend_response_completion_ms": completion.get("duration_ms"),
+            **client_diagnostics,
         }
         evidence["runs"].append(run)
         atomic_json(args.output, evidence)
@@ -520,6 +764,8 @@ def collect(args: argparse.Namespace) -> dict[str, Any]:
         # Preserve all evidence and stop immediately on a public availability
         # hard failure.  The evaluator will classify the partial group HARD_FAIL.
         if transport_error or not isinstance(status, int) or not 200 <= status < 300 or not complete:
+            evidence["hard_failure_runtime_snapshot"] = runtime_snapshot(containers)
+            atomic_json(args.output, evidence)
             break
 
     if len(error_run_indexes) >= 2:
@@ -552,6 +798,11 @@ def parser() -> argparse.ArgumentParser:
     value.add_argument("--edge-container", required=True)
     value.add_argument("--timeout", type=float, default=240.0)
     value.add_argument("--latency-warning-ms", type=float, default=500.0)
+    value.add_argument(
+        "--schedule-seconds",
+        default="0,0,0,0,0",
+        help="Five nondecreasing offsets from gate start, for example 0,30,60,120,240",
+    )
     return value
 
 

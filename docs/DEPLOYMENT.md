@@ -151,7 +151,10 @@ that positively records every hard gate. The collector:
 - rebuilds and uses Project Knowledge;
 - executes exactly five Analyze requests with unique request/idempotency keys;
 - verifies complete output, RAG, History, monitoring trace, Backend final HTTP
-  status, Java outcome/duration/fallback, and all four log scans; and
+  status, Java outcome/duration/fallback, Edge/Frontend access observations,
+  and all four log scans;
+- records curl exit code and raw stderr, HTTP status/bytes, connect,
+  start-transfer, and total timing without retaining response bodies; and
 - writes content-free JSON evidence plus mode-0600 bounded layer logs.
 
 Only `PASS` or `PASS_WITH_WARNING` permits cutover. Clean all isolated
@@ -164,9 +167,10 @@ Update only the immutable application image references and release version.
 Render the exact established production Compose file order. Do not run a
 migration or recreate the database. Recreate Backend, Worker, and Outbox
 consistently from the same v2.2.0 Python digest, then Frontend from the reviewed
-v2.2.0 digest.
+v2.2.0 digest. Recreate Edge from that same reviewed Frontend digest when the
+release Compose declares it, after Frontend is healthy.
 
-Do not recreate PostgreSQL, Redis, Java, or Edge/Nginx. Preserve the Java
+Do not recreate PostgreSQL, Redis, or Java. Preserve the Java
 project, digest, key, private network, policy `jd-normalization-v1`, dictionary
 `skills-v1`, and all established production overrides.
 
@@ -182,6 +186,10 @@ record all hard gates again. Preserve the unique `X-Request-ID`, timestamps,
 HTTP status, response completeness/hash/size, end-to-end duration, Java
 duration/outcome/fallback, History and metrics persistence, relevant errors,
 and bounded Edge/Frontend/Backend/Java logs for every run.
+
+Use nondecreasing gate offsets such as `0,30,60,120,240` seconds so acceptance
+samples the immediate cutover and the following stabilization window rather
+than sending all requests back-to-back.
 
 - `PASS` becomes `GO`.
 - `PASS_WITH_WARNING` becomes `GO_WITH_WARNING` and must appear in the release
@@ -199,15 +207,21 @@ On the first Empty reply, stop further acceptance, retain evidence, and roll
 back. Before changing containers, preserve under a restricted directory:
 
 - `X-Request-ID` and UTC request window;
+- client exit code/raw stderr, HTTP status/bytes, connect/start-transfer/total
+  timing, and local/remote socket addresses;
 - Edge emitted access/error stream and connection-close evidence;
 - Frontend emitted access/error stream;
 - Backend correlated log and final HTTP status, if any; and
 - Java correlated log, status, and duration, if any.
 
-The existing runtime configuration may not emit positive Nginx access entries;
-an empty captured access stream must itself be retained and must never be used
-to downgrade the Empty reply. Do not change production Nginx/runtime behavior
-during this policy-only release.
+During a controlled acceptance window, enable a body-free JSON Nginx access
+format at Edge and Frontend that records only method/URI without query string,
+request ID, status/upstream status, request/upstream response time, and bytes
+sent. Never log request bodies, cookies, authorization/CSRF headers, tokens, or
+keys. Require one correlated Edge and Frontend access observation per successful
+Analyze. Also preserve a safe Docker inspect snapshot containing container
+IDs/start times/images/restart/OOM/health and network IPs. Restore the reviewed
+normal logging configuration after GO, or from rollback assets after failure.
 
 ## Test-data cleanup
 

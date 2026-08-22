@@ -142,6 +142,16 @@ def evaluate(evidence: dict[str, Any]) -> GateResult:
         for layer in ("edge", "frontend", "backend", "java"):
             if run.get(f"{layer}_log_scanned") is not True:
                 hard_failures.append(f"{prefix}:{layer}_log_scan_failed")
+        for layer in ("edge", "frontend"):
+            if run.get(f"{layer}_access_observation_present") is not True:
+                hard_failures.append(f"{prefix}:{layer}_access_observation_missing")
+            if run.get(f"{layer}_status") != status:
+                hard_failures.append(f"{prefix}:{layer}_status_mismatch")
+            if run.get(f"{layer}_upstream_status") != status:
+                hard_failures.append(f"{prefix}:{layer}_upstream_status_mismatch")
+            bytes_sent = run.get(f"{layer}_bytes_sent")
+            if not isinstance(bytes_sent, (int, float)) or isinstance(bytes_sent, bool) or bytes_sent <= 0:
+                hard_failures.append(f"{prefix}:{layer}_bytes_sent_missing")
         if run.get("persistent_runtime_error") is True:
             hard_failures.append(f"{prefix}:persistent_runtime_error")
 
