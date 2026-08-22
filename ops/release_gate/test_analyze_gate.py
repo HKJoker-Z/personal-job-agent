@@ -4,10 +4,18 @@ import copy
 import unittest
 
 from ops.release_gate.analyze_gate import HARD_GATE_KEYS, evaluate
+from ops.release_gate.collect_analyze import (
+    PRODUCTION_DIRECT_PATH,
+    direct_curl_options,
+    direct_request_environment,
+    production_target,
+    proxy_environment_names,
+)
 
 
 def passing_evidence() -> dict[str, object]:
     return {
+        "acceptance_path": "candidate-public-equivalent",
         "hard_gates": {key: True for key in HARD_GATE_KEYS},
         "runs": [
             {
@@ -48,7 +56,116 @@ def passing_evidence() -> dict[str, object]:
     }
 
 
+def production_direct_evidence() -> dict[str, object]:
+    evidence = passing_evidence()
+    evidence["acceptance_path"] = PRODUCTION_DIRECT_PATH
+    direct = {
+        "target_hostname": "203.0.113.20",
+        "target_port": 8443,
+        "target_resolved_ips": ["203.0.113.20"],
+        "request_proxy_environment_removed": True,
+        "direct_interface": "eth0",
+        "target_source_ip": "10.0.0.4",
+        "local_ip": "10.0.0.4",
+        "direct_local_source_verified": True,
+        "route_interface": "eth0",
+        "route_source_ip": "10.0.0.4",
+        "direct_route_verified": True,
+        "remote_ip": "203.0.113.20",
+        "remote_port": 8443,
+        "http_status": 200,
+        "response_bytes": 128,
+        "https_scheme": True,
+        "tls_verified": True,
+        "direct_path_verified": True,
+    }
+    health_probe = dict(direct, path="/api/health")
+    ready_probe = dict(direct, path="/api/ready")
+    evidence["direct_path_probes"] = [health_probe, ready_probe]
+    for run in evidence["runs"]:
+        run.update(
+            direct_path_required=True,
+            direct_path_verified=True,
+            request_proxy_environment_removed=True,
+            direct_interface="eth0",
+            target_source_ip="10.0.0.4",
+            client_local_ip="10.0.0.4",
+            direct_local_source_verified=True,
+            route_interface="eth0",
+            route_source_ip="10.0.0.4",
+            direct_route_verified=True,
+            client_remote_ip="203.0.113.20",
+            client_remote_port=8443,
+            target_hostname="203.0.113.20",
+            target_port=8443,
+            target_resolved_ips=["203.0.113.20"],
+        )
+    return evidence
+
+
 class AnalyzeReleaseGateTests(unittest.TestCase):
+    def test_https_proxy_is_bypassed_for_exact_production_host(self):
+        environment = {
+            "PATH": "/usr/bin",
+            "HTTPS_PROXY": "http://127.0.0.1:7890",
+        }
+        host, port = production_target("https://203.0.113.20:8443")
+        self.assertEqual((host, port), ("203.0.113.20", 8443))
+        self.assertEqual(
+            direct_curl_options(host, "eth0"),
+            ["--noproxy", "203.0.113.20", "--interface", "eth0"],
+        )
+        self.assertNotIn("HTTPS_PROXY", direct_request_environment(environment))
+
+    def test_missing_no_proxy_does_not_disable_scoped_bypass(self):
+        environment = {"HTTPS_PROXY": "http://127.0.0.1:7890", "PATH": "/usr/bin"}
+        self.assertNotIn("NO_PROXY", environment)
+        self.assertEqual(direct_curl_options("prod.example"), ["--noproxy", "prod.example"])
+        self.assertEqual(direct_request_environment(environment), {"PATH": "/usr/bin"})
+
+    def test_uppercase_and_lowercase_proxy_variables_are_removed(self):
+        environment = {
+            "HTTP_PROXY": "http://127.0.0.1:7890",
+            "HTTPS_PROXY": "http://127.0.0.1:7890",
+            "ALL_PROXY": "socks5://127.0.0.1:7891",
+            "NO_PROXY": "localhost",
+            "http_proxy": "http://127.0.0.1:7890",
+            "https_proxy": "http://127.0.0.1:7890",
+            "all_proxy": "socks5://127.0.0.1:7891",
+            "no_proxy": "localhost",
+            "SAFE": "kept",
+        }
+        self.assertEqual(set(proxy_environment_names(environment)), set(environment) - {"SAFE"})
+        self.assertEqual(direct_request_environment(environment), {"SAFE": "kept"})
+
+    def test_loopback_remote_socket_is_production_hard_fail(self):
+        evidence = production_direct_evidence()
+        evidence["runs"][0]["client_remote_ip"] = "127.0.0.1"
+        evidence["runs"][0]["client_remote_port"] = 7890
+        result = evaluate(evidence)
+        self.assertEqual(result.verdict, "HARD_FAIL")
+        self.assertTrue(
+            any("remote_is_loopback_proxy" in failure for failure in result.hard_failures)
+        )
+
+    def test_resolved_production_remote_socket_is_direct_path_pass(self):
+        result = evaluate(production_direct_evidence())
+        self.assertEqual(result.verdict, "PASS")
+        self.assertTrue(result.release_allowed)
+
+    def test_tun_local_source_is_production_hard_fail(self):
+        evidence = production_direct_evidence()
+        evidence["runs"][0]["client_local_ip"] = "198.18.0.1"
+        evidence["runs"][0]["route_interface"] = "Meta"
+        evidence["runs"][0]["route_source_ip"] = "198.18.0.1"
+        evidence["runs"][0]["direct_local_source_verified"] = False
+        evidence["runs"][0]["direct_route_verified"] = False
+        result = evaluate(evidence)
+        self.assertEqual(result.verdict, "HARD_FAIL")
+        self.assertTrue(
+            any("local_source_not_bound_interface" in item for item in result.hard_failures)
+        )
+
     def test_zero_of_five_fallback_is_pass(self):
         result = evaluate(passing_evidence())
         self.assertEqual(result.verdict, "PASS")

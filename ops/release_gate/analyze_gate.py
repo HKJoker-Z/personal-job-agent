@@ -9,6 +9,7 @@ applies the statistical Java fallback policy documented in DEPLOYMENT.md.
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import json
 import os
 from dataclasses import asdict, dataclass
@@ -17,6 +18,7 @@ from typing import Any, Iterable
 
 
 RUN_COUNT = 5
+PRODUCTION_DIRECT_PATH = "production-actual-public-direct"
 
 # Missing evidence is a hard failure.  Callers must positively attest every
 # invariant; a successful Analyze response cannot bypass an infrastructure,
@@ -67,10 +69,94 @@ def _is_2xx(value: Any) -> bool:
     return isinstance(value, int) and not isinstance(value, bool) and 200 <= value < 300
 
 
+def _direct_remote_is_target(value: dict[str, Any]) -> tuple[bool, str | None]:
+    remote_ip = value.get("client_remote_ip", value.get("remote_ip"))
+    if not isinstance(remote_ip, str) or not remote_ip:
+        return False, "remote_ip_missing"
+    try:
+        address = ipaddress.ip_address(remote_ip)
+    except ValueError:
+        return False, "remote_ip_invalid"
+    if address.is_loopback:
+        return False, "remote_is_loopback_proxy"
+    resolved = value.get("target_resolved_ips")
+    if not isinstance(resolved, list) or not resolved:
+        return False, "resolved_target_missing"
+    try:
+        resolved_addresses = {ipaddress.ip_address(item) for item in resolved}
+    except (TypeError, ValueError):
+        return False, "resolved_target_invalid"
+    if address not in resolved_addresses:
+        return False, "remote_not_resolved_target"
+    remote_port = value.get("client_remote_port", value.get("remote_port"))
+    target_port = value.get("target_port")
+    try:
+        if int(remote_port) != int(target_port):
+            return False, "remote_port_mismatch"
+    except (TypeError, ValueError):
+        return False, "remote_port_missing"
+    local_ip = value.get("client_local_ip", value.get("local_ip"))
+    target_source_ip = value.get("target_source_ip")
+    if local_ip != target_source_ip or value.get("direct_local_source_verified") is not True:
+        return False, "local_source_not_bound_interface"
+    try:
+        local_address = ipaddress.ip_address(str(local_ip))
+    except ValueError:
+        return False, "local_source_invalid"
+    if local_address.is_loopback or local_address.is_unspecified:
+        return False, "local_source_not_routable"
+    direct_interface = value.get("direct_interface")
+    if (
+        not isinstance(direct_interface, str)
+        or not direct_interface
+        or direct_interface == "lo"
+        or value.get("route_interface") != direct_interface
+        or value.get("route_source_ip") != target_source_ip
+        or value.get("direct_route_verified") is not True
+    ):
+        return False, "route_not_bound_interface"
+    return True, None
+
+
 def evaluate(evidence: dict[str, Any]) -> GateResult:
     hard_failures: list[str] = []
     failures: list[str] = []
     warnings: list[str] = []
+    direct_path_required = evidence.get("acceptance_path") == PRODUCTION_DIRECT_PATH
+
+    if direct_path_required:
+        probes = evidence.get("direct_path_probes")
+        if not isinstance(probes, list) or len(probes) != 2:
+            hard_failures.append("production_direct_probe_missing")
+        else:
+            probe_paths = {
+                probe.get("path") for probe in probes if isinstance(probe, dict)
+            }
+            if probe_paths != {"/api/health", "/api/ready"}:
+                hard_failures.append("production_direct_probe_paths_invalid")
+            for index, probe in enumerate(probes, start=1):
+                prefix = f"direct_probe_{index}"
+                if not isinstance(probe, dict):
+                    hard_failures.append(f"{prefix}:evidence_invalid")
+                    continue
+                socket_valid, socket_failure = _direct_remote_is_target(probe)
+                if probe.get("direct_path_verified") is not True or not socket_valid:
+                    hard_failures.append(
+                        f"{prefix}:direct_path_not_verified:{socket_failure or 'assertion_failed'}"
+                    )
+                if probe.get("request_proxy_environment_removed") is not True:
+                    hard_failures.append(f"{prefix}:proxy_environment_not_removed")
+                if probe.get("https_scheme") is not True or probe.get("tls_verified") is not True:
+                    hard_failures.append(f"{prefix}:https_tls_not_verified")
+                if not _is_2xx(probe.get("http_status")):
+                    hard_failures.append(f"{prefix}:public_non_2xx")
+                response_bytes = probe.get("response_bytes")
+                if (
+                    not isinstance(response_bytes, (int, float))
+                    or isinstance(response_bytes, bool)
+                    or response_bytes <= 0
+                ):
+                    hard_failures.append(f"{prefix}:response_empty")
 
     hard_gates = evidence.get("hard_gates")
     if not isinstance(hard_gates, dict):
@@ -104,6 +190,17 @@ def evaluate(evidence: dict[str, Any]) -> GateResult:
 
         if run.get("public_https") is not True:
             hard_failures.append(f"{prefix}:not_public_https")
+
+        if direct_path_required:
+            socket_valid, socket_failure = _direct_remote_is_target(run)
+            if run.get("direct_path_required") is not True:
+                hard_failures.append(f"{prefix}:direct_path_requirement_missing")
+            if run.get("direct_path_verified") is not True or not socket_valid:
+                hard_failures.append(
+                    f"{prefix}:direct_path_not_verified:{socket_failure or 'assertion_failed'}"
+                )
+            if run.get("request_proxy_environment_removed") is not True:
+                hard_failures.append(f"{prefix}:proxy_environment_not_removed")
 
         transport_error = run.get("transport_error")
         empty_reply = run.get("empty_reply") is True or transport_error == "empty_reply"

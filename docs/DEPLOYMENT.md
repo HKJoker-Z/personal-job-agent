@@ -19,7 +19,7 @@ document alone does not change the executable policy.
 | Source | Enforcement |
 |---|---|
 | `ops/release_gate/analyze_gate.py` | Automated five-run Analyze decision: `PASS`, `PASS_WITH_WARNING`, `FAIL`, or `HARD_FAIL` |
-| `ops/release_gate/collect_analyze.py` | Automated production-equivalent HTTPS requests, response validation, History/metrics checks, Java fallback/duration correlation, and bounded Edge/Frontend/Backend/Java log capture |
+| `ops/release_gate/collect_analyze.py` | Automated production-equivalent HTTPS requests, scoped Production proxy bypass/direct-socket assertion, response validation, History/metrics checks, Java fallback/duration correlation, and bounded Edge/Frontend/Backend/Java log capture |
 | `ops/release_gate/test_analyze_gate.py` | Automated policy regressions, also run by `.github/workflows/ci.yml` |
 | `scripts/assert-release-health.sh`, `scripts/verify-images.sh`, `scripts/test-v201-production-runtime.sh` | Shell-enforced version, image, Compose, topology, and runtime gates |
 | `scripts/backup-v2.sh`, `scripts/verify-v2-backup.sh`, `scripts/restore-v2.sh`, `scripts/postgres16-restore-regression.sh` | Shell/Python-enforced backup, validation, and PostgreSQL 16 restore gates |
@@ -40,6 +40,10 @@ rollback immediately.
 
 - any Public HTTPS Analyze empty reply, connection failure, non-2xx response,
   incomplete/corrupt response, or Backend final-status mismatch;
+- any Production acceptance probe or Analyze whose client remote socket is
+  loopback, a host proxy, not a freshly resolved Production target IP, uses
+  the wrong destination port, or whose local source/route is not the reviewed
+  physical interface; missing direct/TLS evidence is also HARD FAIL;
 - authentication, authorization, trusted-origin/CSRF, secret, ownership, or
   other security-boundary failure;
 - database corruption, data-integrity failure, History/metrics persistence
@@ -142,7 +146,8 @@ ownership boundaries, preservation of the related Analysis/History and Resume,
 and preservation of every unrelated Application. Verify pre-wrapped Resume
 snapshots and Applications layout at 375 px, 768 px, and desktop widths.
 
-Then run `ops/release_gate/collect_analyze.py` with the checked-in synthetic
+Then run `ops/release_gate/collect_analyze.py` with its default
+`candidate-public-equivalent` semantics, the checked-in synthetic
 Resume/JD fixtures, a mode-0600 password file for the isolated account, the
 candidate public HTTPS URL/CA, exact candidate container names, and a JSON file
 that positively records every hard gate. The collector:
@@ -180,12 +185,39 @@ starting acceptance.
 
 ## Production acceptance
 
-Use a newly created isolated production test account and the same collector,
-fixtures, five-run policy, and Public HTTPS path used for candidate. Positively
-record all hard gates again. Preserve the unique `X-Request-ID`, timestamps,
+Use a newly created isolated production test account and the same collector and
+fixtures, but explicitly set
+`--acceptance-path production-actual-public-direct`. Candidate remains a
+public-equivalent isolated path; Production is the actual public direct path,
+and reports must not conflate them. Positively record all hard gates again.
+
+Before authentication or Analyze, the collector executes direct HTTPS
+`/api/health` and `/api/ready` probes. It safely parses the hostname and port
+from the Production URL, resolves the target, applies curl
+`--noproxy <exact-target-host> --interface <reviewed-physical-interface>`, and
+removes uppercase/lowercase `HTTP_PROXY`,
+`HTTPS_PROXY`, `ALL_PROXY`, and `NO_PROXY` only from each Production curl child.
+The required `--direct-interface` is explicit (for this host, `eth0`) rather
+than inferred from a default route that Mihomo TUN may replace. The Production
+urllib opener also has proxies disabled and binds to that interface's reviewed
+global IPv4 source address. It does not change the host environment, Mihomo,
+Candidate networking, or unrelated internet/release commands. Do not depend on
+`NO_PROXY` being correct by coincidence and never silently retry through a
+proxy.
+
+Require both probes and every Analyze to report HTTPS/TLS success and a remote
+socket matching a freshly resolved non-loopback Production destination and the
+URL port. The local socket must equal the reviewed interface source and a
+source-specific route lookup must return that interface/source. `127.0.0.1`,
+`localhost`, `127.0.0.1:7890`, a TUN source/route such as `198.18.0.1`/`Meta`,
+another proxy, a missing socket, or a remote IP outside the resolved target set
+is immediate `HARD_FAIL` before/within acceptance.
+
+Preserve the unique `X-Request-ID`, timestamps,
 HTTP status, response completeness/hash/size, end-to-end duration, Java
 duration/outcome/fallback, History and metrics persistence, relevant errors,
-and bounded Edge/Frontend/Backend/Java logs for every run.
+bounded Edge/Frontend/Backend/Java logs, resolved destination, and local/remote
+socket for every run.
 
 Use nondecreasing gate offsets such as `0,30,60,120,240` seconds so acceptance
 samples the immediate cutover and the following stabilization window rather
