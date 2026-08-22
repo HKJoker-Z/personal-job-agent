@@ -23,7 +23,7 @@ import psycopg
 from psycopg import sql
 
 
-APPLICATION_VERSION = "2.1.0"
+APPLICATION_VERSION = "2.2.0"
 EXPECTED_POSTGRES_MAJOR = 16
 MANIFEST_VERSION = 2
 ARCHIVE_FORMAT = "custom"

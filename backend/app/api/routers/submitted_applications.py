@@ -1,4 +1,4 @@
-"""Version 2.1.0 submitted Application creation endpoints."""
+"""Version 2.2.0 submitted Application endpoints."""
 
 from __future__ import annotations
 

@@ -58,7 +58,7 @@ services:
     image: ${CANDIDATE_BACKEND_IMAGE:?candidate backend image is required}
     environment:
       APP_ENV: test
-      APP_VERSION: "2.1.0"
+      APP_VERSION: "2.2.0"
       APP_DATABASE_PATH: /tmp/candidate-legacy-test.db
       TEST_DATABASE_URL: postgresql+psycopg://${CANDIDATE_POSTGRES_USER}:${CANDIDATE_POSTGRES_PASSWORD}@postgres:5432/${CANDIDATE_POSTGRES_DB}
       PROJECT_KNOWLEDGE_PATH: /app/seed/PROJECT_KNOWLEDGE.md

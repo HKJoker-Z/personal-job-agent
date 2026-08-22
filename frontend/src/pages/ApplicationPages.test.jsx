@@ -6,7 +6,7 @@ import { ApplicationsPage } from "./ApplicationPages";
 
 vi.mock("../api/client", () => ({ apiJson: vi.fn() }));
 
-describe("Version 2.1.0 Applications", () => {
+describe("Version 2.2.0 Applications", () => {
   beforeEach(() => {
     let applicationExists = true;
     apiJson.mockReset();
@@ -68,6 +68,22 @@ describe("Version 2.1.0 Applications", () => {
     ));
     expect(await screen.findByText("No Applications yet.")).toBeInTheDocument();
     expect(screen.getByRole("status")).toHaveTextContent("Application deleted successfully.");
+    confirm.mockRestore();
+  });
+
+  it("keeps an Application when deletion is cancelled", async () => {
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    render(<ApplicationsPage />);
+    await screen.findByText("Example Co");
+
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+
+    expect(confirm).toHaveBeenCalledWith(expect.stringContaining("Company Name: Example Co"));
+    expect(confirm).toHaveBeenCalledWith(expect.stringContaining("Job Title: Engineer"));
+    expect(apiJson).not.toHaveBeenCalledWith(
+      "/api/applications/app-1", { method: "DELETE" }
+    );
+    expect(screen.getByText("Example Co")).toBeInTheDocument();
     confirm.mockRestore();
   });
 });
