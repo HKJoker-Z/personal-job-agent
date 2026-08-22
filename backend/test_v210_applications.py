@@ -6,9 +6,13 @@ from pathlib import Path
 from unittest.mock import patch
 from uuid import UUID
 
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 from pydantic import ValidationError
 from sqlalchemy import func, select
 
+from app.api.dependencies import current_user, request_db
+from app.api.routers import submitted_applications
 from app.applications.schemas import ApplicationCreate
 from app.applications.service import ApplicationConflict, ApplicationService
 from app.db.base import Base
@@ -127,6 +131,70 @@ class ApplicationsV210Test(unittest.TestCase):
     def test_manual_application_requires_company_and_job_title(self):
         with self.assertRaises(ValidationError):
             ApplicationCreate(job_description="Optional")
+
+    def test_delete_api_physically_deletes_only_the_application(self):
+        now = utc_now()
+        analysis = ApplicationRecord(
+            owner_user_id=self.user.id,
+            created_at=now,
+            updated_at=now,
+            company_name="Delete Example",
+            job_title="Platform Engineer",
+        )
+        history = ApplicationRecord(
+            owner_user_id=self.user.id,
+            created_at=now,
+            updated_at=now,
+            company_name="History Example",
+            job_title="Earlier Role",
+        )
+        resume = Resume(user_id=self.user.id, title="Primary", is_primary=True)
+        self.db.add_all([analysis, history, resume])
+        self.db.flush()
+        version = ResumeVersion(
+            resume_id=resume.id,
+            version_number=1,
+            source_type="manual",
+            schema_version=1,
+            content_json={"schema_version": 1},
+            parsed_text="Python\n\nExperience\nBuilt APIs",
+            change_summary="Initial",
+            status="final",
+            created_by=self.user.id,
+        )
+        self.db.add(version)
+        self.db.flush()
+        created = ApplicationService(self.db, self.user.id).create_submitted({
+            "company_name": analysis.company_name,
+            "job_title": analysis.job_title,
+            "job_description": "Build reliable systems",
+            "source_analysis_id": analysis.id,
+            "resume_version_id": version.id,
+        })["application"]
+        application_id = UUID(created["id"])
+        analysis_id, history_id = analysis.id, history.id
+        resume_id, version_id = resume.id, version.id
+        self.db.commit()
+
+        app = FastAPI()
+        app.include_router(submitted_applications.router)
+        app.dependency_overrides[request_db] = lambda: self.db
+        app.dependency_overrides[current_user] = lambda: self.user
+        with TestClient(app) as client:
+            response = client.delete(f"/api/applications/{application_id}")
+
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json(), {
+            "deleted": True,
+            "id": str(application_id),
+        })
+        self.db.commit()
+        self.db.expire_all()
+        self.assertIsNone(self.db.get(Application, application_id))
+        self.assertIsNotNone(self.db.get(ApplicationRecord, analysis_id))
+        self.assertIsNotNone(self.db.get(ApplicationRecord, history_id))
+        self.assertIsNotNone(self.db.get(Resume, resume_id))
+        self.assertIsNotNone(self.db.get(ResumeVersion, version_id))
 
 
 if __name__ == "__main__":

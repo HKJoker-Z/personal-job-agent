@@ -31,7 +31,7 @@ def _is_current_application_api(path: str, method: str) -> bool:
         return method in {"GET", "POST"}
     if path == "/api/applications/from-analysis":
         return method == "POST"
-    if method != "GET" or not path.startswith("/api/applications/"):
+    if method not in {"GET", "DELETE"} or not path.startswith("/api/applications/"):
         return False
     try:
         UUID(path.removeprefix("/api/applications/"))

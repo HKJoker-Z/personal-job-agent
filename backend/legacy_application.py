@@ -3011,7 +3011,6 @@ def patch_next_action_decision(
 
 
 @app.delete("/api/history/{application_id}")
-@app.delete("/api/applications/{application_id}")
 async def delete_application(application_id: str, request: Request) -> dict[str, Any]:
     from uuid import UUID
 

@@ -201,6 +201,11 @@ class ApplicationService:
         self._audit("application.archived", application.id)
         return serialize_application(application)
 
+    def delete(self, application_id: UUID) -> None:
+        application = self._application(application_id, for_update=True)
+        self.db.delete(application)
+        self.db.flush()
+
     def restore(self, application_id: UUID, expected_revision: int) -> dict[str, object]:
         application = self.repository.get(self.owner_id, application_id, include_archived=True, for_update=True)
         if not application:
