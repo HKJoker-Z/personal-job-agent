@@ -1,0 +1,66 @@
+{
+  "schema_version": 1,
+  "header": {
+    "name": "Synthetic Release Candidate",
+    "location": "Test City",
+    "headline": "Senior Platform Engineer"
+  },
+  "summary": "Platform engineer with ten years of synthetic experience designing reliable API platforms, containerized services, and PostgreSQL-backed systems. Leads delivery from architecture through production operations, with emphasis on authentication, authorization, privacy, observability, incident response, disaster recovery, and measurable service reliability. Builds Python and Java services, React interfaces, background workers, retrieval systems, and deployment automation. This resume contains no real person, employer, account, credential, or customer information and exists only for isolated release acceptance.",
+  "sections": [
+    {
+      "type": "experience",
+      "title": "Experience",
+      "items": [
+        {
+          "company": "Synthetic Systems Laboratory",
+          "role": "Senior Platform Engineer",
+          "start_date": "2021-01",
+          "end_date": "present",
+          "description": "Designed and operated FastAPI services backed by PostgreSQL 16 and Redis. Introduced structured request correlation across HTTPS edge, Nginx frontend, Python backend, asynchronous workers, and Java normalization services. Implemented immutable container releases, health and readiness gates, zero-secret observability, bounded provider deadlines, deterministic fallbacks, idempotent request handling, and isolated candidate environments. Built backup verification and restore rehearsals that validate schema revisions, row counts, checksums, ownership, and rollback assets before production cutover. Improved service-level monitoring using workflow duration metrics, error categorization, RAG retrieval telemetry, and safe audit records. Led incident response exercises for connection resets, timeouts, container restarts, OOM events, database unavailability, and partial upstream responses."
+        },
+        {
+          "company": "Example Cloud Engineering",
+          "role": "Platform Engineer",
+          "start_date": "2017-01",
+          "end_date": "2020-12",
+          "description": "Developed Python automation and Java microservices deployed with Docker Compose and CI workflows. Tuned PostgreSQL queries and indexes, managed Alembic and Flyway migrations, maintained Redis-backed task queues, and created integration tests for authentication, authorization, data ownership, and REST API contracts. Delivered React applications with responsive layouts and secure proxy headers. Established release runbooks with immutable digests, capacity checks, dependency scanning, database backups, restore validation, candidate smoke tests, production acceptance, and configuration-only rollback procedures."
+        }
+      ]
+    },
+    {
+      "type": "projects",
+      "title": "Selected Projects",
+      "items": [
+        {
+          "name": "Synthetic Job Analysis Platform",
+          "description": "Production-style job analysis platform using FastAPI, PostgreSQL, Redis, Java normalization, project-knowledge retrieval, metrics, authentication, History persistence, and immutable containers. Added request-scoped evidence collection and statistical release gates that distinguish hard availability failures from bounded degraded operation."
+        },
+        {
+          "name": "Recovery Validation Harness",
+          "description": "Automated PostgreSQL backup verification and isolated restore tests with exact revision checks, database inventory comparison, file hashes, protected rollback snapshots, container health validation, and auditable release reports."
+        }
+      ]
+    },
+    {
+      "type": "skills",
+      "title": "Skills",
+      "items": [
+        {
+          "name": "Python, FastAPI, SQLAlchemy, PostgreSQL, Redis, Java, Spring Boot, Docker, Docker Compose, Nginx, HTTPS, React, CI/CD, GitHub Actions, Alembic, Flyway, RAG, observability, backup and restore, incident response, security engineering"
+        }
+      ]
+    },
+    {
+      "type": "education",
+      "title": "Education",
+      "items": [
+        {
+          "institution": "Synthetic Institute of Technology",
+          "degree": "Bachelor of Engineering",
+          "field": "Computer Science",
+          "graduation_year": "2016"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,33 @@
+Senior Platform Engineer — Synthetic Release Acceptance
+
+Synthetic Systems Laboratory is seeking a Senior Platform Engineer to design, deliver, and operate reliable web services and internal platforms. This description is fictional and contains no real company, customer, vacancy, or personal information. The engineer will own systems from architecture and implementation through production deployment, monitoring, incident response, backup, restore, and rollback.
+
+Responsibilities
+
+- Design and maintain Python services using FastAPI and SQLAlchemy, with clear API contracts, authentication, authorization, request correlation, idempotency, and safe failure behavior.
+- Build and operate PostgreSQL 16 data stores. Review schemas, Alembic migrations, indexes, query plans, transactions, foreign keys, ownership boundaries, backup manifests, restore validation, and data-retention procedures.
+- Integrate private Java and Spring Boot services over authenticated internal networks. Measure end-to-end and service latency, distinguish transient degraded operation from persistent failure, and preserve deterministic local fallback paths without weakening security checks.
+- Operate Redis-backed worker and outbox processes. Define health and readiness checks, detect stalled dispatchers, validate restart counts and OOM state, and maintain bounded resource usage.
+- Build immutable Docker images and Docker Compose releases. Verify OCI source, revision, version, digest parity, private network topology, restricted environment files, non-root execution, read-only filesystems, and rollback assets.
+- Maintain Nginx HTTPS edge and frontend proxy paths. Correlate requests across Edge, Frontend, Backend, and Java logs using a unique X-Request-ID. Investigate connection resets, premature closes, timeouts, empty responses, non-2xx responses, and incomplete JSON without exposing secrets or user content.
+- Create CI and release validation covering unit tests, integration tests, production-equivalent candidate tests, database backup and restore regression, application smoke tests, security boundaries, and immutable artifact verification.
+- Develop project-knowledge retrieval and RAG workflows with PostgreSQL full-text search, safe prompt construction, evidence mapping, grounding checks, metrics, and History persistence.
+- Partner with frontend engineers building React interfaces, including responsive Application views, safe destructive-action confirmation, Resume Snapshot rendering, and accessible feedback.
+- Lead operational reviews and incident response. Produce concise evidence-based release reports and preserve diagnostic artifacts when a hard release gate fails.
+
+Required qualifications
+
+- Strong production experience with Python, FastAPI, SQLAlchemy, PostgreSQL, Redis, Docker, Docker Compose, Nginx, HTTPS, Linux, Git, and CI/CD.
+- Experience building or integrating Java or Spring Boot services and reasoning about internal API authentication, connection pools, timeout budgets, latency distributions, and graceful degradation.
+- Practical knowledge of database consistency, transactional behavior, physical deletion validation, backup and restore testing, schema migration safety, and least-privilege access.
+- Ability to design structured observability using request IDs, metrics, health checks, readiness probes, safe logs, and actionable failure categories.
+- Demonstrated security judgment around authentication, authorization, CSRF, trusted origins, secret handling, immutable artifacts, network isolation, and production test-data cleanup.
+- Strong written communication for runbooks, release gates, rollback instructions, post-incident analysis, and technical decisions.
+
+Preferred qualifications
+
+- Experience with React, Vite, responsive UI testing, project-knowledge systems, retrieval-augmented generation, LLM provider integration, output validation, and deterministic fallback behavior.
+- Experience designing statistical acceptance criteria that preserve hard user-availability and data-safety gates while treating a single recovered transient event as a visible warning.
+- Familiarity with GitHub Actions, OCI metadata, container registries, PostgreSQL query optimization, Flyway, Alembic, and automated disaster-recovery rehearsals.
+
+Success in the first ninety days means delivering stable production services with healthy containers, zero unexpected restarts, no OOM events, complete HTTPS responses, correct data ownership, verified backups, repeatable restores, production-equivalent candidate evidence, and release reports that clearly distinguish PASS, PASS WITH WARNING, FAIL, and HARD FAIL.
