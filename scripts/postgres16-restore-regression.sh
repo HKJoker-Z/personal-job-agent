@@ -453,8 +453,8 @@ import os
 import sys
 import psycopg
 sys.path.insert(0, "/app/scripts")
-from v2_backup_restore import database_inventory, compare_database_inventories
-url = os.environ["DATABASE_URL"]
+from v2_backup_restore import database_inventory, compare_database_inventories, database_parts
+url, _, _ = database_parts("DATABASE_URL")
 before = database_inventory(url)
 assert before["schemas"]["public"]["owner"] == "pg_database_owner"
 with psycopg.connect(url, autocommit=True) as connection:
