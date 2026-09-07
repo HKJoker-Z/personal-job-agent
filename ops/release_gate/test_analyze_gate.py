@@ -104,6 +104,15 @@ def production_direct_evidence() -> dict[str, object]:
 
 
 class AnalyzeReleaseGateTests(unittest.TestCase):
+    def test_five_gib_disk_attestation_is_required(self):
+        evidence = passing_evidence()
+        evidence["hard_gates"]["root_capacity_5_gib"] = False
+        self.assertEqual(evaluate(evidence).verdict, "HARD_FAIL")
+        del evidence["hard_gates"]["root_capacity_5_gib"]
+        evidence["hard_gates"]["root_capacity_6_gib"] = True
+        self.assertEqual(evaluate(evidence).verdict, "HARD_FAIL")
+
+
     def test_https_proxy_is_bypassed_for_exact_production_host(self):
         environment = {
             "PATH": "/usr/bin",

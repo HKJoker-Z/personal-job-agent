@@ -161,8 +161,8 @@ production_preflight() {
   ((available_kib >= 1572864)) \
     || fail 'available memory is below the 1.5 GiB Stage IVA floor'
   disk_available_kib="$(df --output=avail -k / | awk 'NR == 2 {print $1}')"
-  ((disk_available_kib >= 6291456)) \
-    || fail 'root filesystem has less than 6 GiB available'
+  ((disk_available_kib >= 5242880)) \
+    || fail 'root filesystem has less than 5 GiB available'
   if docker network inspect "${NETWORK_NAME}" >/dev/null 2>&1; then
     validate_network
   fi

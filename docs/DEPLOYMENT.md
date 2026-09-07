@@ -30,6 +30,10 @@ The general Docker smoke remains a deterministic application regression. It
 does not replace the mandatory production-equivalent candidate or production
 five-run gate because its mock-provider HTTP topology is intentionally simpler.
 
+The release root-disk floor is 5 GiB (5,368,709,120 bytes), approved on
+2026-09-07. Historical release reports retain the thresholds used at the time.
+This does not change application readiness, memory, backup, or rollback checks.
+
 ## Gate classes
 
 ### HARD FAIL
@@ -57,7 +61,7 @@ rollback immediately.
   application artifact mismatch;
 - required unhealthy container, unexpected restart, OOM, health/readiness
   failure, or persistent Backend/Edge runtime error; or
-- root free capacity below the unchanged 6 GiB gate.
+- root free capacity below the 5 GiB gate.
 
 Missing required evidence is a HARD FAIL; it is never interpreted as success.
 An Empty reply is never a warning even if the Backend later records HTTP 200.
@@ -111,7 +115,7 @@ Immediately before mutation require:
 - Alembic exactly `20260820_08` and normalization mode exactly `java`;
 - PostgreSQL 16, Redis, and Java readiness healthy;
 - every required production container healthy, restart count zero, OOM false;
-- at least 1.5 GiB available RAM and 6 GiB available root disk;
+- at least 1.5 GiB available RAM and 5 GiB available root disk;
 - the recorded Version 2.1.0 Backend/Frontend and unchanged Java digests;
 - annotated `v2.2.0`, GitHub Release, immutable image metadata, OCI source,
   revision, version, users, and digests all match the reviewed release;

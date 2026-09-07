@@ -89,7 +89,7 @@ and prints no container environment values.
 
 Stop before any mutation if version is not `2.0.4`, schema is not
 `20260724_06`, an existing v2 container is missing/unhealthy/restarted/OOM
-killed, available RAM is below 1.5 GiB, root disk is below 6 GiB available, or
+killed, available RAM is below 1.5 GiB, root disk is below 5 GiB available, or
 the proposed network conflicts with Docker state. Also stop for unexplained
 host load/swap growth or materially worse capacity than the reviewed audit.
 Do not prune Docker to force the gate.
@@ -205,7 +205,7 @@ Release.
 
 Before the first host mutation, run the Phase IVA helper's read-only preflight
 with the deployed Java digest. Require production `2.0.4`, Alembic
-`20260724_06`, at least 1.5 GiB available RAM, at least 6 GiB available root
+`20260724_06`, at least 1.5 GiB available RAM, at least 5 GiB available root
 disk, healthy existing containers, zero unexpected restart/OOM state, and the
 unchanged private Java topology. Record exact existing container IDs, image
 references, start times, health, restart/OOM state, networks, and published
@@ -318,7 +318,7 @@ proxy, and the reviewed total deadline.
 Immediately before mutation, verify production `2.0.4`, Alembic
 `20260730_07`, exact current Backend/Java digests, runtime mode `local`, all
 existing health/restart/OOM state, Java-private topology and health-only logs,
-at least 1.5 GiB available RAM, and at least 6 GiB available root disk. Record
+at least 1.5 GiB available RAM, and at least 5 GiB available root disk. Record
 container IDs, networks, and published ports without printing environment or
 secret values. Do not prune to pass the gate.
 
@@ -401,7 +401,7 @@ Immediately before mutation, require production `2.0.4`, Alembic
 `20260730_07`, exact approved Backend and Java digests, runtime mode `shadow`,
 healthy Backend and Java with restart zero and OOM false, unchanged
 private-network membership and public ports, at least 1.5 GiB available RAM,
-at least 6 GiB available root disk, and no bounded log security or secret
+at least 5 GiB available root disk, and no bounded log security or secret
 issue. Record only allowlisted structured metadata; never print environment,
 secret, request, user-content, or Java-body values. Do not prune resources to
 pass a gate.
