@@ -134,6 +134,26 @@ isolated PostgreSQL 16 restore validation, Compose validation, and production
 runtime regression. This release has no migration: Alembic must be
 `20260820_08` before and after every candidate/cutover operation.
 
+For the guarded isolated PostgreSQL 16 restore, pass
+`--prepare-disposable-target --initialize-database-owner-schema`. The latter
+requires the archived public owner to be `pg_database_owner` and rejects a
+mapping of that role. After the existing identity/empty-target/RESTRICT checks,
+setup creates `public AUTHORIZATION pg_database_owner`; a private TOC list omits
+only that schema CREATE. Every other archive entry and the full inventory
+comparison remain active. This preserves PostgreSQL's database-owner semantics
+which `pg_restore --no-owner` would otherwise replace with the login role.
+Keep only the existing explicit application-role mappings for the isolated
+restore login. Do not use this option against production or map away an owner
+mismatch. Retain the successful inventory report and completion result.
+For upgrade preflight, pass `--expected-backup-application-version 2.2.0` to
+both `verify` and `restore`, from the independently confirmed production
+baseline. The source backup version must equal that explicit expectation; the
+candidate tool/release version remains 2.3.0 and is checked independently against
+the reviewed release source/OCI metadata. Omission retains exact tool-version
+matching for same-version restores. Never derive the expected source from the
+manifest itself. Format, checksums, provenance, PostgreSQL compatibility and
+inventory validation remain mandatory.
+
 ## Candidate
 
 Deploy the exact existing immutable v2.3.0 application images to the established

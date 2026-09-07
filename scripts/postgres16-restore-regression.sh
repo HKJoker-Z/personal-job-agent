@@ -435,7 +435,7 @@ RESTORE_STARTED=true
   --project-knowledge /work/restored-knowledge/PROJECT_KNOWLEDGE.md \
   --prepare-disposable-target \
   --allow-isolated-database-name-difference \
-  --allowed-owner-mapping pg_database_owner=postgres \
+  --initialize-database-owner-schema \
   --confirmation 'RESTORE V2 BACKUP'
 
 PUBLIC_SCHEMA_OWNER="$("${COMPOSE[@]}" exec -T target-db psql -U postgres \
@@ -444,8 +444,31 @@ PUBLIC_SCHEMA_OWNER="$("${COMPOSE[@]}" exec -T target-db psql -U postgres \
 PUBLIC_SCHEMA_ACL_IS_NULL="$("${COMPOSE[@]}" exec -T target-db psql -U postgres \
   -d "${TARGET_DATABASE}" -Atqc \
   "SELECT nspacl IS NULL FROM pg_namespace WHERE nspname='public'")"
-[[ "${PUBLIC_SCHEMA_OWNER}" == "postgres" ]]
+[[ "${PUBLIC_SCHEMA_OWNER}" == "pg_database_owner" ]]
 [[ "${PUBLIC_SCHEMA_ACL_IS_NULL}" == "t" ]]
+
+# A real owner mutation must still fail the unchanged inventory comparator.
+"${COMPOSE[@]}" run --rm -T target-tool python - <<'PYOWNER'
+import os
+import sys
+import psycopg
+sys.path.insert(0, "/app/scripts")
+from v2_backup_restore import database_inventory, compare_database_inventories
+url = os.environ["DATABASE_URL"]
+before = database_inventory(url)
+assert before["schemas"]["public"]["owner"] == "pg_database_owner"
+with psycopg.connect(url, autocommit=True) as connection:
+    try:
+        connection.execute("ALTER SCHEMA public OWNER TO postgres")
+        diff = compare_database_inventories(before, database_inventory(url))
+        assert diff["status"] == "failed" and diff["final_mismatch_count"] == 1, diff
+        assert diff["value_mismatch"][0]["path"] == "schemas.public.owner", diff
+    finally:
+        connection.execute("ALTER SCHEMA public OWNER TO pg_database_owner")
+assert compare_database_inventories(before, database_inventory(url))["final_mismatch_count"] == 0
+print("Real public owner mutation rejected; original isolated owner restored.")
+PYOWNER
+
 
 sudo -n cmp --silent "${TEST_ROOT}/files/synthetic-resume.txt" \
   "${TEST_ROOT}/restored-files/synthetic-resume.txt"
