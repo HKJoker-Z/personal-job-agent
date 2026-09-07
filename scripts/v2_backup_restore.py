@@ -12,6 +12,7 @@ import shutil
 import subprocess
 import sys
 import tarfile
+import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -887,7 +888,8 @@ def write_inventory_diff_report(
         raise ValueError("Inventory diff report parent cannot be a symlink.")
     report = {
         "status": diff["status"],
-        "validation_code": "POSTGRES_RESTORE_INVENTORY_MISMATCH",
+        "validation_code": ("POSTGRES_RESTORE_INVENTORY_MISMATCH"
+                            if diff["final_mismatch_count"] else "POSTGRES_RESTORE_INVENTORY_MATCH"),
         "archive_sha256": manifest["archive_sha256"],
         "pg_restore_exit_code": 0,
         "source_inventory": source,
@@ -1117,6 +1119,35 @@ def prepare_restore_target(
         return before
 
 
+def initialize_disposable_public_schema(
+    database_url: str, toc: str, source_owner: str, owner_mapping: dict[str, str]
+) -> str:
+    """Recreate the PG16 database-owner schema, retaining every other TOC entry.
+
+    Called only after guarded empty-target preparation. --no-owner otherwise
+    recreates public as the login role, losing its database-owner semantics.
+    """
+    if source_owner != "pg_database_owner" or source_owner in owner_mapping:
+        raise SafeOperationError("RESTORE_PUBLIC_OWNER_POLICY_CONFLICT")
+    lines = toc.splitlines(keepends=True)
+    schema_entries = [index for index, line in enumerate(lines) if re.fullmatch(
+        r"[0-9]+;\s+[0-9]+\s+[0-9]+\s+SCHEMA\s+-\s+public\s+pg_database_owner\s*",
+        line.strip(),
+    )]
+    if len(schema_entries) != 1:
+        raise SafeOperationError("RESTORE_PUBLIC_SCHEMA_TOC_INVALID")
+    with psycopg.connect(database_url, autocommit=True) as connection:
+        structure = _restore_target_structure(connection)
+        validate_disposable_target_identity(structure, disposable_target_identity())
+        if structure.schemas or structure.object_count or not structure.writable:
+            raise SafeOperationError("RESTORE_TARGET_PREPARATION_FAILED")
+        connection.execute("CREATE SCHEMA public AUTHORIZATION pg_database_owner")
+    # Only the schema CREATE is supplied by setup; restore comments, every
+    # table/index/constraint/data entry, and validate the actual final inventory.
+    lines[schema_entries[0]] = "; initialized public AUTHORIZATION pg_database_owner\n"
+    return "".join(lines)
+
+
 def _manifest(preflight: PostgresPreflight, inventory: dict[str, Any], temporary: Path) -> dict[str, Any]:
     archive_sha256 = sha256_file(temporary / "postgres.dump")
     return {
@@ -1222,9 +1253,13 @@ def create_backup(database_url_env: str, files_root: Path, knowledge: Path, dest
         raise
 
 
-def _validate_manifest(manifest: object) -> dict[str, Any]:
+def _validate_manifest(manifest: object, expected_backup_application_version: str = APPLICATION_VERSION) -> dict[str, Any]:
     if not isinstance(manifest, dict):
         raise SafeOperationError("BACKUP_MANIFEST_INVALID")
+    if not isinstance(expected_backup_application_version, str) or not re.fullmatch(
+        r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)", expected_backup_application_version
+    ):
+        raise SafeOperationError("BACKUP_EXPECTED_APPLICATION_VERSION_INVALID")
     required = {
         "manifest_version",
         "application_version",
@@ -1291,7 +1326,7 @@ def _validate_manifest(manifest: object) -> dict[str, Any]:
     except (TypeError, ValueError, SafeOperationError) as exc:
         raise SafeOperationError("BACKUP_MANIFEST_INVALID") from exc
     if (
-        manifest["application_version"] != APPLICATION_VERSION
+        manifest["application_version"] != expected_backup_application_version
         or server_major != int(manifest["database_server_major"])
         or server_version_major != server_major
         or majors != {EXPECTED_POSTGRES_MAJOR}
@@ -1355,7 +1390,7 @@ def _validate_manifest(manifest: object) -> dict[str, Any]:
     return manifest
 
 
-def verify_backup(backup: Path) -> dict[str, Any]:
+def verify_backup(backup: Path, expected_backup_application_version: str = APPLICATION_VERSION) -> dict[str, Any]:
     if backup.is_symlink():
         raise ValueError("Backup directory cannot be a symlink.")
     backup = backup.resolve(strict=True)
@@ -1371,7 +1406,7 @@ def verify_backup(backup: Path) -> dict[str, Any]:
         raw_manifest = json.loads((backup / "manifest.json").read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise SafeOperationError("BACKUP_MANIFEST_INVALID") from exc
-    manifest = _validate_manifest(raw_manifest)
+    manifest = _validate_manifest(raw_manifest, expected_backup_application_version)
     expected = {"postgres.dump", "files.tar.gz", "PROJECT_KNOWLEDGE.md"}
     if set(manifest.get("files", {})) != expected:
         raise SafeOperationError("BACKUP_MANIFEST_INVALID")
@@ -1408,10 +1443,14 @@ def restore_backup(
     inventory_diff_report: Path | None = None,
     allowed_owner_mapping: dict[str, str] | None = None,
     allow_isolated_database_name_difference: bool = False,
+    initialize_database_owner_schema: bool = False,
+    expected_backup_application_version: str = APPLICATION_VERSION,
 ) -> None:
+    if initialize_database_owner_schema and not allow_disposable_target_preparation:
+        raise SafeOperationError("RESTORE_TARGET_NOT_DISPOSABLE")
     if confirmation != "RESTORE V2 BACKUP":
         raise ValueError("Restore confirmation did not match.")
-    manifest = verify_backup(backup)
+    manifest = verify_backup(backup, expected_backup_application_version)
     database_url, pg_env, pg_args = database_parts(database_url_env)
     preflight = postgres_preflight(database_url)
     validate_restore_preflight(manifest, preflight)
@@ -1434,20 +1473,25 @@ def restore_backup(
         archive_schemas,
         allow_disposable_target_preparation,
     )
-    subprocess.run(
-        [
-            "pg_restore",
-            "--no-owner",
-            "--no-privileges",
-            "--exit-on-error",
-            "--single-transaction",
-            *pg_args,
-            str(backup / "postgres.dump"),
-        ],
-        env=pg_env,
-        check=True,
-        stdout=subprocess.DEVNULL,
-    )
+    with tempfile.TemporaryDirectory(prefix="pja-restore-toc-") as toc_directory:
+        toc_args: list[str] = []
+        if initialize_database_owner_schema:
+            prepared_toc = initialize_disposable_public_schema(
+                database_url, _toc,
+                manifest["database_inventory"]["schemas"]["public"]["owner"],
+                allowed_owner_mapping or {},
+            )
+            toc_path = Path(toc_directory) / "restore.list"
+            toc_path.write_text(prepared_toc, encoding="utf-8")
+            toc_args = ["--use-list", str(toc_path)]
+        subprocess.run(
+            [
+                "pg_restore", "--no-owner", "--no-privileges",
+                "--exit-on-error", "--single-transaction",
+                *toc_args, *pg_args, str(backup / "postgres.dump"),
+            ],
+            env=pg_env, check=True, stdout=subprocess.DEVNULL,
+        )
     restored_inventory = database_inventory(database_url)
     inventory_diff = compare_database_inventories(
         manifest["database_inventory"],
@@ -1469,6 +1513,11 @@ def restore_backup(
             mismatch_count=int(inventory_diff["final_mismatch_count"]),
         )
 
+    if inventory_diff_report is not None:
+        write_inventory_diff_report(
+            inventory_diff_report, manifest["database_inventory"],
+            restored_inventory, manifest, inventory_diff,
+        )
     files_root.mkdir(parents=True, exist_ok=True, mode=0o750)
     with tarfile.open(backup / "files.tar.gz", "r:gz") as archive:
         archive.extractall(files_root, filter="data")
@@ -1515,6 +1564,10 @@ def parser() -> argparse.ArgumentParser:
     restore.add_argument("--prepare-disposable-target", action="store_true")
     restore.add_argument("--inventory-diff-report", type=Path)
     restore.add_argument(
+        "--initialize-database-owner-schema", action="store_true",
+        help="Initialize public with its archived PG16 database-owner semantics on a guarded disposable target.",
+    )
+    restore.add_argument(
         "--allowed-owner-mapping",
         action="append",
         default=[],
@@ -1526,6 +1579,11 @@ def parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Allow only an already identity-guarded isolated target database name to differ.",
     )
+    for command in (verify, restore):
+        command.add_argument(
+            "--expected-backup-application-version", default=APPLICATION_VERSION,
+            help="Exact source production version from the deployment baseline; defaults to this tool version.",
+        )
     return root
 
 
@@ -1567,7 +1625,7 @@ def main() -> int:
             )
             print(f"Backup created: {result}")
         elif args.command == "verify":
-            verify_backup(args.backup)
+            verify_backup(args.backup, args.expected_backup_application_version)
             print("Backup verification passed.")
         else:
             restore_backup(
@@ -1580,6 +1638,8 @@ def main() -> int:
                 args.inventory_diff_report,
                 parse_owner_mappings(args.allowed_owner_mapping),
                 args.allow_isolated_database_name_difference,
+                args.initialize_database_owner_schema,
+                args.expected_backup_application_version,
             )
             print("Restore completed and verified.")
     except Exception as exc:

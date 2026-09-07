@@ -34,6 +34,7 @@ from v2_backup_restore import (
     _safe_error,
     _drop_public_schema_restrict,
     archive_schema_names,
+    initialize_disposable_public_schema,
     compare_database_inventories,
     create_backup,
     parse_owner_mappings,
@@ -216,6 +217,32 @@ class BackupRestoreGateTest(unittest.TestCase):
             json.dumps(value, sort_keys=True) + "\n", encoding="utf-8"
         )
         return backup
+
+    def test_upgrade_backup_source_version_is_explicit_and_exact(self):
+        with tempfile.TemporaryDirectory() as directory:
+            backup = self._backup_fixture(Path(directory))
+            path = backup / "manifest.json"
+            value = json.loads(path.read_text())
+            value["application_version"] = "2.2.0"
+            path.write_text(json.dumps(value))
+            self.assertEqual(APPLICATION_VERSION, "2.3.0")
+            self.assertEqual(verify_backup(backup, "2.2.0")["application_version"], "2.2.0")
+            with self.assertRaises(SafeOperationError):
+                verify_backup(backup)  # no implicit trust in the manifest
+            for version in ("2.1.0", None, "", "*", "2.2", "garbage"):
+                value["application_version"] = version
+                path.write_text(json.dumps(value))
+                with self.assertRaises(SafeOperationError):
+                    verify_backup(backup, "2.2.0")
+            del value["application_version"]
+            path.write_text(json.dumps(value))
+            with self.assertRaises(SafeOperationError):
+                verify_backup(backup, "2.2.0")
+            value["application_version"] = "2.2.0"
+            path.write_text(json.dumps(value))
+            for expected in ("*", "", None, "2.2"):
+                with self.assertRaises(SafeOperationError):
+                    verify_backup(backup, expected)
 
     def test_archive_checksum_error_is_rejected(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -786,6 +813,48 @@ class InventoryComparatorTest(unittest.TestCase):
             serialized = json.dumps(report).lower()
             for forbidden in ("database_url", "password_hash", "session_id", "csrf_token"):
                 self.assertNotIn(forbidden, serialized)
+
+
+
+
+class DatabaseOwnerSchemaRegressionTests(unittest.TestCase):
+    toc = "5; 2615 2200 SCHEMA - public pg_database_owner\n6; 0 0 COMMENT - SCHEMA public pg_database_owner\n7; 1259 1 TABLE public users pja_migration\n"
+
+    def test_initialization_preserves_all_non_schema_toc_entries(self):
+        with mock.patch("v2_backup_restore.psycopg.connect") as connect, \
+             mock.patch("v2_backup_restore._restore_target_structure", return_value=target_structure(schemas=())), \
+             mock.patch("v2_backup_restore.disposable_target_identity", return_value=target_identity()):
+            result = initialize_disposable_public_schema("unused", self.toc, "pg_database_owner", {})
+            connect.return_value.__enter__.return_value.execute.assert_called_once_with(
+                "CREATE SCHEMA public AUTHORIZATION pg_database_owner")
+        self.assertEqual(result.splitlines()[1:], self.toc.splitlines()[1:])
+        self.assertTrue(result.startswith(";"))
+
+    def test_owner_mapping_and_wrong_archive_owner_are_rejected(self):
+        for owner, mapping in [("postgres", {}), ("pg_database_owner", {"pg_database_owner": "postgres"})]:
+            with self.assertRaises(SafeOperationError):
+                initialize_disposable_public_schema("unused", self.toc, owner, mapping)
+
+    def test_non_disposable_and_nonempty_targets_are_rejected(self):
+        for structure, identity in [(target_structure(schemas=()), target_identity(enabled=False)),
+                                    (target_structure(schemas=(), relation_count=1), target_identity())]:
+            with mock.patch("v2_backup_restore.psycopg.connect") as connect, \
+                 mock.patch("v2_backup_restore._restore_target_structure", return_value=structure), \
+                 mock.patch("v2_backup_restore.disposable_target_identity", return_value=identity):
+                with self.assertRaises(SafeOperationError):
+                    initialize_disposable_public_schema("unused", self.toc, "pg_database_owner", {})
+                connect.return_value.__enter__.return_value.execute.assert_not_called()
+
+    def test_real_public_owner_mismatch_still_fails(self):
+        source = comparison_inventory()
+        source["schemas"]["public"]["owner"] = "pg_database_owner"
+        target = deepcopy(source)
+        self.assertEqual(compare_database_inventories(source, target)["final_mismatch_count"], 0)
+        target["schemas"]["public"]["owner"] = "postgres"
+        diff = compare_database_inventories(source, target)
+        self.assertEqual(diff["status"], "failed")
+        self.assertEqual(diff["final_mismatch_count"], 1)
+        self.assertEqual(diff["value_mismatch"][0]["path"], "schemas.public.owner")
 
 
 if __name__ == "__main__":
