@@ -54,9 +54,21 @@ class ApplicationCreate(BaseModel):
         return self
 
 
-class ApplicationPatch(BaseModel):
+class ApplicationEdit(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
     expected_revision: int = Field(ge=1)
+    company_name: str | None = Field(default=None, min_length=1, max_length=500)
+    job_title: str | None = Field(default=None, min_length=1, max_length=500)
+
+    @field_validator("company_name", "job_title")
+    @classmethod
+    def require_non_null_name(cls, value: str | None) -> str:
+        if value is None:
+            raise ValueError("Company and Position cannot be null.")
+        return value
+
+
+class ApplicationPatch(ApplicationEdit):
     source: str | None = Field(default=None, max_length=80)
     priority: Priority | None = None
     next_action_at: datetime | None = None

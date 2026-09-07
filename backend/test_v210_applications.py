@@ -27,6 +27,7 @@ class ApplicationsV210Test(unittest.TestCase):
         database = Path(self.temporary_directory.name) / "applications.db"
         self.environment = patch.dict(os.environ, {
             "APP_ENV": "test",
+            "APP_DATABASE_PATH": str(Path(self.temporary_directory.name) / "legacy.db"),
             "TEST_DATABASE_URL": f"sqlite+pysqlite:///{database}",
         })
         self.environment.start()
@@ -131,6 +132,77 @@ class ApplicationsV210Test(unittest.TestCase):
     def test_manual_application_requires_company_and_job_title(self):
         with self.assertRaises(ValidationError):
             ApplicationCreate(job_description="Optional")
+
+    def test_edit_api_persists_only_company_and_position(self):
+        from legacy_application import patch_application, get_application, get_applications
+        from app.feature_retirement import FeatureRetirementMiddleware
+
+        service = ApplicationService(self.db, self.user.id)
+        created = service.create_submitted({
+            "company_name": "Original Co",
+            "job_title": "Original Role",
+            "job_description": "Keep this description",
+            "priority": "high",
+        }, resume_snapshot="Keep this snapshot")["application"]
+        application_id = UUID(created["id"])
+        self.db.commit()
+        app = FastAPI()
+        app.add_api_route("/api/applications/{application_id}", patch_application, methods=["PATCH"])
+        app.add_api_route("/api/applications/{application_id}", get_application, methods=["GET"])
+        app.add_api_route("/api/applications", get_applications, methods=["GET"])
+        app.add_middleware(FeatureRetirementMiddleware)
+
+        @app.middleware("http")
+        async def inject_context(request, call_next):
+            request.state.v2_db = self.db
+            request.state.v2_user = self.user
+            return await call_next(request)
+
+        def snapshot():
+            self.db.expire_all()
+            item = self.db.get(Application, application_id)
+            return {column.name: getattr(item, column.name) for column in Application.__table__.columns}
+
+        with TestClient(app) as client:
+            for changes in (
+                {"company_name": "Updated Co"},
+                {"job_title": "Updated Role"},
+                {"company_name": "Both Co", "job_title": "Both Role"},
+            ):
+                before = snapshot()
+                response = client.patch(f"/api/applications/{application_id}", json={
+                    **changes, "expected_revision": before["revision"],
+                })
+                self.assertEqual(response.status_code, 200, response.text)
+                self.db.commit()
+                after = snapshot()
+                for key, value in changes.items():
+                    self.assertEqual(after[key], value)
+                    self.assertEqual(response.json()[key], value)
+                for key in before.keys() - changes.keys() - {"revision", "updated_at"}:
+                    self.assertEqual(after[key], before[key], key)
+                self.assertEqual(after["revision"], before["revision"] + 1)
+                self.assertEqual(client.get(f"/api/applications/{application_id}").json()["company_name"], after["company_name"])
+                self.assertEqual(client.get("/api/applications").json()[0]["job_title"], after["job_title"])
+
+            before = snapshot()
+            for invalid in (
+                {"company_name": None}, {"job_title": None},
+                {"company_name": "   "}, {"job_title": ""},
+                {"company_name": "x" * 501}, {"job_title": "x" * 501},
+                {"priority": "low"}, {"job_description": "overwrite"},
+                {"resume_snapshot": "overwrite"}, {"current_stage": "closed"},
+            ):
+                response = client.patch(f"/api/applications/{application_id}", json={
+                    **invalid, "expected_revision": before["revision"],
+                })
+                self.assertEqual(response.status_code, 422, response.text)
+                self.assertEqual(snapshot(), before)
+            response = client.patch(f"/api/applications/{application_id}", json={
+                "company_name": "Stale", "expected_revision": 1,
+            })
+            self.assertEqual(response.status_code, 409, response.text)
+            self.assertEqual(snapshot(), before)
 
     def test_delete_api_physically_deletes_only_the_application(self):
         now = utc_now()

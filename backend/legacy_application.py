@@ -2962,7 +2962,7 @@ async def patch_application(application_id: str, request: Request) -> dict[str, 
             raise HTTPException(status_code=404, detail="Application record not found.")
         return updated_record
 
-    from app.applications.schemas import ApplicationPatch
+    from app.applications.schemas import ApplicationEdit
     from app.applications.service import ApplicationConflict, ApplicationNotFound, ApplicationService
 
     current_user = getattr(request.state, "v2_user", None)
@@ -2970,7 +2970,7 @@ async def patch_application(application_id: str, request: Request) -> dict[str, 
     if current_user is None or current_db is None:
         raise HTTPException(status_code=401, detail="Authentication required.")
     try:
-        payload = ApplicationPatch.model_validate(raw_payload)
+        payload = ApplicationEdit.model_validate(raw_payload)
     except ValidationError as exc:
         raise HTTPException(status_code=422, detail="Application update is invalid.") from exc
     try:

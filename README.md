@@ -2,7 +2,7 @@
 
 Personal Job Agent is a private, evidence-grounded workspace for comparing a Resume with a Job Description (JD), producing reviewable analysis, and tracking applications.
 
-**Current production:** `v2.2.0` · **Alembic:** `20260820_08`
+**Current production:** `v2.3.0` · **Alembic:** `20260820_08`
 
 AI output is advisory and requires human review. The product does not submit job applications,
 contact employers, or guarantee ATS, interview, or hiring results.
@@ -110,7 +110,7 @@ Production is a single-host Docker Compose deployment: `HTTPS Nginx Edge → Fro
 plus private Java normalization, PostgreSQL 16, Redis, a Dramatiq Worker, and an Outbox Dispatcher.
 Only the Edge is public; application and data services stay on private networks.
 
-The current release is [v2.2.0](https://github.com/HKJoker-Z/personal-job-agent/releases/tag/v2.2.0),
+The current release is [v2.3.0](https://github.com/HKJoker-Z/personal-job-agent/releases/tag/v2.3.0),
 running with Alembic `20260820_08`; this release has no migration. Deployments use immutable image
 digests, candidate and health gates, PostgreSQL 16 backup/restore verification, and recorded
 rollback assets. Details belong in the [deployment runbook](docs/DEPLOYMENT.md) and [backup /
@@ -133,5 +133,5 @@ restore guide](docs/V2_BACKUP_AND_RESTORE.md).
 - [Development](docs/V2_DEVELOPMENT.md) · [Security model](docs/V2_SECURITY.md)
 - [Deployment and rollback](docs/DEPLOYMENT.md) · [PostgreSQL backup / restore](docs/V2_BACKUP_AND_RESTORE.md)
 - [Analyze idempotency](docs/ANALYZE_IDEMPOTENCY.md) · [DeepSeek provider contract](docs/DEEPSEEK_PROVIDER_ACCEPTANCE.md)
-- [Java normalization integration](docs/architecture/JAVA_PRODUCTION_NORMALIZATION_INTEGRATION.md) · [v2.2.0 release notes](docs/V2_2_0_RELEASE_NOTES.md) · [GitHub Releases](https://github.com/HKJoker-Z/personal-job-agent/releases)
+- [Java normalization integration](docs/architecture/JAVA_PRODUCTION_NORMALIZATION_INTEGRATION.md) · [v2.3.0 release notes](docs/V2_3_0_RELEASE_NOTES.md) · [GitHub Releases](https://github.com/HKJoker-Z/personal-job-agent/releases)
 - [Versioned API contracts](docs/V2_0_4_API.md) · [Applications API and workflow](docs/V2_1_0_RELEASE_NOTES.md) · [Work reports](docs/work-reports/README.md)

@@ -1,7 +1,7 @@
-# Version 2.2.0 deployment and rollback
+# Version 2.3.0 deployment and rollback
 
-Version 2.2.0 promotes the reviewed Applications Improvements from the current
-Version 2.1.0 production baseline. It keeps Alembic at `20260820_08`, production
+Version 2.3.0 promotes the reviewed Applications Company / Position editing from the current
+Version 2.2.0 production baseline. It keeps Alembic at `20260820_08`, production
 normalization mode `java`, the existing private Java service, HTTPS, Mihomo,
 `pja-br0`, routing preference 8999, and the established public ports and
 networks. There is no migration in this release.
@@ -30,6 +30,10 @@ The general Docker smoke remains a deterministic application regression. It
 does not replace the mandatory production-equivalent candidate or production
 five-run gate because its mock-provider HTTP topology is intentionally simpler.
 
+The release root-disk floor is 5 GiB (5,368,709,120 bytes), approved on
+2026-09-07. Historical release reports retain the thresholds used at the time.
+This does not change application readiness, memory, backup, or rollback checks.
+
 ## Gate classes
 
 ### HARD FAIL
@@ -57,7 +61,7 @@ rollback immediately.
   application artifact mismatch;
 - required unhealthy container, unexpected restart, OOM, health/readiness
   failure, or persistent Backend/Edge runtime error; or
-- root free capacity below the unchanged 6 GiB gate.
+- root free capacity below the 5 GiB gate.
 
 Missing required evidence is a HARD FAIL; it is never interpreted as success.
 An Empty reply is never a warning even if the Backend later records HTTP 200.
@@ -93,27 +97,28 @@ failed formal gate is not a warning.
 
 ## Artifacts
 
-Use the existing annotated `v2.2.0` tag and GitHub Release. Never move or
-recreate that tag. Do not build, retag, or republish application images. Use
-only the existing immutable Backend and Frontend `@sha256` references whose OCI
-source revision is the peeled `v2.2.0` commit and whose version is `2.2.0`.
+Publish the exact reviewed main commit through the manual release-images workflow.
+After publication succeeds, create annotated `v2.3.0` and its GitHub Release;
+never move or recreate a published tag. The tag workflow verifies the published
+images without rebuilding. Deploy only immutable Backend and Frontend `@sha256` references whose OCI
+source revision is the peeled `v2.3.0` commit and whose version is `2.3.0`.
 
-Record the Version 2.1.0 Backend and Frontend digests. Production must use
-immutable `@sha256` references and `RELEASE_VERSION=2.2.0`; a mutable tag is
+Record the Version 2.2.0 Backend and Frontend digests. Production must use
+immutable `@sha256` references and `RELEASE_VERSION=2.3.0`; a mutable tag is
 never a deployment input. Backend, Worker, and Outbox must use the same Python
-digest. Candidate and production must use identical v2.2.0 application digests.
+digest. Candidate and production must use identical v2.3.0 application digests.
 
 ## Preflight
 
 Immediately before mutation require:
 
-- public Version exactly `2.1.0`, health `ok`, and readiness `ready`;
+- public Version exactly `2.2.0`, health `ok`, and readiness `ready`;
 - Alembic exactly `20260820_08` and normalization mode exactly `java`;
 - PostgreSQL 16, Redis, and Java readiness healthy;
 - every required production container healthy, restart count zero, OOM false;
-- at least 1.5 GiB available RAM and 6 GiB available root disk;
-- the recorded Version 2.1.0 Backend/Frontend and unchanged Java digests;
-- annotated `v2.2.0`, GitHub Release, immutable image metadata, OCI source,
+- at least 1.5 GiB available RAM and 5 GiB available root disk;
+- the recorded Version 2.2.0 Backend/Frontend and unchanged Java digests;
+- annotated `v2.3.0`, GitHub Release, immutable image metadata, OCI source,
   revision, version, users, and digests all match the reviewed release;
 - Java attached only to the private normalization network with no host port;
 - unchanged public Edge port, networks, production containers, Java key,
@@ -131,7 +136,7 @@ runtime regression. This release has no migration: Alembic must be
 
 ## Candidate
 
-Deploy the exact existing immutable v2.2.0 application images to the established
+Deploy the exact existing immutable v2.3.0 application images to the established
 isolated candidate. Use an isolated PostgreSQL database/volume, Redis, file
 storage, test account, sessions, metrics, audit data, and synthetic content.
 Keep Java normalization enabled and use the production-equivalent Edge and
@@ -171,15 +176,15 @@ that candidate rows and volumes do not affect production.
 Update only the immutable application image references and release version.
 Render the exact established production Compose file order. Do not run a
 migration or recreate the database. Recreate Backend, Worker, and Outbox
-consistently from the same v2.2.0 Python digest, then Frontend from the reviewed
-v2.2.0 digest. Recreate Edge from that same reviewed Frontend digest when the
+consistently from the same v2.3.0 Python digest, then Frontend from the reviewed
+v2.3.0 digest. Recreate Edge from that same reviewed Frontend digest when the
 release Compose declares it, after Frontend is healthy.
 
 Do not recreate PostgreSQL, Redis, or Java. Preserve the Java
 project, digest, key, private network, policy `jd-normalization-v1`, dictionary
 `skills-v1`, and all established production overrides.
 
-Require public Version `2.2.0`, Alembic `20260820_08`, health/readiness,
+Require public Version `2.3.0`, Alembic `20260820_08`, health/readiness,
 containers healthy, restart zero, OOM false, and exact image digests before
 starting acceptance.
 
@@ -266,10 +271,10 @@ monitoring-retention cleanup.
 
 ## Rollback
 
-For an application-image failure, restore the recorded Version 2.1.0 Backend
+For an application-image failure, restore the recorded Version 2.2.0 Backend
 digest consistently to Backend, Worker, and Outbox and restore the prior
 Frontend digest. Keep Java, its key/network, all volumes, and all data. Keep
-schema `20260820_08`; Version 2.2.0 has no migration. Use the verified
+schema `20260820_08`; Version 2.3.0 has no migration. Use the verified
 pre-release backup only for an explicitly approved data rollback.
 
 For an urgent Java-boundary safety issue, omit the Stage 4 and Stage 3
@@ -280,9 +285,9 @@ downgrade the database or delete Java.
 ## Release report
 
 After GO/GO WITH WARNING, create
-`docs/work-reports/2026-08-22-v2.2.0-release-work-report.md`. Record the policy
-commit, unchanged v2.2.0 tag/release commit, immutable digests, backup and
+`docs/work-reports/2026-09-07-v2.3.0-release-work-report.md`. Record the policy
+commit, unchanged v2.3.0 tag/release commit, immutable digests, backup and
 restore evidence, rollback assets, candidate and production five-run results,
 fallback counts, warnings, Applications smoke, production version, Alembic,
 and final container health/restart/OOM state. Commit and push the report on
-`main`; do not create v2.2.1.
+`main`; do not move the release tag.

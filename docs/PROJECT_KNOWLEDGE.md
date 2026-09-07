@@ -4,7 +4,7 @@
 
 Personal Job Agent is a private, administrator-led web application for
 evidence-grounded Resume and Job Description analysis. The prepared source
-production release is **2.2.0**, upgraded from **2.1.0**. The production
+production release is **2.3.0**, upgraded from **2.2.0**. The production
 Alembic schema revision remains `20260820_08` (`head`).
 
 The application uses a React/Vite frontend, a FastAPI/Python backend,
@@ -18,7 +18,11 @@ AI output is advisory and requires human review. Personal Job Agent does not
 automatically submit applications, send email, contact employers, or guarantee
 Applicant Tracking System (ATS), interview, or hiring outcomes.
 
-## Current Version 2.2.0 Source Changes
+## Current Version 2.3.0 Source Changes
+
+Version 2.3.0 adds Company / Position editing on Applications with a restricted
+PATCH contract and existing revision conflict protection. The release disk floor
+is 5 GiB (5,368,709,120 bytes). No migration or dependency is added.
 
 Version 2.2.0 carries forward the bounded production integration of a private,
 stateless Spring Boot normalization-only service and the merged Provider

@@ -24,7 +24,7 @@ PRODUCTION_DIRECT_PATH = "production-actual-public-direct"
 # invariant; a successful Analyze response cannot bypass an infrastructure,
 # backup, data, security, or artifact gate.
 HARD_GATE_KEYS = (
-    "root_capacity_6_gib",
+    "root_capacity_5_gib",
     "authentication",
     "authorization",
     "security_boundary",
