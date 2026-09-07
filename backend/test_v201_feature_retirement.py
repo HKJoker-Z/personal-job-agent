@@ -64,6 +64,9 @@ class FeatureRetirementTest(unittest.TestCase):
         self.assertFalse(is_removed_api("/api/applications/from-analysis", "POST"))
         self.assertFalse(is_removed_api("/api/applications/3bf9a2bb-23c4-4e1d-898f-e3dbf1bc64fe", "GET"))
         self.assertFalse(is_removed_api("/api/applications/3bf9a2bb-23c4-4e1d-898f-e3dbf1bc64fe", "DELETE"))
+        self.assertFalse(is_removed_api("/api/applications/3bf9a2bb-23c4-4e1d-898f-e3dbf1bc64fe", "PATCH"))
+        self.assertTrue(is_removed_api("/api/applications/123", "PATCH"))
+        self.assertTrue(is_removed_api("/api/applications", "PATCH"))
         self.assertTrue(is_removed_api("/api/applications/3bf9a2bb-23c4-4e1d-898f-e3dbf1bc64fe/transition", "POST"))
 
     def test_standalone_dispatcher_can_disable_the_worker_copy(self):

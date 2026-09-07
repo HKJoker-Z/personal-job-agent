@@ -18,6 +18,9 @@ export function ApplicationsPage() {
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [deletingId, setDeletingId] = useState("");
+  const [editing, setEditing] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const [editError, setEditError] = useState("");
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
 
@@ -68,6 +71,29 @@ export function ApplicationsPage() {
     }
   }
 
+  async function saveApplication(event) {
+    event.preventDefault();
+    if (saving) return;
+    setSaving(true); setEditError(""); setMessage("");
+    try {
+      const updated = await apiJson(`/api/applications/${editing.id}`, {
+        method: "PATCH",
+        body: {
+          company_name: editing.company_name.trim(),
+          job_title: editing.job_title.trim(),
+          expected_revision: editing.revision,
+        },
+      });
+      setApplications((items) => items.map((item) => item.id === updated.id ? { ...item, ...updated } : item));
+      setEditing(null);
+      setMessage("Application updated successfully.");
+    } catch (value) {
+      setEditError(value.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
   async function deleteApplication(application) {
     const confirmed = window.confirm(
       `Delete this Application?\n\nCompany Name: ${application.company_name}\nJob Title: ${application.job_title}\n\nThis cannot be undone.`
@@ -99,13 +125,23 @@ export function ApplicationsPage() {
       {message && <p className="history-message" role="status">{message}</p>}
     </section>
 
+    {editing && <section className="panel">
+      <form className="form-panel" onSubmit={saveApplication}>
+        <h2>Edit Application</h2>
+        <label>Company<input value={editing.company_name} onChange={(event) => setEditing({ ...editing, company_name: event.target.value })} required maxLength="500" disabled={saving} /></label>
+        <label>Position<input value={editing.job_title} onChange={(event) => setEditing({ ...editing, job_title: event.target.value })} required maxLength="500" disabled={saving} /></label>
+        {editError && <div className="error" role="alert">{editError}</div>}
+        <div className="action-row"><button type="submit" disabled={saving || !editing.company_name.trim() || !editing.job_title.trim()}>{saving ? "Saving..." : "Save"}</button><button type="button" className="secondary-button" disabled={saving} onClick={() => { setEditing(null); setEditError(""); }}>Cancel</button></div>
+      </form>
+    </section>}
+
     {selected ? <section className="panel detail-panel">
       <div className="detail-header"><div><span className="label">Application</span><h2>{selected.job_title}</h2><p>{selected.company_name}</p></div><button type="button" onClick={() => setSelected(null)}>Back to Applications</button></div>
       <div className="detail-grid"><div><span className="label">Applied Time</span><p>{formatAppliedTime(selected.applied_at)}</p></div><div><span className="label">Resume</span><p>{selected.resume_snapshot ? "Saved snapshot" : "Not provided"}</p></div></div>
       <section className="result-section"><h3>Job Description</h3><p className="plain-note">{selected.job_description || "Not provided"}</p></section>
       <section className="result-section"><h3>Resume Snapshot</h3><div className="resume-snapshot" data-testid="resume-snapshot">{selected.resume_snapshot || "Not provided"}</div></section>
     </section> : <section className="panel list-panel">
-      {loading ? <p>Loading Applications...</p> : applications.length === 0 ? <p>No Applications yet.</p> : <div className="table-wrap"><table><thead><tr><th>Company</th><th>Job Title</th><th>Applied Time</th><th>Actions</th></tr></thead><tbody>{applications.map((application) => <tr key={application.id}><td>{application.company_name}</td><td>{application.job_title}</td><td>{formatAppliedTime(application.applied_at)}</td><td><div className="action-row"><button type="button" onClick={() => viewApplication(application.id)}>View</button><button type="button" className="danger-button" disabled={deletingId === application.id} onClick={() => deleteApplication(application)}>{deletingId === application.id ? "Deleting..." : "Delete"}</button></div></td></tr>)}</tbody></table></div>}
+      {loading ? <p>Loading Applications...</p> : applications.length === 0 ? <p>No Applications yet.</p> : <div className="table-wrap"><table><thead><tr><th>Company</th><th>Job Title</th><th>Applied Time</th><th>Actions</th></tr></thead><tbody>{applications.map((application) => <tr key={application.id}><td>{application.company_name}</td><td>{application.job_title}</td><td>{formatAppliedTime(application.applied_at)}</td><td><div className="action-row"><button type="button" disabled={Boolean(editing)} onClick={() => viewApplication(application.id)}>View</button><button type="button" className="secondary-button" disabled={Boolean(editing) || deletingId === application.id} onClick={() => { setEditing({ id: application.id, company_name: application.company_name || "", job_title: application.job_title || "", revision: application.revision }); setEditError(""); setMessage(""); }}>Edit</button><button type="button" className="danger-button" disabled={Boolean(editing) || deletingId === application.id} onClick={() => deleteApplication(application)}>{deletingId === application.id ? "Deleting..." : "Delete"}</button></div></td></tr>)}</tbody></table></div>}
     </section>}
   </section>;
 }

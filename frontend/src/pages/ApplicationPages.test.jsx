@@ -9,18 +9,75 @@ vi.mock("../api/client", () => ({ apiJson: vi.fn() }));
 describe("Version 2.2.0 Applications", () => {
   beforeEach(() => {
     let applicationExists = true;
+    let application = { id: "app-1", company_name: "Example Co", job_title: "Engineer", applied_at: "2026-08-20T10:00:00Z", revision: 1 };
     apiJson.mockReset();
     apiJson.mockImplementation((path, options) => {
+      if (path === "/api/applications/app-1" && options?.method === "PATCH") {
+        application = { ...application, company_name: options.body.company_name, job_title: options.body.job_title, revision: application.revision + 1 };
+        return Promise.resolve(application);
+      }
       if (path === "/api/resumes") return Promise.resolve([{ title: "Primary", active_version_id: "resume-v1", is_primary: true }]);
       if (path === "/api/applications" && options?.method === "POST") return Promise.resolve({ application: { id: "new" } });
       if (path === "/api/applications/app-1" && options?.method === "DELETE") {
         applicationExists = false;
         return Promise.resolve({ deleted: true, id: "app-1" });
       }
-      if (path === "/api/applications") return Promise.resolve(applicationExists ? [{ id: "app-1", company_name: "Example Co", job_title: "Engineer", applied_at: "2026-08-20T10:00:00Z" }] : []);
+      if (path === "/api/applications") return Promise.resolve(applicationExists ? [application] : []);
       if (path === "/api/applications/app-1") return Promise.resolve({ id: "app-1", company_name: "Example Co", job_title: "Engineer", applied_at: "2026-08-20T10:00:00Z", job_description: "Build APIs", resume_snapshot: "Jane Doe\n\nEXPERIENCE\nBuilt APIs\nLed reliability" });
       return Promise.resolve([]);
     });
+  });
+
+  it.each([
+    ["Updated Co", "Engineer"],
+    ["Example Co", "Updated Role"],
+    ["Updated Co", "Updated Role"],
+  ])("saves Company %s and Position %s and immediately updates the list", async (company, position) => {
+    render(<ApplicationsPage />);
+    await screen.findByText("Example Co");
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    fireEvent.change(screen.getByLabelText("Company"), { target: { value: company } });
+    fireEvent.change(screen.getByLabelText("Position"), { target: { value: position } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await screen.findByText("Application updated successfully.");
+    expect(screen.getByText(company)).toBeInTheDocument();
+    expect(screen.getByText(position)).toBeInTheDocument();
+    expect(apiJson).toHaveBeenCalledWith("/api/applications/app-1", {
+      method: "PATCH", body: { company_name: company, job_title: position, expected_revision: 1 },
+    });
+    expect(screen.queryByLabelText("Company")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    expect(screen.getByLabelText("Company")).toHaveValue(company);
+    expect(screen.getByLabelText("Position")).toHaveValue(position);
+  });
+
+  it("discards edits on Cancel without sending a request", async () => {
+    render(<ApplicationsPage />);
+    await screen.findByText("Example Co");
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    fireEvent.change(screen.getByLabelText("Company"), { target: { value: "Discard Co" } });
+    fireEvent.change(screen.getByLabelText("Position"), { target: { value: "Discard Role" } });
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(apiJson.mock.calls.some(([, options]) => options?.method === "PATCH")).toBe(false);
+    expect(screen.getByText("Example Co")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    expect(screen.getByLabelText("Company")).toHaveValue("Example Co");
+    expect(screen.getByLabelText("Position")).toHaveValue("Engineer");
+  });
+
+  it("keeps edits after a failed save and allows retry", async () => {
+    render(<ApplicationsPage />);
+    await screen.findByText("Example Co");
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    fireEvent.change(screen.getByLabelText("Company"), { target: { value: "Retry Co" } });
+    apiJson.mockRejectedValueOnce(new Error("Save failed. Please retry."));
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Save failed. Please retry.");
+    expect(screen.getByLabelText("Company")).toHaveValue("Retry Co");
+    expect(screen.getByText("Example Co")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await screen.findByText("Application updated successfully.");
+    expect(screen.getByText("Retry Co")).toBeInTheDocument();
   });
 
   it("lists and opens full Application details", async () => {

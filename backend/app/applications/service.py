@@ -185,7 +185,7 @@ class ApplicationService:
         expected = int(values.pop("expected_revision"))
         application = self._application(application_id, for_update=True)
         self._expect(application.revision, expected)
-        for key in ("source", "priority", "next_action_at", "expected_response_at"):
+        for key in ("company_name", "job_title", "source", "priority", "next_action_at", "expected_response_at"):
             if key in values:
                 setattr(application, key, values[key])
         application.revision += 1
